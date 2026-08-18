@@ -43,6 +43,23 @@ json SerializeMassProperties(const MassProperties& mp) {
   };
 }
 
+std::string Base64Encode(const std::vector<uint8_t>& png) {
+  static constexpr char kB64Chars[] =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  std::string b64;
+  b64.reserve(((png.size() + 2) / 3) * 4);
+  for (std::size_t i = 0; i < png.size(); i += 3) {
+    uint32_t grp = static_cast<uint32_t>(png[i]) << 16;
+    if (i + 1 < png.size()) grp |= static_cast<uint32_t>(png[i + 1]) << 8;
+    if (i + 2 < png.size()) grp |= static_cast<uint32_t>(png[i + 2]);
+    b64 += kB64Chars[(grp >> 18) & 0x3F];
+    b64 += kB64Chars[(grp >> 12) & 0x3F];
+    b64 += (i + 1 < png.size()) ? kB64Chars[(grp >> 6) & 0x3F] : '=';
+    b64 += (i + 2 < png.size()) ? kB64Chars[grp & 0x3F] : '=';
+  }
+  return b64;
+}
+
 json SerializeConfiguration(const Configuration& cfg) {
   json jcfg;
   jcfg["name"]  = cfg.name;
@@ -57,23 +74,8 @@ json SerializeConfiguration(const Configuration& cfg) {
     jcfg["mass_properties"] = SerializeMassProperties(*cfg.mass_properties);
 
   // Preview PNG as base64.
-  if (!cfg.preview_png.empty()) {
-    static constexpr char kB64Chars[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    const auto& png = cfg.preview_png;
-    std::string b64;
-    b64.reserve(((png.size() + 2) / 3) * 4);
-    for (std::size_t i = 0; i < png.size(); i += 3) {
-      uint32_t grp = static_cast<uint32_t>(png[i]) << 16;
-      if (i + 1 < png.size()) grp |= static_cast<uint32_t>(png[i + 1]) << 8;
-      if (i + 2 < png.size()) grp |= static_cast<uint32_t>(png[i + 2]);
-      b64 += kB64Chars[(grp >> 18) & 0x3F];
-      b64 += kB64Chars[(grp >> 12) & 0x3F];
-      b64 += (i + 1 < png.size()) ? kB64Chars[(grp >> 6) & 0x3F] : '=';
-      b64 += (i + 2 < png.size()) ? kB64Chars[grp & 0x3F] : '=';
-    }
-    jcfg["preview_png_base64"] = std::move(b64);
-  }
+  if (!cfg.preview_png.empty())
+    jcfg["preview_png_base64"] = Base64Encode(cfg.preview_png);
 
   // Cut list.
   json jcl = json::array();
@@ -128,6 +130,11 @@ json SerializeDocument(const Document& doc) {
   for (const auto& sheet : doc.sheets) {
     json js;
     js["name"] = sheet.name;
+    // Drawings (.SLDDRW) have no configurations, so their preview lives
+    // only on the sheet — see Sheet::preview_png in types.h, sourced from
+    // the Images/Sheet_N streams in document.cc.
+    if (!sheet.preview_png.empty())
+      js["preview_png_base64"] = Base64Encode(sheet.preview_png);
     js["views"] = json::array();
     for (const auto& v : sheet.views) {
       js["views"].push_back({
