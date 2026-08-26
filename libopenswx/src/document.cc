@@ -13,6 +13,7 @@
 #include "internal/decompressor.h"
 #include "internal/modern_parser.h"
 #include "internal/ole2_parser.h"
+#include "internal/reference_reader.h"
 #include "internal/sheet_name_reader.h"
 #include "internal/stream_store.h"
 #include "internal/xml_readers.h"
@@ -422,6 +423,10 @@ Result<SwxDocument> SwxDocument::Open(const std::filesystem::path& path) {
   if (doc.type == DocumentType::kDrawing) {
     // Step 6a: Drawing — build sheets.
     doc.sheets = BuildSheets(streams);
+    doc.replacement_references = internal::ExtractUtf16CadReferences(
+        internal::GetStream(streams, "SwDocMgrTempStorage/ReplaceRef"));
+    doc.header_references = internal::ExtractUtf16CadReferences(
+        internal::GetStream(streams, "Header2"));
   } else {
     // Step 6b: Part / Assembly — build configurations.
 

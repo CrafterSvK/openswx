@@ -146,6 +146,9 @@ json SerializeDocument(const Document& doc) {
     j["sheets"].push_back(std::move(js));
   }
 
+  j["replacement_references"] = doc.replacement_references;
+  j["header_references"] = doc.header_references;
+
   return j;
 }
 

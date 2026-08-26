@@ -248,6 +248,14 @@ struct Document {
   /// Drawing sheets in order of appearance.
   /// Always empty for part and assembly files.
   std::vector<Sheet> sheets;
+
+  /// Historical and current document paths recorded by SolidWorks while
+  /// replacing drawing references. Source: SwDocMgrTempStorage/ReplaceRef.
+  std::vector<std::string> replacement_references;
+
+  /// Document paths cached in Header2. These may include unrelated historical
+  /// entries and should only be used to confirm another reference source.
+  std::vector<std::string> header_references;
 };
 
 }  // namespace openswx

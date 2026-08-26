@@ -24,6 +24,7 @@ add_library(openswx STATIC
   src/internal/decompressor.cc
   src/internal/modern_parser.cc
   src/internal/ole2_parser.cc
+  src/internal/reference_reader.cc
   src/internal/xml_readers.cc
   src/internal/sheet_name_reader.cc
 )
@@ -56,6 +57,7 @@ if(BUILD_TESTING)
     tests/document_test.cc
     tests/modern_parser_test.cc
     tests/ole2_parser_test.cc
+    tests/reference_reader_test.cc
   )
   target_include_directories(libopenswx_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
