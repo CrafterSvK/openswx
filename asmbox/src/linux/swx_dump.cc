@@ -64,6 +64,8 @@ json SerializeConfiguration(const Configuration& cfg) {
   json jcfg;
   jcfg["name"]  = cfg.name;
   jcfg["index"] = cfg.index;
+  if (cfg.derived_from_index)
+    jcfg["derived_from_index"] = *cfg.derived_from_index;
 
   // Properties.
   jcfg["properties"] = json::object();

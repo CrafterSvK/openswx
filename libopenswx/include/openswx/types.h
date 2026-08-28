@@ -137,6 +137,20 @@ struct Configuration {
   /// Zero-based configuration index N from the `Config-N-*` stream names.
   int index{};
 
+  /// Index of the configuration this one was derived from, or `std::nullopt`
+  /// for an independent (non-derived) configuration.
+  ///
+  /// Set both when a configuration was created via SolidWorks' "Add Derived
+  /// Configuration" command and when it is an auto-generated Sheet-Metal
+  /// flat-pattern configuration (Insert > Sheet Metal > Flat Pattern) — both
+  /// mechanisms record the same parent-index field. Populated from
+  /// `Contents/CMgrHdr2`; absent when that stream is missing, too old to
+  /// carry the field, or the configuration is independent. When present, the
+  /// value matches another configuration's @ref index in the same document,
+  /// though that configuration is not guaranteed to still be present after
+  /// deduplication.
+  std::optional<int> derived_from_index;
+
   /// User-defined custom properties for this configuration.
   ///
   /// Built by merging file-level properties (`docProps/custom.xml`) with
