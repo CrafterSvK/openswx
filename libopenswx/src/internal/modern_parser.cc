@@ -5,6 +5,11 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
+#include <utility>
+#include <vector>
+
+#include <zlib.h>
 
 #include "internal/decompressor.h"
 #include "internal/rol_codec.h"
@@ -41,7 +46,7 @@ bool IsModernSwx(std::span<const uint8_t> data) noexcept {
 bool IsValidStreamName(const std::string& name) noexcept {
   if (name.empty()) return false;
   for (unsigned char c : name)
-    if (c >= 0x80) return false;
+    if (c < 0x20 || c >= 0x7F) return false;
   return true;
 }
 
@@ -49,26 +54,22 @@ bool IsValidStreamName(const std::string& name) noexcept {
 
 namespace {
 
-// Chunk layout (chunk starts at si = MARKER_PREFIX_pos - 4):
-//   si+0x00   val_a   (4 bytes, file-specific — not used for type detection)
-//   si+0x04   0x14    (fixed separator byte)
-//   si+0x05   00 06 00 08 00  (5 CORE bytes)
-//   si+0x0a   section_type   (1 byte: 0xDF=TOC, 0xFD=data, 0x1C=mini, …)
-//   si+0x0b   suffix         (3 file-specific bytes)
-//   si+0x0e   f1    uint32 LE — >= 65536 for inline chunks
-//   si+0x12   csz   uint32 LE — compressed data size
-//   si+0x16   usz   uint32 LE — uncompressed data size
-//   si+0x1a   nsz   uint32 LE — stream name length in bytes
-//   si+0x1e   name[nsz]       — ROL-encoded stream name (UTF-8)
-//   si+0x1e+nsz  data[csz]   — raw deflate (inline chunks only)
-
-constexpr std::size_t kChunkHeaderSize = 0x1E;
-constexpr uint32_t kInlineF1Threshold = 65536;
+// Inline block layout, relative to the six-byte marker:
+//   +0x00   14 00 06 00 08 00
+//   +0x06   type_id  uint32 LE
+//   +0x0a   crc32    uint32 LE, over the uncompressed payload
+//   +0x0e   csz      uint32 LE
+//   +0x12   usz      uint32 LE
+//   +0x16   nsz      uint32 LE
+//   +0x1a   name[nsz], ROL-encoded UTF-8
+//   +0x1a+nsz raw-deflate payload
+constexpr std::size_t kHeaderSizeFromMarker = 0x1A;
 constexpr uint32_t kMaxNameSize = 512;
 constexpr uint32_t kMaxCompressedSize = 64 * 1024 * 1024;  // 64 MiB sanity cap
+constexpr std::size_t kDirectoryHeaderSize = 40;
+constexpr std::size_t kDirectoryTrailerSize = 6;
 
-// The 6-byte prefix that precedes the section-type byte.
-// The full sequence starting at si+0x04 is: 14 00 06 00 08 00.
+// Stable six-byte marker shared by modern container record families.
 constexpr uint8_t kMarkerPrefix[] = {0x14, 0x00, 0x06, 0x00, 0x08, 0x00};
 constexpr std::size_t kMarkerLen = sizeof(kMarkerPrefix);
 
@@ -82,9 +83,136 @@ constexpr std::size_t kMarkerLen = sizeof(kMarkerPrefix);
          (static_cast<uint32_t>(buf[offset + 3]) << 24);
 }
 
+[[nodiscard]] std::optional<CacheCellInfo> TryCacheCell(
+    std::span<const uint8_t> data, std::size_t marker_pos, int key) {
+  if (marker_pos + kHeaderSizeFromMarker > data.size()) return std::nullopt;
+
+  const uint32_t two_l = U32At(data, marker_pos + 0x0A);
+  const uint32_t half_l = U32At(data, marker_pos + 0x0E);
+  const uint32_t logical_size = U32At(data, marker_pos + 0x12);
+  const uint32_t name_size = U32At(data, marker_pos + 0x16);
+  if (logical_size == 0 || two_l != logical_size * 2u ||
+      half_l != logical_size / 2u || name_size == 0 ||
+      name_size >= 500) {
+    return std::nullopt;
+  }
+
+  const std::size_t name_start = marker_pos + kHeaderSizeFromMarker;
+  const std::size_t name_end = name_start + name_size;
+  if (name_end < name_start || name_end > data.size()) return std::nullopt;
+  std::string name = RolDecode(data.subspan(name_start, name_size), key);
+  if (!IsValidStreamName(name)) return std::nullopt;
+
+  CacheCellInfo cell;
+  cell.marker_offset = marker_pos;
+  cell.record_size = kHeaderSizeFromMarker + name_size;
+  cell.type_id = U32At(data, marker_pos + 0x06);
+  cell.logical_size = logical_size;
+  cell.name = std::move(name);
+  return cell;
+}
+
+[[nodiscard]] std::optional<DirectoryEntryInfo> TryDirectoryEntry(
+    std::span<const uint8_t> data, std::size_t marker_pos, int key) {
+  if (marker_pos + kDirectoryHeaderSize > data.size()) return std::nullopt;
+  if (U32At(data, marker_pos + 0x0A) != 0 ||
+      U32At(data, marker_pos + 0x12) != 0) {
+    return std::nullopt;
+  }
+
+  const uint32_t name_size = U32At(data, marker_pos + 0x16);
+  if (name_size == 0 || name_size >= 500) return std::nullopt;
+  const std::size_t name_start = marker_pos + kDirectoryHeaderSize;
+  const std::size_t name_end = name_start + name_size;
+  const std::size_t record_end = name_end + kDirectoryTrailerSize;
+  if (name_end < name_start || record_end < name_end ||
+      record_end > data.size()) {
+    return std::nullopt;
+  }
+
+  std::string name = RolDecode(data.subspan(name_start, name_size), key);
+  if (!IsValidStreamName(name)) return std::nullopt;
+
+  DirectoryEntryInfo entry;
+  entry.marker_offset = marker_pos;
+  entry.record_size = record_end - marker_pos;
+  entry.type_id = U32At(data, marker_pos + 0x06);
+  entry.stored_size = U32At(data, marker_pos + 0x0E);
+  entry.name = std::move(name);
+  std::copy_n(data.begin() + marker_pos + kHeaderSizeFromMarker,
+              entry.descriptor.size(), entry.descriptor.begin());
+  std::copy_n(data.begin() + name_end, entry.trailer.size(),
+              entry.trailer.begin());
+  return entry;
+}
+
+bool ClassifyIndexRecord(std::span<const uint8_t> data,
+                         std::size_t marker_pos, int key,
+                         ContainerInspection* inspection) {
+  if (auto cell = TryCacheCell(data, marker_pos, key)) {
+    if (inspection != nullptr) inspection->cache_cells.push_back(*cell);
+    return true;
+  }
+  if (auto entry = TryDirectoryEntry(data, marker_pos, key)) {
+    if (inspection != nullptr) inspection->directory_entries.push_back(*entry);
+    return true;
+  }
+  return false;
+}
+
+void BuildCoverage(std::size_t file_size, ContainerInspection* inspection) {
+  if (inspection == nullptr) return;
+  inspection->file_size = file_size;
+
+  std::vector<std::pair<std::size_t, std::size_t>> ranges;
+  ranges.emplace_back(0, std::min<std::size_t>(8, file_size));
+  for (const auto& stream : inspection->streams) {
+    ranges.emplace_back(static_cast<std::size_t>(stream.marker_offset),
+                        static_cast<std::size_t>(stream.marker_offset +
+                                                 stream.record_size));
+  }
+  for (const auto& cell : inspection->cache_cells) {
+    ranges.emplace_back(static_cast<std::size_t>(cell.marker_offset),
+                        static_cast<std::size_t>(cell.marker_offset +
+                                                 cell.record_size));
+  }
+  for (const auto& entry : inspection->directory_entries) {
+    ranges.emplace_back(static_cast<std::size_t>(entry.marker_offset),
+                        static_cast<std::size_t>(entry.marker_offset +
+                                                 entry.record_size));
+  }
+  for (const auto& marker : inspection->unknown_markers) {
+    ranges.emplace_back(static_cast<std::size_t>(marker.marker_offset),
+                        std::min(file_size,
+                                 static_cast<std::size_t>(marker.marker_offset) +
+                                     kMarkerLen));
+  }
+
+  std::sort(ranges.begin(), ranges.end());
+  std::size_t covered_end = 0;
+  for (const auto& [raw_start, raw_end] : ranges) {
+    const std::size_t start = std::min(raw_start, file_size);
+    const std::size_t end = std::min(raw_end, file_size);
+    if (start > covered_end) {
+      inspection->unknown_regions.push_back(
+          {covered_end, start - covered_end});
+    }
+    if (end > covered_end) covered_end = end;
+  }
+  if (covered_end < file_size) {
+    inspection->unknown_regions.push_back(
+        {covered_end, file_size - covered_end});
+  }
+  for (const auto& region : inspection->unknown_regions) {
+    inspection->unknown_bytes += region.size;
+  }
+  inspection->claimed_bytes = inspection->file_size - inspection->unknown_bytes;
+}
+
 }  // namespace
 
-bool ParseModernFormat(std::span<const uint8_t> data, StreamMap& streams) {
+bool ParseModernFormat(std::span<const uint8_t> data, StreamMap& streams,
+                       ContainerInspection* inspection) {
   if (data.size() < 8) return false;
 
   // ROL key is stored at byte 7 of the file header.
@@ -98,56 +226,116 @@ bool ParseModernFormat(std::span<const uint8_t> data, StreamMap& streams) {
     if (it == data.end()) break;
 
     const std::size_t marker_pos = static_cast<std::size_t>(it - data.begin());
-    // Chunk starts 4 bytes before the marker.
-    if (marker_pos < 4) { ++search_pos; continue; }
-    const std::size_t si = marker_pos - 4;
+    StreamInfo info;
+    info.marker_offset = marker_pos;
+    info.type_id = U32At(data, marker_pos + 0x06);
 
-    // Ensure the fixed-size chunk header is fully within the buffer.
-    if (si + kChunkHeaderSize > data.size()) { ++search_pos; continue; }
+    auto finish_unknown = [&](StreamDecodeStatus status) {
+      if (inspection == nullptr) return;
+      inspection->unknown_markers.push_back(
+          {marker_pos, info.type_id, status, std::move(info.name)});
+    };
 
-    const uint32_t f1  = U32At(data, si + 0x0E);
-    const uint32_t csz = U32At(data, si + 0x12);
-    const uint32_t nsz = U32At(data, si + 0x1A);
-
-    // Reject obviously invalid chunk headers.
-    if (nsz > kMaxNameSize || csz > kMaxCompressedSize) {
-      ++search_pos;
+    if (marker_pos + kHeaderSizeFromMarker > data.size()) {
+      finish_unknown(StreamDecodeStatus::kTruncatedHeader);
+      search_pos = marker_pos + kMarkerLen;
       continue;
     }
 
-    const std::size_t name_start = si + kChunkHeaderSize;
-    const std::size_t name_end   = name_start + nsz;
-    if (name_end > data.size()) { ++search_pos; continue; }
+    info.expected_crc32 = U32At(data, marker_pos + 0x0A);
+    info.compressed_size = U32At(data, marker_pos + 0x0E);
+    info.uncompressed_size = U32At(data, marker_pos + 0x12);
+    info.encoded_name_size = U32At(data, marker_pos + 0x16);
 
-    const std::string name =
-        RolDecode(data.subspan(name_start, nsz), key);
-
-    if (!IsValidStreamName(name)) { ++search_pos; continue; }
-
-    const bool is_inline = (f1 >= kInlineF1Threshold);
-
-    if (is_inline && csz > 0) {
-      const std::size_t data_start = name_end;
-      const std::size_t data_end   = data_start + csz;
-      if (data_end <= data.size()) {
-        auto decompressed = InflateRaw(data.subspan(data_start, csz));
-        if (decompressed && streams.find(name) == streams.end()) {
-          streams.emplace(name, std::move(*decompressed));
-        }
-        // Skip past the entire inline chunk payload.
-        search_pos = data_end;
-        continue;
+    // Reject obviously invalid chunk headers.
+    if (info.encoded_name_size > kMaxNameSize) {
+      if (!ClassifyIndexRecord(data, marker_pos, key, inspection)) {
+        finish_unknown(StreamDecodeStatus::kNameTooLarge);
       }
-    } else if (is_inline && csz == 0) {
-      // Empty inline stream.
-      if (streams.find(name) == streams.end()) {
-        streams.emplace(name, std::vector<uint8_t>{});
-      }
+      search_pos = marker_pos + kMarkerLen;
+      continue;
     }
-    // Non-inline (reference) chunks carry no data — advance past the marker.
-    search_pos = marker_pos + kMarkerLen;
+    if (info.compressed_size > kMaxCompressedSize) {
+      if (!ClassifyIndexRecord(data, marker_pos, key, inspection)) {
+        finish_unknown(StreamDecodeStatus::kCompressedSizeTooLarge);
+      }
+      search_pos = marker_pos + kMarkerLen;
+      continue;
+    }
+
+    const std::size_t name_start = marker_pos + kHeaderSizeFromMarker;
+    const std::size_t name_end = name_start + info.encoded_name_size;
+    if (name_end > data.size()) {
+      finish_unknown(StreamDecodeStatus::kTruncatedName);
+      search_pos = marker_pos + kMarkerLen;
+      continue;
+    }
+
+    info.name = RolDecode(data.subspan(name_start, info.encoded_name_size), key);
+
+    if (!IsValidStreamName(info.name)) {
+      if (!ClassifyIndexRecord(data, marker_pos, key, inspection)) {
+        finish_unknown(StreamDecodeStatus::kInvalidName);
+      }
+      search_pos = marker_pos + kMarkerLen;
+      continue;
+    }
+
+    const std::size_t data_start = name_end;
+    const std::size_t data_end = data_start + info.compressed_size;
+    if (data_end < data_start || data_end > data.size()) {
+      if (!ClassifyIndexRecord(data, marker_pos, key, inspection)) {
+        finish_unknown(StreamDecodeStatus::kTruncatedPayload);
+      }
+      search_pos = marker_pos + kMarkerLen;
+      continue;
+    }
+
+    auto decompressed = InflateRaw(
+        data.subspan(data_start, info.compressed_size));
+    if (!decompressed) {
+      if (!ClassifyIndexRecord(data, marker_pos, key, inspection)) {
+        finish_unknown(StreamDecodeStatus::kDecompressionFailed);
+      }
+      search_pos = marker_pos + kMarkerLen;
+      continue;
+    }
+
+    info.decoded_size = decompressed->size();
+    info.record_size = data_end - marker_pos;
+    info.size_matches = info.decoded_size == info.uncompressed_size;
+    const uLong actual_crc = crc32(
+        crc32(0L, Z_NULL, 0), decompressed->data(),
+        static_cast<uInt>(decompressed->size()));
+    info.crc_matches = static_cast<uint32_t>(actual_crc) ==
+                       info.expected_crc32;
+    if (!info.size_matches || !info.crc_matches) {
+      const StreamDecodeStatus status =
+          !info.size_matches
+              ? StreamDecodeStatus::kUncompressedSizeMismatch
+              : StreamDecodeStatus::kCrcMismatch;
+      if (!ClassifyIndexRecord(data, marker_pos, key, inspection)) {
+        finish_unknown(status);
+      }
+      search_pos = marker_pos + kMarkerLen;
+      continue;
+    }
+    info.duplicate_name = streams.find(info.name) != streams.end();
+    if (!info.duplicate_name) {
+      streams.emplace(info.name, std::move(*decompressed));
+      info.selected_as_primary = true;
+    }
+    if (inspection != nullptr && info.duplicate_name) {
+      info.decoded_data = std::move(*decompressed);
+    }
+
+    info.status = info.decoded_size == 0 ? StreamDecodeStatus::kEmpty
+                                         : StreamDecodeStatus::kDecoded;
+    if (inspection != nullptr) inspection->streams.push_back(std::move(info));
+    search_pos = data_end;
   }
 
+  BuildCoverage(data.size(), inspection);
   return true;
 }
 

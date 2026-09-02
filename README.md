@@ -104,6 +104,59 @@ docker run --rm \
   /files/example.SLDPRT
 ```
 
+Inspect or extract every decoded stream in a modern SolidWorks container:
+
+```bash
+swx_dump --list-streams /files/example.SLDDRW
+swx_dump --dump-streams /tmp/swx-streams /files/example.SLDDRW
+swx_dump --dump-unknown /tmp/swx-unknown /files/example.SLDDRW
+```
+
+The inspection output includes marker offsets, type IDs, compressed and decoded
+sizes, CRC validation, duplicate names, cache cells, tail-directory entries,
+unknown marker candidates, and exact unclaimed byte ranges. Legacy OLE2 files
+remain unsupported.
+
+Export the line and text entities stored in a drawing's XML tables stream:
+
+```bash
+swx_dump --export-tables-svg /tmp/tables.svg /files/example.SLDDRW
+swx_dump --export-tables-svg /tmp/tables.svg --sheet Sheet1 /files/example.SLDDRW
+```
+
+Export the confirmed straight-edge cache of one drawing view from `Contents/VBLists`:
+
+```bash
+swx_dump --export-view-svg /tmp/view.svg --view "Drawing View1" /files/example.SLDDRW
+```
+
+The reader associates each `uiViewBucket_c` with its stored UTF-16 view reference and projects
+confirmed 3D edge endpoint records into the view plane. This diagnostic SVG is auto-cropped.
+
+Compose the first drawing sheet, or select one explicitly, using the view matrices, scales,
+placements and clipping rectangles recovered from `Contents/Definition`:
+
+```bash
+swx_dump --export-sheet-svg /tmp/sheet.svg /files/example.SLDDRW
+swx_dump --export-sheet-svg /tmp/sheet.svg --sheet Sheet1 /files/example.SLDDRW
+```
+
+The composed SVG uses the detected physical paper size and merges matching entities from
+`swXmlContents/Tables`. Line styles, dimensions, annotations, arcs, splines, hatches and the
+sheet format/title block are not decoded yet.
+
+Export SolidWorks' stored full-sheet preview or inspect the binary geometry carriers:
+
+```bash
+swx_dump --export-sheet-preview-png /tmp/sheet.png --sheet Sheet1 /files/example.SLDDRW
+swx_dump --probe-drawing-geometry /files/example.SLDDRW
+```
+
+The geometry probe reports class declarations, sketch-marker families, structurally
+recognised coordinate-pair candidates, and their bounds for `Definition`, `DisplayLists`,
+and `VBLists`. Candidate coordinates are diagnostics, not rendered entities, until their
+view ownership and view-to-sheet transform have been confirmed.
+
 Scan a local CAD archive without uploading files:
 
 ```bash

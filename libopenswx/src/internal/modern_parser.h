@@ -33,18 +33,16 @@
 // Chunk format details
 // ────────────────────
 // Chunks are found by scanning for the 6-byte marker 14 00 06 00 08 00.
-// The chunk starts 4 bytes before the marker (si = marker_pos − 4):
+// Inline blocks use this layout relative to the marker:
 //
-//   si+0x00  val_a  (4 B, file-specific — type tag)
-//   si+0x04  14 00 06 00 08 00  (6-byte marker)
-//   si+0x0a  section_type  (1 B: 0xDF=TOC, 0xFD=data, 0x1C=mini)
-//   si+0x0b  suffix        (3 B, file-specific)
-//   si+0x0e  f1    uint32 LE — >= 65536 → inline chunk with data
-//   si+0x12  csz   uint32 LE — compressed size
-//   si+0x16  usz   uint32 LE — uncompressed size
-//   si+0x1a  nsz   uint32 LE — stream name length (bytes)
-//   si+0x1e  name[nsz]       — ROL-decoded UTF-8 stream name
-//   si+0x1e+nsz  data[csz]  — raw-deflate payload (inline chunks only)
+//   +0x00  14 00 06 00 08 00  (6-byte marker)
+//   +0x06  type_id  uint32 LE
+//   +0x0a  CRC32    uint32 LE — checksum of uncompressed payload
+//   +0x0e  csz      uint32 LE — compressed size
+//   +0x12  usz      uint32 LE — uncompressed size
+//   +0x16  nsz      uint32 LE — stream name length (bytes)
+//   +0x1a  name[nsz]          — ROL-decoded UTF-8 stream name
+//   +0x1a+nsz  data[csz]      — raw-deflate payload
 //
 // Version stream
 // ──────────────
@@ -56,6 +54,7 @@
 #include <span>
 
 #include "internal/stream_store.h"
+#include "openswx/container.h"
 
 namespace openswx::internal {
 
@@ -72,11 +71,14 @@ namespace openswx::internal {
 // Parses a modern-format SolidWorks file and populates streams.
 // Streams are added; any pre-existing entries are not overwritten.
 // Returns false only on a hard parse error (file too short).
-// Unrecognised or malformed chunks are silently skipped.
+// Unrecognised or malformed chunks are skipped.  When inspection is supplied,
+// inline streams, cache cells, directory entries, unknown markers, and
+// unclaimed byte ranges are retained for diagnostics.
 [[nodiscard]] bool ParseModernFormat(std::span<const uint8_t> file_data,
-                                      StreamMap& streams);
+                                     StreamMap& streams,
+                                     ContainerInspection* inspection = nullptr);
 
-// Returns true iff name consists only of printable ASCII (< 0x80) characters.
+// Returns true iff name consists only of printable ASCII [0x20, 0x7f).
 // Used to reject garbled ROL-decoded names from misidentified data.
 [[nodiscard]] bool IsValidStreamName(const std::string& name) noexcept;
 
