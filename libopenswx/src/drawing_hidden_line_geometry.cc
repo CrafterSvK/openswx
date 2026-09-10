@@ -74,7 +74,6 @@ std::vector<LineVisibilitySpan> DrawingGeometryReader::SplitLineByTessellation(
           (b.y - c.y) * (a.x - c.x) + (c.x - b.x) * (a.y - c.y);
       if (std::abs(denominator) < 1e-18)
         continue;
-
       const auto weights = [&](ViewPoint point) {
         const double weight_a =
             ((b.y - c.y) * (point.x - c.x) + (c.x - b.x) * (point.y - c.y)) /

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <string_view>
@@ -59,6 +60,18 @@ void AppendDisplayTextStyle(std::vector<uint8_t> &data, double height) {
   AppendUtf16(data, "SWTxt");
 }
 
+void AppendInlinePointTextStyle(std::vector<uint8_t> &data,
+                                uint32_t point_size) {
+  AppendU32(data, 126u);
+  AppendU32(data, 10u);
+  AppendF64(data, -1.0);
+  AppendU32(data, point_size);
+  AppendF64(data, 0.0);
+  AppendF64(data, 0.001);
+  AppendU32(data, 0u);
+  AppendUtf16(data, "Century Gothic");
+}
+
 void AppendDisplayObjectReference(std::vector<uint8_t> &data, uint32_t id) {
   AppendUtf16(data, "<objID=" + std::to_string(id) + ">");
 }
@@ -77,6 +90,17 @@ void AppendDisplayLine(std::vector<uint8_t> &data, Vec3 start, Vec3 end) {
   AppendF64(data, end.x);
   AppendF64(data, end.y);
   AppendF64(data, end.z);
+}
+
+void AppendDisplayStrokeStyle(std::vector<uint8_t> &data,
+                              std::string_view pattern, uint32_t weight) {
+  AppendU32(data, 78u);
+  AppendU32(data, 12u);
+  AppendU32(data, 0x00C0C0C0u);
+  AppendU32(data, weight);
+  data.insert(data.end(), {0x80u, 0xBFu, 0xFFu, 0xFFu, 0xFFu,
+                           0xFFu, 0x00u, 0x00u, 0x00u, 0x00u});
+  AppendUtf16(data, pattern);
 }
 
 void AppendDisplayArc(std::vector<uint8_t> &data, Vec3 start, Vec3 end,
@@ -106,6 +130,14 @@ void AppendDisplayText(std::vector<uint8_t> &data, uint32_t opcode,
   AppendUtf16(data, text);
 }
 
+void AppendDisplayTextAdvances(std::vector<uint8_t> &data,
+                               std::initializer_list<float> advances) {
+  data.insert(data.end(), {1u, 0u});
+  AppendU32(data, static_cast<uint32_t>(advances.size()));
+  for (const float advance : advances)
+    AppendF32(data, advance);
+}
+
 void AppendUtf16(std::vector<uint8_t> &data, std::string_view value) {
   data.insert(data.end(),
               {0xFF, 0xFE, 0xFF, static_cast<uint8_t>(value.size())});
@@ -113,6 +145,40 @@ void AppendUtf16(std::vector<uint8_t> &data, std::string_view value) {
     data.push_back(static_cast<uint8_t>(character));
     data.push_back(0);
   }
+}
+
+TEST(DrawingViewGeometryTest, ReadsDocumentPrintLineWeights) {
+  std::vector<uint8_t> printing;
+  constexpr std::string_view class_name = "uoPrintMainData_c";
+  printing.insert(printing.end(), class_name.begin(), class_name.end());
+  AppendUtf16(printing, "\\\\office-printer");
+  printing.resize(printing.size() + 52u, 0u);
+  constexpr std::array<double, 8> expected = {
+      0.00018, 0.00025, 0.00035, 0.0005,
+      0.0007,  0.001,   0.0014,  0.002};
+  for (const double width : expected) {
+    AppendF64(printing, width);
+  }
+
+  auto result = DrawingGeometryReader::ReadPrintLineWeights(printing);
+
+  ASSERT_TRUE(result.ok()) << result.error();
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    EXPECT_DOUBLE_EQ(result.value()[index], expected[index]);
+  }
+}
+
+void AppendDrawingSheetClass(std::vector<uint8_t> &data) {
+  // The Definition object stream declares moDrSheet once and then uses its
+  // two-byte class token for every actual sheet object.
+  data.insert(data.end(), {0xFF, 0xFF, 0x01, 0x00, 0x09, 0x00});
+  data.insert(data.end(), {'m', 'o', 'D', 'r', 'S', 'h', 'e', 'e', 't'});
+}
+
+void AppendDrawingSheetObject(std::vector<uint8_t> &data,
+                              std::string_view name) {
+  data.insert(data.end(), {0x37, 0x8A});
+  AppendUtf16(data, name);
 }
 
 void SetF64(std::vector<uint8_t> &data, std::size_t offset, double value) {
@@ -222,6 +288,19 @@ TEST(DrawingViewGeometryTest, ReadsAndProjectsConfirmedCachedSegment) {
   for (double value : {6.0, 0.0, 10.0, 8.0, 0.0, 12.0}) {
     AppendF64(data, value);
   }
+  const std::array<uint8_t, 8> polyline_marker = {0x21, 0x03, 0x00, 0x00,
+                                                  0x03, 0x00, 0x00, 0x00};
+  data.insert(data.end(), polyline_marker.begin(), polyline_marker.end());
+  for (double value : {8.0, 0.0, 12.0, 9.0, 0.0, 14.0,
+                       10.0, 0.0, 12.0}) {
+    AppendF64(data, value);
+  }
+  const std::array<uint8_t, 8> hidden_marker = {0x31, 0x03, 0x00, 0x00,
+                                                0x02, 0x00, 0x00, 0x00};
+  data.insert(data.end(), hidden_marker.begin(), hidden_marker.end());
+  for (double value : {10.0, 0.0, 14.0, 12.0, 0.0, 16.0}) {
+    AppendF64(data, value);
+  }
   // The cache can repeat a shared topological edge in the opposite direction.
   // It must only be emitted and classified once.
   data.insert(data.end(), marker.begin(), marker.end());
@@ -250,16 +329,23 @@ TEST(DrawingViewGeometryTest, ReadsAndProjectsConfirmedCachedSegment) {
   EXPECT_EQ(view.name, "Drawing View1");
   EXPECT_EQ(view.referenced_document, "part");
   EXPECT_DOUBLE_EQ(view.scale_denominator, 2.0);
-  ASSERT_EQ(view.geometry.entities.size(), 2u);
+  ASSERT_EQ(view.geometry.entities.size(), 5u);
   const Line2D &line = std::get<Line2D>(view.geometry.entities.front());
   EXPECT_DOUBLE_EQ(line.start.x, -1.0);
   EXPECT_DOUBLE_EQ(line.start.y, 2.0);
+  EXPECT_EQ(view.source_lines.size(), 5u);
+  EXPECT_EQ(view.source_lines[2].source_offset,
+            view.source_lines[3].source_offset);
   EXPECT_DOUBLE_EQ(line.end.x, -2.0);
-  ASSERT_EQ(view.source_lines.size(), 2u);
   EXPECT_EQ(view.source_lines.front().source_offset, 66u);
   EXPECT_EQ(view.source_lines.front().source_record_type, 0x21u);
   EXPECT_EQ(view.source_lines[1].source_offset, 122u);
   EXPECT_EQ(view.source_lines[1].source_record_type, 0x23u);
+  EXPECT_EQ(view.source_lines[2].source_record_type, 0x21u);
+  EXPECT_EQ(view.source_lines[3].source_record_type, 0x21u);
+  EXPECT_EQ(view.source_lines[4].source_record_type, 0x31u);
+  EXPECT_EQ(std::get<Line2D>(view.geometry.entities[4]).style.pattern,
+            LinePattern::kHidden);
   EXPECT_TRUE(view.has_suppressed_edge_cache);
   EXPECT_DOUBLE_EQ(line.end.y, 4.0);
 }
@@ -334,6 +420,7 @@ TEST(DrawingViewGeometryTest, ReadsDisplayListLinesOwnedBySelectedView) {
 TEST(DrawingViewGeometryTest, ReadsDisplayListCircularArcOwnedByObject) {
   std::vector<uint8_t> display_lists;
   AppendDisplayObjectReference(display_lists, 42u);
+  AppendDisplayStrokeStyle(display_lists, "CONTINUOUS", 3u);
   AppendDisplayArc(display_lists, {0.08, 0.12, -0.1}, {0.08, 0.16, -0.1},
                    {0.06, 0.14, -0.1});
   const std::array<uint32_t, 1> selected_ids = {42u};
@@ -347,16 +434,57 @@ TEST(DrawingViewGeometryTest, ReadsDisplayListCircularArcOwnedByObject) {
   EXPECT_DOUBLE_EQ(result.value().front().end.y, 0.16);
   EXPECT_DOUBLE_EQ(result.value().front().center.x, 0.06);
   EXPECT_DOUBLE_EQ(result.value().front().normal_z, 1.0);
+  EXPECT_EQ(result.value().front().style.source_line_weight, 3);
   EXPECT_EQ(result.value().front().source_table,
             "Contents/DisplayLists/arc/objID=42");
 }
 
+TEST(DrawingViewGeometryTest, DoesNotFillClosedWeldSymbolAsArrowhead) {
+  const std::string keywords =
+      "<Keywords><Sheet Name=\"List2\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition(32u, 0);
+  SetF64(definition, 0u, 0.420);
+  SetF64(definition, 8u, 0.297);
+  AppendUtf16(definition, "List2");
+  AppendDefinitionObjectId(definition, 42u);
+
+  std::vector<uint8_t> display_lists;
+  AppendDisplayObjectReference(display_lists, 42u);
+  // An open V is a cached arrowhead.
+  AppendDisplayLine(display_lists, {0.05, 0.05, 0.0}, {0.0525, 0.0503, 0.0});
+  AppendDisplayLine(display_lists, {0.05, 0.05, 0.0}, {0.0525, 0.0497, 0.0});
+  // Three sides form an outlined weld symbol and must remain unfilled.
+  AppendDisplayLine(display_lists, {0.10, 0.10, 0.0}, {0.1036, 0.10, 0.0});
+  AppendDisplayLine(display_lists, {0.10, 0.10, 0.0}, {0.1036, 0.10288, 0.0});
+  AppendDisplayLine(display_lists, {0.1036, 0.10, 0.0}, {0.1036, 0.10288, 0.0});
+  // A wide open V is an engineering symbol, not an arrowhead.
+  AppendDisplayLine(display_lists, {0.15, 0.15, 0.0}, {0.15, 0.1536, 0.0});
+  AppendDisplayLine(display_lists, {0.15, 0.15, 0.0}, {0.15288, 0.1536, 0.0});
+  const auto bytes = [](const std::string &value) {
+    return std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t *>(value.data()), value.size());
+  };
+
+  auto result = DrawingGeometryReader::ReadCachedSheet(
+      bytes(keywords), definition, {}, {}, "List2", display_lists);
+
+  ASSERT_TRUE(result.ok()) << result.error();
+  std::vector<const FilledTriangle2D *> triangles;
+  for (const DrawingEntity &entity : result.value().entities) {
+    if (const auto *triangle = std::get_if<FilledTriangle2D>(&entity))
+      triangles.push_back(triangle);
+  }
+  ASSERT_EQ(triangles.size(), 1u);
+  EXPECT_DOUBLE_EQ(triangles.front()->points[0].x, 0.05);
+  EXPECT_DOUBLE_EQ(triangles.front()->points[0].y, 0.05);
+}
+
 TEST(DrawingViewGeometryTest, ReadsLinePatternAndFlatSheetEndOwnership) {
   std::vector<uint8_t> display_lists;
-  AppendUtf16(display_lists, "CONTINUOUS");
+  AppendDisplayStrokeStyle(display_lists, "CONTINUOUS", 2u);
   AppendDisplayLine(display_lists, {0.01, 0.02, 0.0}, {0.11, 0.02, 0.0});
   AppendUtf16(display_lists, "List1");
-  AppendUtf16(display_lists, "CENTER");
+  AppendDisplayStrokeStyle(display_lists, "CENTER", 0u);
   AppendDisplayLine(display_lists, {0.20, 0.03, 0.0}, {0.30, 0.03, 0.0});
   AppendUtf16(display_lists, "List2-Active");
   const std::vector<std::string> sheets = {"List1", "List2"};
@@ -371,15 +499,22 @@ TEST(DrawingViewGeometryTest, ReadsLinePatternAndFlatSheetEndOwnership) {
   ASSERT_EQ(first.value().size(), 1u);
   ASSERT_EQ(second.value().size(), 1u);
   EXPECT_EQ(first.value().front().style.pattern, LinePattern::kSolid);
+  EXPECT_EQ(first.value().front().style.source_line_weight, 2);
   EXPECT_EQ(second.value().front().style.pattern, LinePattern::kCenter);
+  EXPECT_EQ(second.value().front().style.source_line_weight, 0);
   EXPECT_EQ(second.value().front().source_table,
             "Contents/DisplayLists/line/sheet=List2");
 }
 
 TEST(DrawingViewGeometryTest, ReadsExtendedTextOpcodeOwnedBySheetEnd) {
   std::vector<uint8_t> display_lists;
+  AppendInlinePointTextStyle(display_lists, 13u);
   AppendDisplayText(display_lists, 356u, "Resolved title", {0.30, 0.02, 0.0},
                     0.0);
+  AppendDisplayTextAdvances(display_lists, {0.002F, 0.001F, 0.001F, 0.002F,
+                                            0.001F, 0.001F, 0.001F, 0.002F,
+                                            0.001F, 0.001F, 0.001F, 0.001F,
+                                            0.002F, 0.001F});
   AppendUtf16(display_lists, "List1");
   AppendDisplayText(display_lists, 356u, "Other sheet", {0.30, 0.02, 0.0}, 0.0);
   AppendUtf16(display_lists, "List2-Active");
@@ -391,7 +526,9 @@ TEST(DrawingViewGeometryTest, ReadsExtendedTextOpcodeOwnedBySheetEnd) {
   ASSERT_TRUE(result.ok()) << result.error();
   ASSERT_EQ(result.value().size(), 1u);
   EXPECT_EQ(result.value().front().text, "Resolved title");
-  EXPECT_DOUBLE_EQ(result.value().front().height, 0.0015);
+  EXPECT_NEAR(result.value().front().height,
+              13.0 * 0.0254 / 72.0 * 3.0 / 4.0, 1e-12);
+  EXPECT_NEAR(result.value().front().rendered_width, 0.018, 1e-9);
   EXPECT_EQ(result.value().front().anchor, TextAnchor::kStart);
   EXPECT_EQ(result.value().front().source_table,
             "Contents/DisplayLists/text/356/sheet=List1");
@@ -475,6 +612,34 @@ TEST(DrawingViewGeometryTest, PrefersDefinitionObjectOwnershipOverViewHint) {
             "Contents/DisplayLists/line/objID=202");
 }
 
+TEST(DrawingViewGeometryTest, OwnsCuttingPlaneByResultingSectionView) {
+  std::vector<uint8_t> display_lists;
+  AppendDisplayObjectReference(display_lists, 100u);
+  AppendUtf16(display_lists, "Display State-1");
+  AppendUtf16(display_lists, "CHAIN_THICK");
+  AppendDisplayLine(display_lists, {0.01, 0.10, 0.0}, {0.30, 0.10, 0.0});
+  AppendDisplayText(display_lists, 156u, "D", {0.01, 0.11, 0.0}, 0.0);
+  AppendDisplayText(display_lists, 156u, "D", {0.30, 0.11, 0.0}, 0.0);
+  AppendUtf16(display_lists, "Display State-2");
+  AppendDisplayObjectReference(display_lists, 200u);
+  AppendDisplayText(display_lists, 176u, "D-D", {0.15, 0.20, 0.0}, 0.0);
+  const std::array<uint32_t, 1> parent_sheet_ids = {100u};
+  const std::array<uint32_t, 1> section_sheet_ids = {200u};
+
+  auto parent = DrawingGeometryReader::ReadDisplayListLines(
+      display_lists, {}, {}, 0.420, 0.297, parent_sheet_ids);
+  auto section = DrawingGeometryReader::ReadDisplayListLines(
+      display_lists, {}, {}, 0.420, 0.297, section_sheet_ids);
+
+  ASSERT_TRUE(parent.ok()) << parent.error();
+  ASSERT_TRUE(section.ok()) << section.error();
+  EXPECT_TRUE(parent.value().empty());
+  ASSERT_EQ(section.value().size(), 1u);
+  EXPECT_EQ(section.value().front().style.pattern, LinePattern::kChainThick);
+  EXPECT_EQ(section.value().front().source_table,
+            "Contents/DisplayLists/line/section-callout=200");
+}
+
 TEST(DrawingViewGeometryTest, ReadsDefinitionDisplayObjectIdsBySheet) {
   std::vector<uint8_t> definition;
   AppendUtf16(definition, "List3");
@@ -522,6 +687,87 @@ TEST(DrawingViewGeometryTest, ReadsSolidWorks19000NameWithoutObjectPrefix) {
   ASSERT_EQ(result.value().size(), 1u);
   EXPECT_EQ(result.value().front().name, name);
   EXPECT_DOUBLE_EQ(result.value().front().scale, 0.1);
+}
+
+TEST(DrawingViewGeometryTest,
+     MergesShortCoincidentTangentEdgesInObliqueView) {
+  const std::string keywords = "<Keywords><Sheet Name=\"List1\" Type=\"Sheet\">"
+                               "<View Name=\"View1\"/></Sheet></Keywords>";
+  const auto bytes = [](const std::string &value) {
+    return std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t *>(value.data()), value.size());
+  };
+
+  constexpr std::size_t placement_offset = 400u;
+  constexpr std::size_t matrix_offset = placement_offset - 317u;
+  std::vector<uint8_t> definition(placement_offset + 120u, 0u);
+  const std::array<uint8_t, 5> name_marker = {0x09, 0x89, 0xFF, 0xFE, 0xFF};
+  std::copy(name_marker.begin(), name_marker.end(), definition.begin());
+  definition[name_marker.size()] = 5u;
+  for (std::size_t index = 0; index < 5u; ++index) {
+    definition[name_marker.size() + 1u + index * 2u] =
+        static_cast<uint8_t>("View1"[index]);
+  }
+  constexpr double diagonal = 0.7071067811865476;
+  const std::array<double, 9> matrix = {
+      diagonal, 0.0, diagonal, -diagonal, 0.0, diagonal, 0.0, 1.0, 0.0};
+  for (std::size_t index = 0; index < matrix.size(); ++index) {
+    SetF64(definition, matrix_offset + index * 8u, matrix[index]);
+  }
+  SetF64(definition, matrix_offset + 72u, 0.10);
+  SetF64(definition, matrix_offset + 80u, 0.10);
+  SetF64(definition, matrix_offset + 88u, 0.0);
+  SetF64(definition, matrix_offset + 96u, 0.1);
+  const std::array<double, 11> placement = {
+      0.04, 0.04, 0.20, 0.20, 0.05, 0.05,
+      0.19, 0.19, 0.12, 0.12, 0.0};
+  for (std::size_t index = 0; index < placement.size(); ++index) {
+    SetF64(definition, placement_offset + index * 8u, placement[index]);
+  }
+  constexpr std::string_view line_font_manager = "uiLineFontMgr_c";
+  definition.insert(definition.end(), line_font_manager.begin(),
+                    line_font_manager.end());
+  AppendUtf16(definition, "TanVisible");
+  definition.resize(definition.size() + 6u, 0u);
+  AppendUtf16(definition, "PHANTOM");
+  definition.insert(definition.end(), {0u, 0u});
+
+  const std::string_view bucket_class = "uiViewBucket_c";
+  std::vector<uint8_t> vb_lists = {
+      0x01, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0x01, 0x00,
+      static_cast<uint8_t>(bucket_class.size()), 0x00};
+  vb_lists.insert(vb_lists.end(), bucket_class.begin(), bucket_class.end());
+  AppendF64(vb_lists, diagonal);
+  AppendF64(vb_lists, diagonal);
+  AppendF64(vb_lists, 0.0);
+  AppendF64(vb_lists, 1.0);
+  AppendF64(vb_lists, 10.0);
+  vb_lists.insert(vb_lists.end(), {0u, 0u});
+  const auto append_edge = [&](Vec3 start, Vec3 end) {
+    vb_lists.insert(vb_lists.end(),
+                    {0x23, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+    for (const Vec3 point : {start, end}) {
+      AppendF64(vb_lists, point.x);
+      AppendF64(vb_lists, point.y);
+      AppendF64(vb_lists, point.z);
+    }
+  };
+  append_edge({0.0, 0.0, 0.0}, {0.0, 0.0, 0.003});
+  append_edge({0.01, 0.01, 0.003}, {0.01, 0.01, 0.0});
+  AppendUtf16(vb_lists, "part@View1");
+
+  auto result = DrawingGeometryReader::ReadCachedSheet(
+      bytes(keywords), definition, vb_lists, {}, "List1");
+
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().entities.size(), 1u);
+  const auto *line = std::get_if<Line2D>(&result.value().entities.front());
+  ASSERT_NE(line, nullptr);
+  EXPECT_EQ(line->style.pattern, LinePattern::kPhantom);
+  EXPECT_EQ(line->style.source_line_weight, 0);
+  EXPECT_NEAR(std::hypot(line->end.x - line->start.x,
+                         line->end.y - line->start.y),
+              0.0003, 1e-12);
 }
 
 TEST(DrawingViewGeometryTest, ReadsSolidWorks19000LinearDimension) {
@@ -576,7 +822,10 @@ TEST(DrawingViewGeometryTest, ReadsSolidWorks19000BomBalloonAndLeader) {
   AppendF64(data, 0.263291903);
   AppendF64(data, 0.188279718);
   AppendF64(data, 0.044809957);
-  data.resize(data.size() + 64u, 0);
+  data.resize(data.size() + 58u, 0);
+  AppendF64(data, 0.00573480845333);
+  AppendF64(data, 0.00473169014301);
+  data.resize(data.size() + 8u, 0);
   AppendF64(data, 0.281063416);
   AppendF64(data, 0.191343772);
   AppendF64(data, 0.044809957);
@@ -594,6 +843,7 @@ TEST(DrawingViewGeometryTest, ReadsSolidWorks19000BomBalloonAndLeader) {
   EXPECT_DOUBLE_EQ(balloon.leader_anchor.x, 0.281063416);
   EXPECT_DOUBLE_EQ(balloon.leader_anchor.y, 0.191343772);
   EXPECT_EQ(balloon.source_offset, label_offset);
+  EXPECT_DOUBLE_EQ(balloon.text_height_m, 0.00573480845333);
 }
 
 TEST(DrawingViewGeometryTest, UsesSerializedBomBalloonSheetOwnership) {
@@ -665,6 +915,262 @@ TEST(DrawingViewGeometryTest, ComposesTableOnEmptyDrawingSheet) {
   EXPECT_DOUBLE_EQ(result.value().height_m, 0.297);
   ASSERT_EQ(result.value().entities.size(), 1u);
   EXPECT_NE(std::get_if<Line2D>(&result.value().entities.front()), nullptr);
+}
+
+TEST(DrawingViewGeometryTest, KeepsLeaderNumbersAboveTheirOwnLanding) {
+  // Item 8497/List2 stores the baseline of "27" 0.597 mm below its
+  // horizontal landing. Include rotated labels and unrelated annotation
+  // types so the correction cannot become a global shift of drawing text.
+  for (const double rotation : {0.0, 1.5707963267948966}) {
+    for (const int scenario : {0, 1, 2, 3, 4, 5}) {
+      SCOPED_TRACE(::testing::Message() << rotation << "/" << scenario);
+      const std::string keywords =
+          "<Keywords><Sheet Name=\"List2\" Type=\"Sheet\"/></Keywords>";
+      std::vector<uint8_t> definition(32u, 0);
+      SetF64(definition, 0u, 0.420);
+      SetF64(definition, 8u, 0.297);
+      AppendUtf16(definition, "List2");
+      AppendDefinitionObjectId(definition, 42u);
+      AppendDefinitionObjectId(definition, 43u);
+      const auto point = [&](double x, double y) {
+        return Vec3{0.15 + x * std::cos(rotation) - y * std::sin(rotation),
+                    0.15 + x * std::sin(rotation) + y * std::cos(rotation),
+                    0.0};
+      };
+      std::vector<uint8_t> display_lists;
+      AppendUtf16(display_lists, "<objID=42>");
+      AppendDisplayTextStyle(display_lists, 0.004);
+      const auto origin =
+          point(-0.0040055555, scenario == 3 ? 0.002 : -0.000597);
+      AppendDisplayText(display_lists, 166u, scenario == 1 ? "Note" : "27",
+                        origin, rotation);
+      if (scenario == 5) {
+        AppendDisplayText(display_lists, 156u, "1", point(0.0, 0.003),
+                          rotation);
+      }
+      AppendDisplayLine(display_lists, point(0.0026443435, 0.0),
+                        point(0.02, -0.03));
+      AppendDisplayLine(display_lists, point(0.02, -0.03),
+                        point(0.01969, -0.0275));
+      AppendDisplayLine(display_lists, point(0.02031, -0.0275),
+                        point(0.02, -0.03));
+      if (scenario == 2) {
+        AppendDisplayLine(display_lists, point(-0.02, -0.03),
+                          point(-0.02031, -0.0275));
+        AppendDisplayLine(display_lists, point(-0.01969, -0.0275),
+                          point(-0.02, -0.03));
+      }
+      if (scenario == 4)
+        AppendUtf16(display_lists, "<objID=43>");
+      // Reversed endpoints must give the same centre and upward clearance.
+      AppendDisplayLine(display_lists, point(0.0026443435, 0.0),
+                        point(-0.0026443435, 0.0));
+      const auto bytes = [](const std::string &value) {
+        return std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t *>(value.data()), value.size());
+      };
+      auto result = DrawingGeometryReader::ReadCachedSheet(
+          bytes(keywords), definition, {}, {}, "List2", display_lists);
+      ASSERT_TRUE(result.ok()) << result.error();
+      const TextAnnotation *label = nullptr;
+      for (const auto &entity : result.value().entities) {
+        const auto *text = std::get_if<TextAnnotation>(&entity);
+        if (text && text->text == (scenario == 1 ? "Note" : "27"))
+          label = text;
+      }
+      ASSERT_NE(label, nullptr);
+      const auto expected = scenario == 0 ? point(0.0, 0.0008) : origin;
+      EXPECT_NEAR(label->origin.x, expected.x, 1e-12);
+      EXPECT_NEAR(label->origin.y, expected.y, 1e-12);
+      EXPECT_EQ(label->anchor,
+                scenario == 0 ? TextAnchor::kMiddle : TextAnchor::kStart);
+    }
+  }
+}
+
+TEST(DrawingViewGeometryTest, ClearsAngularTextFromBothSidesOfRotatedArc) {
+  for (const double side : {-1.0, 1.0}) {
+    for (const int scenario : {0, 1, 2}) {
+      SCOPED_TRACE(::testing::Message() << side << "/" << scenario);
+      const std::string keywords =
+          "<Keywords><Sheet Name=\"List4\" Type=\"Sheet\"/></Keywords>";
+      std::vector<uint8_t> definition(32u, 0);
+      SetF64(definition, 0u, 0.420);
+      SetF64(definition, 8u, 0.297);
+      AppendUtf16(definition, "List4");
+      AppendDefinitionObjectId(definition, 42u);
+      const double rotation = 0.4;
+      const Vec2 normal{-std::sin(rotation), std::cos(rotation)};
+      const auto point = [&](double x, double y) {
+        return Vec3{0.15 + x * std::cos(rotation) + y * normal.x,
+                    0.15 + x * std::sin(rotation) + y * normal.y, 0.0};
+      };
+      std::vector<uint8_t> display_lists;
+      AppendUtf16(display_lists, "<objID=42>");
+      AppendDisplayTextStyle(display_lists, 0.003);
+      const auto origin = point(-0.003, side * 0.02 - 0.0005);
+      AppendDisplayText(display_lists, 176u, scenario == 1 ? "60" : "60~",
+                        origin, rotation);
+      if (scenario != 1) {
+        // AppendDisplayText's ASCII helper: replace the final UTF-16 unit
+        // with U+00B0 rather than encoding the two UTF-8 bytes separately.
+        display_lists[display_lists.size() - 2u] = 0xB0;
+      }
+      AppendDisplayArc(display_lists, point(-0.012, side * 0.016),
+                       point(0.012, side * 0.016), point(0.0, 0.0));
+      for (const double x : {-0.012, 0.012}) {
+        AppendDisplayLine(display_lists, point(x, side * 0.016),
+                          point(x - 0.00031, side * 0.016 + 0.0025));
+        AppendDisplayLine(display_lists,
+                          point(x + 0.00031, side * 0.016 + 0.0025),
+                          point(x, side * 0.016));
+      }
+      if (scenario == 2) {
+        AppendDisplayArc(display_lists, point(-0.01, -0.015),
+                         point(0.01, -0.015), point(0.0, -0.005));
+      }
+      const auto bytes = [](const std::string &value) {
+        return std::span<const uint8_t>(
+            reinterpret_cast<const uint8_t *>(value.data()), value.size());
+      };
+      auto result = DrawingGeometryReader::ReadCachedSheet(
+          bytes(keywords), definition, {}, {}, "List4", display_lists);
+      ASSERT_TRUE(result.ok()) << result.error();
+      const TextAnnotation *label = nullptr;
+      for (const auto &entity : result.value().entities) {
+        if (const auto *text = std::get_if<TextAnnotation>(&entity))
+          label = text;
+      }
+      ASSERT_NE(label, nullptr);
+      if (scenario == 0) {
+        EXPECT_EQ(label->anchor, TextAnchor::kMiddle);
+        const double clearance = (label->origin.x - 0.15) * normal.x +
+                                 (label->origin.y - 0.15) * normal.y -
+                                 side * 0.02;
+        EXPECT_GE(clearance, 0.0006 - 1e-12);
+        EXPECT_LT(clearance, 0.0015);
+        EXPECT_DOUBLE_EQ(label->rotation_radians, rotation);
+      } else {
+        EXPECT_EQ(label->anchor, TextAnchor::kStart);
+        EXPECT_DOUBLE_EQ(label->origin.x, origin.x);
+        EXPECT_DOUBLE_EQ(label->origin.y, origin.y);
+      }
+    }
+  }
+}
+
+TEST(DrawingViewGeometryTest, ComposesSectionAssemblyBucketOnOwningSheet) {
+  const std::string keywords =
+      "<Keywords><Sheet Name=\"List3\" Type=\"Sheet\">"
+      "<View Name=\"Section View D-D\"/></Sheet>"
+      "<Sheet Name=\"List4\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition;
+  AppendDrawingSheetClass(definition);
+  AppendDrawingSheetObject(definition, "List3");
+  AppendUtf16(definition, "model-SectionAssembly-3");
+  // Nested model names in the sheet object are not drawing-view owners when
+  // no uiViewBucket_c carries that exact name. This later string must not
+  // steal the SectionAssembly-3 placement.
+  AppendUtf16(definition, "nested-SectionAssembly-8");
+  definition.resize(405u, 0u);
+  const std::array<double, 9> identity = {1.0, 0.0, 0.0, 0.0, 1.0,
+                                          0.0, 0.0, 0.0, 1.0};
+  for (std::size_t index = 0; index < identity.size(); ++index) {
+    SetF64(definition, 88u + index * 8u, identity[index]);
+  }
+  SetF64(definition, 160u, 0.10);
+  SetF64(definition, 168u, 0.15);
+  SetF64(definition, 176u, 0.0);
+  SetF64(definition, 184u, 0.1);
+  for (const double value :
+       {0.04, 0.08, 0.16, 0.22, 0.05, 0.09, 0.15, 0.21, 0.10, 0.15, 0.0}) {
+    AppendF64(definition, value);
+  }
+  AppendDrawingSheetObject(definition, "List4");
+  // This unrelated string must not establish sheet ownership.
+  AppendUtf16(definition, "List3");
+  // A late reference to the section name also must not pull List3's earlier
+  // placement into the final sheet object.
+  AppendUtf16(definition, "model-SectionAssembly-3");
+  const std::string_view bucket_class = "uiViewBucket_c";
+  std::vector<uint8_t> vb_lists = {
+      0x01, 0x00, 0x00,
+      0x00, 0xFF, 0xFF,
+      0x01, 0x00, static_cast<uint8_t>(bucket_class.size()),
+      0x00};
+  vb_lists.insert(vb_lists.end(), bucket_class.begin(), bucket_class.end());
+  for (const double value : {0.0, 0.0, 1.0, 1.0, 1.0})
+    AppendF64(vb_lists, value);
+  vb_lists.insert(vb_lists.end(),
+                  {0u, 0u, 0x21, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+  for (const double value : {0.0, 0.0, 0.0, 0.4, 0.0, 0.0})
+    AppendF64(vb_lists, value);
+  vb_lists.insert(vb_lists.end(),
+                  {0x31, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+  for (const double value : {0.0, 0.2, 0.0, 0.4, 0.2, 0.0})
+    AppendF64(vb_lists, value);
+  AppendUtf16(vb_lists, "part@model-SectionAssembly-3");
+  const auto bytes = [](const std::string &value) {
+    return std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t *>(value.data()), value.size());
+  };
+  auto result = DrawingGeometryReader::ReadCachedSheet(
+      bytes(keywords), definition, vb_lists, {}, "List3");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().entities.size(), 2u);
+  const auto *line = std::get_if<Line2D>(&result.value().entities.front());
+  ASSERT_NE(line, nullptr);
+  EXPECT_NEAR(line->start.x, 0.10, 1e-12);
+  EXPECT_NEAR(line->end.x, 0.14, 1e-12);
+  EXPECT_NEAR(line->start.y, 0.15, 1e-12);
+  const auto *hidden = std::get_if<Line2D>(&result.value().entities[1]);
+  ASSERT_NE(hidden, nullptr);
+  EXPECT_EQ(hidden->style.pattern, LinePattern::kHidden);
+
+  auto wrong_sheet = DrawingGeometryReader::ReadCachedSheet(
+      bytes(keywords), definition, vb_lists, {}, "List4");
+  EXPECT_FALSE(wrong_sheet.ok());
+  EXPECT_NE(wrong_sheet.error().find("No cached view"), std::string::npos);
+}
+
+TEST(DrawingViewGeometryTest, RejectsBucketWithoutOwningView) {
+  const std::string keywords =
+      "<Keywords><Sheet Name=\"List1\" Type=\"Sheet\">"
+      "<View Name=\"Expected view\"/></Sheet></Keywords>";
+  std::vector<uint8_t> definition;
+  AppendUtf16(definition, "Expected view");
+  definition.resize(405u, 0u);
+  for (const std::size_t index : {0u, 4u, 8u})
+    SetF64(definition, 88u + index * 8u, 1.0);
+  SetF64(definition, 160u, 0.10);
+  SetF64(definition, 168u, 0.15);
+  SetF64(definition, 184u, 1.0);
+  for (const double value :
+       {0.04, 0.08, 0.16, 0.22, 0.05, 0.09, 0.15, 0.21, 0.10, 0.15, 0.0}) {
+    AppendF64(definition, value);
+  }
+  const std::string_view bucket_class = "uiViewBucket_c";
+  std::vector<uint8_t> vb_lists = {
+      0x01, 0x00, 0x00,
+      0x00, 0xFF, 0xFF,
+      0x01, 0x00, static_cast<uint8_t>(bucket_class.size()),
+      0x00};
+  vb_lists.insert(vb_lists.end(), bucket_class.begin(), bucket_class.end());
+  for (const double value : {0.0, 0.0, 1.0, 1.0, 1.0})
+    AppendF64(vb_lists, value);
+  vb_lists.insert(vb_lists.end(),
+                  {0u, 0u, 0x21, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+  for (const double value : {0.0, 0.0, 0.0, 0.4, 0.0, 0.0})
+    AppendF64(vb_lists, value);
+  AppendUtf16(vb_lists, "part@Unowned view");
+  const auto bytes = [](const std::string &value) {
+    return std::span<const uint8_t>(
+        reinterpret_cast<const uint8_t *>(value.data()), value.size());
+  };
+  auto result = DrawingGeometryReader::ReadCachedSheet(
+      bytes(keywords), definition, vb_lists, {}, "List1");
+  EXPECT_FALSE(result.ok());
+  EXPECT_NE(result.error().find("No cached view"), std::string::npos);
 }
 
 TEST(DrawingViewGeometryTest, ReadsNativeWeldmentTableGrid) {
@@ -892,6 +1398,9 @@ TEST(DrawingViewGeometryTest, ReadsCachedFaceTriangleStrip) {
   ASSERT_EQ(result.value().size(), 1u);
   const FaceTessellation &mesh = result.value().front();
   EXPECT_EQ(mesh.source_offset, class_offset);
+  EXPECT_EQ(mesh.source_table_offset,
+            class_offset + class_name.size() + 8u);
+  EXPECT_EQ(mesh.source_group_offset, 0u);
   ASSERT_EQ(mesh.vertices.size(), 3u);
   ASSERT_EQ(mesh.normals.size(), 3u);
   ASSERT_EQ(mesh.strip_lengths, std::vector<uint32_t>({3u}));
@@ -918,6 +1427,30 @@ TEST(DrawingViewGeometryTest, ReadsCachedVisualPropertiesColorAndName) {
   EXPECT_EQ(appearances.front().source_offset, class_offset);
   EXPECT_EQ(appearances.front().scope,
             DrawingAppearanceScope::kClassDefinition);
+}
+
+TEST(DrawingViewGeometryTest, ReadsUtf16VisualPropertiesName) {
+  std::vector<uint8_t> data;
+  constexpr std::string_view class_name = "moVisualProperties_c";
+  data.insert(data.end(), class_name.begin(), class_name.end());
+  AppendU32(data, 0x00E3DDDDu);
+  data.resize(data.size() + 12u, 0u);
+  constexpr std::array<uint16_t, 23> name = {
+      'm', 'a', 't', 'e', 'r', 'i', 0x00E1, 'l', 'y', '|', 'H', 'l',
+      'i', 'n', 0x00ED, 'k', '|', '2', '4', '5', 0x03A9, 0xD83D, 0xDE80};
+  data.insert(data.end(),
+              {0xFFu, 0xFEu, 0xFFu, static_cast<uint8_t>(name.size())});
+  for (const uint16_t unit : name) {
+    data.push_back(static_cast<uint8_t>(unit & 0xFFu));
+    data.push_back(static_cast<uint8_t>(unit >> 8u));
+  }
+
+  const auto appearances = DrawingGeometryReader::ReadAppearances(data);
+
+  ASSERT_EQ(appearances.size(), 1u);
+  EXPECT_EQ(appearances.front().name,
+            "materi\xC3\xA1ly|Hlin\xC3\xADk|245\xCE\xA9\xF0\x9F\x9A\x80");
+  EXPECT_EQ(appearances.front().rgb, 0x00DDDDE3u);
 }
 
 TEST(DrawingViewGeometryTest, ReadsInlineVisualPropertiesRecord) {
@@ -1066,7 +1599,8 @@ TEST(DrawingViewGeometryTest, SplitsPartiallyOccludedCachedLine) {
   EXPECT_NEAR(spans[1].end_fraction, 1.0, 1e-8);
 }
 
-TEST(DrawingViewGeometryTest, IgnoresOccludingFaceOwnedByAnotherViewModel) {
+TEST(DrawingViewGeometryTest,
+     UsesOwnedFacesAndSuppressesHiddenEdgesInShadedView) {
   const std::string keywords = "<Keywords><Sheet Name=\"List1\" Type=\"Sheet\">"
                                "<View Name=\"View1\"/></Sheet></Keywords>";
   const auto bytes = [](const std::string &value) {
@@ -1098,6 +1632,13 @@ TEST(DrawingViewGeometryTest, IgnoresOccludingFaceOwnedByAnotherViewModel) {
   for (std::size_t index = 0; index < placement.size(); ++index) {
     SetF64(definition, placement_offset + index * 8u, placement[index]);
   }
+  constexpr std::string_view line_font_manager = "uiLineFontMgr_c";
+  definition.insert(definition.end(), line_font_manager.begin(),
+                    line_font_manager.end());
+  AppendUtf16(definition, "Visible");
+  definition.resize(definition.size() + 6u, 0u);
+  AppendUtf16(definition, "CONTINUOUS");
+  definition.insert(definition.end(), {3u, 0u});
 
   const std::string_view bucket_class = "uiViewBucket_c";
   std::vector<uint8_t> vb_lists = {
@@ -1114,7 +1655,25 @@ TEST(DrawingViewGeometryTest, IgnoresOccludingFaceOwnedByAnotherViewModel) {
   vb_lists.insert(vb_lists.end(), {0u, 0u});
   vb_lists.insert(vb_lists.end(),
                   {0x21, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
-  for (const double value : {0.2, 0.2, 0.0, 0.6, 0.2, 0.0}) {
+  for (const double value : {0.2, 0.2, 2.0, 0.6, 0.2, 2.0}) {
+    AppendF64(vb_lists, value);
+  }
+  vb_lists.insert(vb_lists.end(),
+                  {0x31, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+  for (const double value : {0.2, 0.3, 0.0, 0.6, 0.3, 0.0}) {
+    AppendF64(vb_lists, value);
+  }
+  // A suppressed edge record accompanies the face tessellation in shaded
+  // drawing-view buckets. It is the cache signature used for shaded HLR.
+  const std::size_t suppressed_record_offset = vb_lists.size();
+  vb_lists.insert(vb_lists.end(),
+                  {0x01, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+  for (const double value : {0.2, 0.201, 0.0, 0.6, 0.201, 0.0}) {
+    AppendF64(vb_lists, value);
+  }
+  vb_lists.insert(vb_lists.end(),
+                  {0x21, 0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00});
+  for (const double value : {0.2, 0.0, 0.0, 0.6, 0.0, 0.0}) {
     AppendF64(vb_lists, value);
   }
   AppendUtf16(vb_lists, "part@View1");
@@ -1149,23 +1708,65 @@ TEST(DrawingViewGeometryTest, IgnoresOccludingFaceOwnedByAnotherViewModel) {
     AppendTessellationDescriptor(vb_lists, 1u, 8u, 0u);
   };
   append_face(-1.0F);
+  // A later cache group for the same document can belong to another drawing
+  // view or configuration. Equal document stems must not merge the groups.
+  AppendUtf16(vb_lists, "C:\\models\\part.SLDPRT");
+  append_face(1.0F);
   AppendUtf16(vb_lists, "C:\\models\\other.SLDPRT");
   append_face(1.0F);
 
   auto parsed_faces = DrawingGeometryReader::ReadFaceTessellations(vb_lists);
   ASSERT_TRUE(parsed_faces.ok()) << parsed_faces.error();
-  ASSERT_EQ(parsed_faces.value().size(), 2u);
+  ASSERT_EQ(parsed_faces.value().size(), 3u);
   EXPECT_EQ(parsed_faces.value()[0].referenced_document, "part");
-  EXPECT_EQ(parsed_faces.value()[1].referenced_document, "other");
+  EXPECT_EQ(parsed_faces.value()[1].referenced_document, "part");
+  EXPECT_EQ(parsed_faces.value()[2].referenced_document, "other");
+  EXPECT_NE(parsed_faces.value()[0].source_group_offset,
+            parsed_faces.value()[1].source_group_offset);
 
   auto result = DrawingGeometryReader::ReadCachedSheet(
       bytes(keywords), definition, vb_lists, {}, "List1");
 
   ASSERT_TRUE(result.ok()) << result.error();
-  ASSERT_EQ(result.value().entities.size(), 1u);
-  const auto *line = std::get_if<Line2D>(&result.value().entities.front());
+  ASSERT_EQ(result.value().entities.size(), 2u);
+  EXPECT_TRUE(std::holds_alternative<RasterImage2D>(
+      result.value().entities.front()));
+  const auto *line = std::get_if<Line2D>(&result.value().entities.back());
   ASSERT_NE(line, nullptr);
   EXPECT_EQ(line->style.pattern, LinePattern::kSolid);
+  EXPECT_EQ(line->style.source_line_weight, 3);
+  EXPECT_EQ(line->source_table.find("/record=49/"), std::string::npos);
+
+  // In a hidden-lines-visible bucket, a rear full-edge record may project
+  // within one print stroke of the visible front contour. The visible outline
+  // wins, while an explicit cached hidden line remains dashed.
+  vb_lists[suppressed_record_offset] = 0x21u;
+  auto unshaded = DrawingGeometryReader::ReadCachedSheet(
+      bytes(keywords), definition, vb_lists, {}, "List1");
+  ASSERT_TRUE(unshaded.ok()) << unshaded.error();
+  ASSERT_EQ(unshaded.value().entities.size(), 3u);
+  std::size_t solid_count = 0u;
+  std::size_t cached_hidden_count = 0u;
+  std::size_t computed_hidden_count = 0u;
+  for (const DrawingEntity &entity : unshaded.value().entities) {
+    const auto *edge = std::get_if<Line2D>(&entity);
+    ASSERT_NE(edge, nullptr);
+    if (edge->style.pattern == LinePattern::kSolid)
+      ++solid_count;
+    if (edge->style.pattern == LinePattern::kHidden &&
+        edge->source_table.find("/record=49/") != std::string::npos) {
+      ++cached_hidden_count;
+    }
+    if (edge->style.pattern == LinePattern::kHidden &&
+        edge->source_table.find("/record=33/") != std::string::npos) {
+      ++computed_hidden_count;
+    }
+  }
+  // The second solid edge was hidden by depth, but it is the lower convex
+  // boundary of the projected cache and therefore a visible silhouette.
+  EXPECT_EQ(solid_count, 2u);
+  EXPECT_EQ(cached_hidden_count, 1u);
+  EXPECT_EQ(computed_hidden_count, 0u);
 }
 
 TEST(DrawingViewGeometryTest, RejectsMalformedCachedFaceDescriptorTable) {

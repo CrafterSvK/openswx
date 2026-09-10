@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <map>
 #include <optional>
 #include <set>
 #include <string_view>
@@ -26,6 +27,123 @@ std::string_view DisplayObjectId(std::string_view source_table) {
     return {};
   const std::size_t end = source_table.find('/', begin);
   return source_table.substr(begin, end - begin);
+}
+
+void AlignLeaderLabel(TextAnnotation &text,
+                      std::span<const DrawingEntity> entities) {
+  if (text.text.empty() || text.text.size() > 6u || text.height <= 0.0 ||
+      !std::all_of(text.text.begin(), text.text.end(), [](char character) {
+        return character >= '0' && character <= '9';
+      })) {
+    return;
+  }
+  const std::string_view owner = DisplayObjectId(text.source_table);
+  const Vec2 tangent{std::cos(text.rotation_radians),
+                     std::sin(text.rotation_radians)};
+  const Vec2 normal{-tangent.y, tangent.x};
+  std::optional<Vec2> landing;
+  for (const DrawingEntity &entity : entities) {
+    const auto *line = std::get_if<Line2D>(&entity);
+    if (line == nullptr ||
+        !line->source_table.starts_with("Contents/DisplayLists/line/") ||
+        DisplayObjectId(line->source_table) != owner) {
+      continue;
+    }
+    const Vec2 delta{line->end.x - line->start.x, line->end.y - line->start.y};
+    const double length = std::hypot(delta.x, delta.y);
+    if (length < text.height || length > 3.0 * text.height ||
+        std::abs(delta.x * normal.x + delta.y * normal.y) > 1e-8) {
+      continue;
+    }
+    const Vec2 middle{(line->start.x + line->end.x) * 0.5,
+                      (line->start.y + line->end.y) * 0.5};
+    const Vec2 offset{text.origin.x - middle.x, text.origin.y - middle.y};
+    if (std::abs(offset.x * tangent.x + offset.y * tangent.y) >
+            length * 0.5 + text.height ||
+        std::abs(offset.x * normal.x + offset.y * normal.y) > text.height) {
+      continue;
+    }
+    // Only an unambiguous nearby landing belonging to this label is usable.
+    if (landing)
+      return;
+    landing = middle;
+  }
+  if (!landing)
+    return;
+  const double clearance = (text.origin.x - landing->x) * normal.x +
+                           (text.origin.y - landing->y) * normal.y;
+  const double gap = text.height * 0.2;
+  if (clearance >= gap)
+    return;
+  // Cached BOM labels can place their text origin below the landing (item
+  // 8497/List2: 0.597 mm for a 4 mm font). Treating it as an SVG baseline
+  // strikes through the digits. Lay out the numeric label above its own
+  // landing, independently of the substituted font's advance widths.
+  text.origin = {landing->x + normal.x * gap, landing->y + normal.y * gap};
+  text.anchor = TextAnchor::kMiddle;
+}
+
+void AlignAngularDimensionLabel(TextAnnotation &text,
+                                std::span<const DrawingEntity> entities) {
+  constexpr std::string_view degree = "\xC2\xB0";
+  if (!text.text.ends_with(degree) || text.text.size() <= degree.size() ||
+      text.height <= 0.0) {
+    return;
+  }
+  const std::string_view number(text.text.data(),
+                                text.text.size() - degree.size());
+  if (!std::all_of(number.begin(), number.end(), [](char character) {
+        return (character >= '0' && character <= '9') || character == '.' ||
+               character == ',';
+      })) {
+    return;
+  }
+  const auto owner = DisplayObjectId(text.source_table);
+  const Arc2D *circle = nullptr;
+  double radius = 0.0;
+  for (const auto &entity : entities) {
+    const auto *arc = std::get_if<Arc2D>(&entity);
+    if (!arc || !arc->source_table.starts_with("Contents/DisplayLists/arc/") ||
+        DisplayObjectId(arc->source_table) != owner) {
+      continue;
+    }
+    const double candidate_radius =
+        std::hypot(arc->start.x - arc->center.x, arc->start.y - arc->center.y);
+    // A dimension may split its arc at the arrows; all pieces must describe
+    // the same circle before using it to lay out the label.
+    if (circle && (std::hypot(circle->center.x - arc->center.x,
+                              circle->center.y - arc->center.y) > 1e-8 ||
+                   std::abs(radius - candidate_radius) > 1e-8)) {
+      return;
+    }
+    circle = arc;
+    radius = candidate_radius;
+  }
+  if (!circle || radius <= text.height)
+    return;
+  const Vec2 normal{-std::sin(text.rotation_radians),
+                    std::cos(text.rotation_radians)};
+  const Vec2 offset{text.origin.x - circle->center.x,
+                    text.origin.y - circle->center.y};
+  if (std::abs(std::hypot(offset.x, offset.y) - radius) > 3.0 * text.height) {
+    return;
+  }
+  const double side =
+      offset.x * normal.x + offset.y * normal.y >= 0.0 ? 1.0 : -1.0;
+  // On the inside of an arc, its ends rise towards the glyphs. Allow for
+  // that curvature as well as the baseline gap. Width is a conservative
+  // fallback for the substituted technical font, not a decoded font metric.
+  const double half_width =
+      text.height * 0.35 * static_cast<double>(number.size() + 1u);
+  if (half_width >= radius)
+    return;
+  const double curvature =
+      side < 0.0 ? radius - std::sqrt(radius * radius - half_width * half_width)
+                 : 0.0;
+  const double distance = side * radius + text.height * 0.2 + curvature;
+  text.origin = {circle->center.x + normal.x * distance,
+                 circle->center.y + normal.y * distance};
+  text.anchor = TextAnchor::kMiddle;
 }
 
 std::vector<FilledTriangle2D>
@@ -84,10 +202,38 @@ FindDisplayListArrowheads(std::span<const Line2D> lines) {
           base_width < kMinimumBaseWidthM || base_width > kMaximumBaseWidthM) {
         continue;
       }
+      const auto point_on_line = [&](Vec2 point, const Line2D &line) {
+        const Vec2 direction{line.end.x - line.start.x,
+                             line.end.y - line.start.y};
+        const double length_squared =
+            direction.x * direction.x + direction.y * direction.y;
+        if (length_squared <= kPointToleranceM * kPointToleranceM)
+          return false;
+        const Vec2 offset{point.x - line.start.x, point.y - line.start.y};
+        const double cross =
+            std::abs(offset.x * direction.y - offset.y * direction.x);
+        const double parameter =
+            (offset.x * direction.x + offset.y * direction.y) / length_squared;
+        return cross <= kPointToleranceM * std::sqrt(length_squared) &&
+               parameter >= -kPointToleranceM &&
+               parameter <= 1.0 + kPointToleranceM;
+      };
+      const bool has_outline_base =
+          std::any_of(lines.begin(), lines.end(), [&](const Line2D &line) {
+            return line.source_table == left.source_table &&
+                   point_on_line(left_base, line) &&
+                   point_on_line(right_base, line);
+          });
+      // A third side closes an outlined weld/surface symbol. Only an open pair
+      // of short arms is an arrowhead that needs a filled SVG triangle.
+      if (has_outline_base)
+        continue;
       const double dot = ((left_base.x - tip.x) * (right_base.x - tip.x) +
                           (left_base.y - tip.y) * (right_base.y - tip.y)) /
                          (left_length * right_length);
-      if (!std::isfinite(dot) || dot < 0.7)
+      // Cached arrowheads are narrow. Wider open V shapes are engineering
+      // symbols and must retain their two-line outline.
+      if (!std::isfinite(dot) || dot < 0.9)
         continue;
       if (!seen.emplace(left.source_table, tip.x, tip.y).second)
         continue;
@@ -103,6 +249,7 @@ FindDisplayListArrowheads(std::span<const Line2D> lines) {
 constexpr std::array<uint8_t, 5> kObjectNameMarker = {0x09, 0x89, 0xFF, 0xFE,
                                                       0xFF};
 constexpr std::array<uint8_t, 3> kUtf16Marker = {0xFF, 0xFE, 0xFF};
+constexpr std::array<uint8_t, 4> kClassMarker = {0xFF, 0xFF, 0x01, 0x00};
 constexpr std::size_t kMatrixBeforePlacement = 317u;
 
 uint16_t ReadU16Le(std::span<const uint8_t> data, std::size_t offset) {
@@ -159,6 +306,47 @@ std::optional<std::string> ReadUtf16Name(std::span<const uint8_t> data,
   return value;
 }
 
+std::optional<int> FindConfiguredLineWeight(std::span<const uint8_t> definition,
+                                            std::string_view category) {
+  constexpr std::string_view kLineFontConfigClass = "uiLineFontMgr_c";
+  const auto class_position =
+      std::search(definition.begin(), definition.end(),
+                  kLineFontConfigClass.begin(), kLineFontConfigClass.end());
+  if (class_position == definition.end()) return std::nullopt;
+  const std::size_t first = static_cast<std::size_t>(
+      std::distance(definition.begin(), class_position)) +
+                            kLineFontConfigClass.size();
+  const std::size_t limit = std::min(definition.size(), first + 16384u);
+  for (std::size_t offset = first; offset + 4u <= limit; ++offset) {
+    if (!std::equal(kUtf16Marker.begin(), kUtf16Marker.end(),
+                    definition.begin() + static_cast<std::ptrdiff_t>(offset))) {
+      continue;
+    }
+    const auto name = ReadUtf16Name(definition, offset, kUtf16Marker.size());
+    if (!name || *name != category) continue;
+    const std::size_t category_end = offset + 4u + definition[offset + 3u] * 2u;
+    const std::size_t style_limit = std::min(limit, category_end + 32u);
+    for (std::size_t style_offset = category_end;
+         style_offset + 4u <= style_limit; ++style_offset) {
+      if (!std::equal(
+              kUtf16Marker.begin(), kUtf16Marker.end(),
+              definition.begin() + static_cast<std::ptrdiff_t>(style_offset))) {
+        continue;
+      }
+      const auto style_name =
+          ReadUtf16Name(definition, style_offset, kUtf16Marker.size());
+      if (!style_name) continue;
+      const std::size_t style_end =
+          style_offset + 4u + definition[style_offset + 3u] * 2u;
+      if (style_end + 2u > definition.size()) return std::nullopt;
+      const int weight = ReadU16Le(definition, style_end);
+      if (weight >= 0 && weight <= 10) return weight;
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
 struct NamedOffset {
   std::size_t offset = 0;
   std::string name;
@@ -193,6 +381,111 @@ FindKnownViewNames(std::span<const uint8_t> data,
   // ownership from a confirmed object name.
   auto result = scan(kObjectNameMarker);
   return result.empty() ? scan(kUtf16Marker) : result;
+}
+
+std::vector<NamedOffset>
+FindDrawingSheetObjects(std::span<const uint8_t> definition,
+                        std::span<const std::string> sheet_names) {
+  constexpr std::string_view kSheetClass = "moDrSheet";
+  const std::set<std::string> known_sheets(sheet_names.begin(),
+                                           sheet_names.end());
+  std::optional<std::array<uint8_t, 2>> sheet_token;
+  for (std::size_t offset = 0;
+       offset + kClassMarker.size() + 2u + kSheetClass.size() + 2u <=
+       definition.size();
+       ++offset) {
+    if (!std::equal(kClassMarker.begin(), kClassMarker.end(),
+                    definition.begin() + static_cast<std::ptrdiff_t>(offset))) {
+      continue;
+    }
+    const uint16_t length = ReadU16Le(definition, offset + kClassMarker.size());
+    const std::size_t name_offset = offset + kClassMarker.size() + 2u;
+    if (length != kSheetClass.size() ||
+        !std::equal(kSheetClass.begin(), kSheetClass.end(),
+                    definition.begin() +
+                        static_cast<std::ptrdiff_t>(name_offset))) {
+      continue;
+    }
+    sheet_token = {definition[name_offset + length],
+                   definition[name_offset + length + 1u]};
+    break;
+  }
+  if (!sheet_token)
+    return {};
+
+  std::vector<NamedOffset> sheets;
+  for (std::size_t offset = 0;
+       offset + sheet_token->size() + kUtf16Marker.size() + 1u <=
+       definition.size();
+       ++offset) {
+    if (!std::equal(sheet_token->begin(), sheet_token->end(),
+                    definition.begin() + static_cast<std::ptrdiff_t>(offset))) {
+      continue;
+    }
+    const std::size_t name_offset = offset + sheet_token->size();
+    auto name = ReadUtf16Name(definition, name_offset, kUtf16Marker.size());
+    if (name && known_sheets.contains(*name))
+      sheets.push_back({name_offset, std::move(*name)});
+  }
+  return sheets;
+}
+
+std::optional<std::pair<std::size_t, std::size_t>>
+FindDrawingSheetRange(std::span<const uint8_t> definition,
+                      std::span<const std::string> sheet_names,
+                      std::string_view sheet_name) {
+  const std::vector<NamedOffset> sheets =
+      FindDrawingSheetObjects(definition, sheet_names);
+  const auto selected = std::find_if(
+      sheets.rbegin(), sheets.rend(),
+      [&](const NamedOffset &item) { return item.name == sheet_name; });
+  if (selected == sheets.rend())
+    return std::nullopt;
+  const auto following =
+      std::find_if(selected.base(), sheets.end(), [&](const NamedOffset &item) {
+        return item.name != sheet_name;
+      });
+  return std::pair{selected->offset, following == sheets.end()
+                                         ? definition.size()
+                                         : following->offset};
+}
+
+bool IsSectionAssemblyName(std::string_view name) {
+  constexpr std::string_view kMarker = "-SectionAssembly-";
+  const std::size_t marker = name.rfind(kMarker);
+  return marker != std::string_view::npos &&
+         marker + kMarker.size() < name.size() &&
+         std::all_of(
+             name.begin() +
+                 static_cast<std::ptrdiff_t>(marker + kMarker.size()),
+             name.end(),
+             [](char character) {
+               return character >= '0' && character <= '9';
+             });
+}
+
+std::vector<std::string>
+FindSectionAssemblyNames(std::span<const uint8_t> definition,
+                         std::span<const std::string> sheet_names,
+                         std::string_view sheet_name) {
+  const auto range = FindDrawingSheetRange(definition, sheet_names, sheet_name);
+  if (!range)
+    return {};
+  std::vector<std::string> names;
+  for (std::size_t offset = range->first;
+       offset + kUtf16Marker.size() + 1u <= range->second; ++offset) {
+    if (!std::equal(kUtf16Marker.begin(), kUtf16Marker.end(),
+                    definition.begin() + static_cast<std::ptrdiff_t>(offset))) {
+      continue;
+    }
+    auto name = ReadUtf16Name(definition, offset, kUtf16Marker.size());
+    if (name && IsSectionAssemblyName(*name) &&
+        std::find(names.begin(), names.end(), *name) == names.end()) {
+      names.push_back(std::move(*name));
+    }
+    offset += kUtf16Marker.size() - 1u;
+  }
+  return names;
 }
 
 bool IsPlacementRecord(std::span<const uint8_t> data, std::size_t offset,
@@ -351,6 +644,50 @@ FacesForView(std::span<const FaceTessellation> faces,
     if (selected.empty())
       return selected;
 
+    // One uoTempFaceTessData_c declaration can contain several complete
+    // model-reference groups for different drawing views/configurations. The
+    // document stem alone therefore does not establish ownership. Select the
+    // group whose model-space envelope best matches this view's active edge
+    // cache; retaining every same-document group mixes section/configuration
+    // faces into shaded views.
+    std::map<uint64_t, Bounds3> group_bounds;
+    for (const FaceTessellation &face : selected) {
+      for (const Vec3 vertex : face.vertices)
+        ExtendBounds(group_bounds[face.source_group_offset], vertex);
+    }
+    if (group_bounds.size() > 1u) {
+      Bounds3 view_bounds;
+      for (const Line3D &line : view.source_lines) {
+        ExtendBounds(view_bounds, line.start);
+        ExtendBounds(view_bounds, line.end);
+      }
+      const auto mismatch = [&](const Bounds3 &bounds) {
+        if (!bounds.valid || !view_bounds.valid)
+          return std::numeric_limits<double>::infinity();
+        return std::abs(bounds.min.x - view_bounds.min.x) +
+               std::abs(bounds.min.y - view_bounds.min.y) +
+               std::abs(bounds.min.z - view_bounds.min.z) +
+               std::abs(bounds.max.x - view_bounds.max.x) +
+               std::abs(bounds.max.y - view_bounds.max.y) +
+               std::abs(bounds.max.z - view_bounds.max.z);
+      };
+      uint64_t best_group = group_bounds.begin()->first;
+      double best_mismatch = std::numeric_limits<double>::infinity();
+      for (const auto &[group, bounds] : group_bounds) {
+        const double candidate = mismatch(bounds);
+        if (candidate < best_mismatch) {
+          best_mismatch = candidate;
+          best_group = group;
+        }
+      }
+      selected.erase(
+          std::remove_if(selected.begin(), selected.end(),
+                         [&](const FaceTessellation &face) {
+                           return face.source_group_offset != best_group;
+                         }),
+          selected.end());
+    }
+
     // A document may occur in several drawing views with different
     // configurations. VBLists stores the model path on the tessellation but
     // not the view's numeric instance suffix. Resolve that ambiguity by the
@@ -399,7 +736,44 @@ FacesForView(std::span<const FaceTessellation> faces,
       const double configuration_tolerance = std::max(1e-6, extent * 0.005);
       if (mismatch(bounds_for_view(view)) >
           best_mismatch + configuration_tolerance) {
-        return {};
+        // A small tail of alternate/cache coordinates can stretch the raw
+        // edge envelope far beyond the actual model (item 8556/List2 has 28
+        // such lines among 3683). Do not discard an otherwise matching face
+        // group when it contains the overwhelming majority of complete
+        // source edges. This keeps the configuration guard for genuinely
+        // different smaller views while allowing HLR to classify the main
+        // drawing view.
+        const auto inside_face_bounds = [&](Vec3 point) {
+          return point.x >= face_bounds.min.x - configuration_tolerance &&
+                 point.x <= face_bounds.max.x + configuration_tolerance &&
+                 point.y >= face_bounds.min.y - configuration_tolerance &&
+                 point.y <= face_bounds.max.y + configuration_tolerance &&
+                 point.z >= face_bounds.min.z - configuration_tolerance &&
+                 point.z <= face_bounds.max.z + configuration_tolerance;
+        };
+        const std::size_t contained_edges = std::count_if(
+            view.source_lines.begin(), view.source_lines.end(),
+            [&](const Line3D &line) {
+              return inside_face_bounds(line.start) &&
+                     inside_face_bounds(line.end);
+            });
+        constexpr double kDominantEdgeCoverage = 0.98;
+        Bounds3 contained_bounds;
+        for (const Line3D &line : view.source_lines) {
+          if (inside_face_bounds(line.start) &&
+              inside_face_bounds(line.end)) {
+            ExtendBounds(contained_bounds, line.start);
+            ExtendBounds(contained_bounds, line.end);
+          }
+        }
+        constexpr double kMaximumContainedBoundsMismatch = 3.5;
+        if (static_cast<double>(contained_edges) <
+            static_cast<double>(view.source_lines.size()) *
+                kDominantEdgeCoverage ||
+            mismatch(contained_bounds) >
+                configuration_tolerance * kMaximumContainedBoundsMismatch) {
+          return {};
+        }
       }
     }
     return selected;
@@ -644,11 +1018,54 @@ DrawingGeometryReader::ReadViewPlacements(
   return Result<std::vector<DrawingViewPlacement>>::Ok(std::move(placements));
 }
 
+Result<std::array<double, 8>> DrawingGeometryReader::ReadPrintLineWeights(
+    std::span<const uint8_t> printing) {
+  constexpr std::string_view kPrintDataClass = "uoPrintMainData_c";
+  constexpr std::size_t kWeightsAfterPrinterName = 52u;
+  const auto class_position =
+      std::search(printing.begin(), printing.end(), kPrintDataClass.begin(),
+                  kPrintDataClass.end());
+  if (class_position == printing.end()) {
+    return Result<std::array<double, 8>>::Err(
+        "Printing does not declare uoPrintMainData_c");
+  }
+  const std::size_t printer_marker = static_cast<std::size_t>(
+      std::distance(printing.begin(), class_position)) +
+                                     kPrintDataClass.size();
+  if (printer_marker + 4u > printing.size() ||
+      !std::equal(
+          kUtf16Marker.begin(), kUtf16Marker.end(),
+          printing.begin() + static_cast<std::ptrdiff_t>(printer_marker))) {
+    return Result<std::array<double, 8>>::Err(
+        "Printing printer-name field is malformed");
+  }
+  const std::size_t printer_units = printing[printer_marker + 3u];
+  const std::size_t printer_end = printer_marker + 4u + printer_units * 2u;
+  const std::size_t weights_offset = printer_end + kWeightsAfterPrinterName;
+  if (printer_units > 127u || weights_offset > printing.size() ||
+      printing.size() - weights_offset < 8u * sizeof(double)) {
+    return Result<std::array<double, 8>>::Err(
+        "Printing line-weight table is truncated");
+  }
+  std::array<double, 8> weights{};
+  for (std::size_t index = 0u; index < weights.size(); ++index) {
+    weights[index] = ReadF64Le(printing, weights_offset + index * sizeof(double));
+    if (!std::isfinite(weights[index]) || weights[index] < 1e-5 ||
+        weights[index] > 0.01 ||
+        (index > 0u && weights[index] <= weights[index - 1u])) {
+      return Result<std::array<double, 8>>::Err(
+          "Printing line-weight table is invalid");
+    }
+  }
+  return Result<std::array<double, 8>>::Ok(weights);
+}
+
 Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
     std::span<const uint8_t> keywords, std::span<const uint8_t> definition,
     std::span<const uint8_t> vb_lists, std::span<const uint8_t> tables,
     std::string_view sheet_name, std::span<const uint8_t> display_lists,
-    std::span<const uint8_t> sketch_bitmap) {
+    std::span<const uint8_t> sketch_bitmap,
+    std::span<const uint8_t> printing) {
   const auto keyword_views = ParseKeywordViews(keywords, sheet_name);
   if (!keyword_views) {
     return Result<DrawingSheetGeometry>::Err(
@@ -656,6 +1073,10 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
   }
   const std::vector<std::string> all_names(keyword_views->all.begin(),
                                            keyword_views->all.end());
+  std::vector<std::string> section_assembly_names = FindSectionAssemblyNames(
+      definition, keyword_views->sheet_names, keyword_views->sheet_name);
+  const auto sheet_object_range = FindDrawingSheetRange(
+      definition, keyword_views->sheet_names, keyword_views->sheet_name);
   std::vector<DrawingViewPlacement> placements;
   std::vector<CachedDrawingView> buckets;
   std::vector<FaceTessellation> face_tessellations;
@@ -663,16 +1084,29 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
   std::vector<DrawingSceneLight> scene_lights;
   std::multiset<std::string> display_arrowhead_object_ids;
   if (!all_names.empty()) {
-    auto parsed_placements = ReadViewPlacements(definition, all_names);
-    if (!parsed_placements.ok()) {
-      return Result<DrawingSheetGeometry>::Err(parsed_placements.error());
-    }
-    placements = std::move(parsed_placements).value();
     auto parsed_buckets = ReadViewBuckets(vb_lists);
     if (!parsed_buckets.ok()) {
       return Result<DrawingSheetGeometry>::Err(parsed_buckets.error());
     }
     buckets = std::move(parsed_buckets).value();
+    // A sheet object can contain names of nested or referenced section
+    // assemblies. Only a name backed by an actual uiViewBucket_c is a
+    // drawing-view cache owner. Keeping an unrelated nested name can make it
+    // steal the following placement merely because it is serialized closer.
+    std::erase_if(section_assembly_names, [&](const std::string &name) {
+      return std::none_of(
+          buckets.begin(), buckets.end(),
+          [&](const CachedDrawingView &bucket) { return bucket.name == name; });
+    });
+    std::vector<std::string> placement_names = all_names;
+    placement_names.insert(placement_names.end(),
+                           section_assembly_names.begin(),
+                           section_assembly_names.end());
+    auto parsed_placements = ReadViewPlacements(definition, placement_names);
+    if (!parsed_placements.ok()) {
+      return Result<DrawingSheetGeometry>::Err(parsed_placements.error());
+    }
+    placements = std::move(parsed_placements).value();
     auto parsed_faces = ReadFaceTessellations(vb_lists);
     if (parsed_faces.ok()) {
       face_tessellations = std::move(parsed_faces).value();
@@ -686,6 +1120,18 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
   const auto [width, height] = FindStandardSheetSize(definition);
   sheet.width_m = width;
   sheet.height_m = height;
+  if (!printing.empty()) {
+    auto parsed_line_weights = ReadPrintLineWeights(printing);
+    if (parsed_line_weights.ok()) {
+      sheet.line_weights_m = std::move(parsed_line_weights).value();
+    }
+  }
+  const int visible_line_weight =
+      FindConfiguredLineWeight(definition, "Visible").value_or(2);
+  const int hidden_line_weight =
+      FindConfiguredLineWeight(definition, "Hidden").value_or(0);
+  const int tangent_line_weight =
+      FindConfiguredLineWeight(definition, "TanVisible").value_or(0);
   if (!sketch_bitmap.empty()) {
     auto parsed_bitmap = ReadSketchBitmap(definition, sketch_bitmap);
     if (parsed_bitmap.ok()) {
@@ -697,6 +1143,10 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
   }
   const std::set<std::string> selected(keyword_views->selected.begin(),
                                        keyword_views->selected.end());
+  std::set<std::string> selected_placement_names(selected.begin(),
+                                                 selected.end());
+  selected_placement_names.insert(section_assembly_names.begin(),
+                                  section_assembly_names.end());
   std::vector<TextAnnotation> display_text;
   std::vector<uint32_t> display_object_ids;
   auto parsed_object_ids = ReadDisplayObjectIds(
@@ -704,26 +1154,31 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
   if (parsed_object_ids.ok()) {
     display_object_ids = std::move(parsed_object_ids).value();
   }
-  for (std::size_t placement_index = 0; placement_index < placements.size();
-       ++placement_index) {
-    const DrawingViewPlacement &placement = placements[placement_index];
-    if (!selected.contains(placement.name))
+  for (const DrawingViewPlacement &placement : placements) {
+    if (sheet_object_range &&
+        (placement.source_offset < sheet_object_range->first ||
+         placement.source_offset >= sheet_object_range->second)) {
+      continue;
+    }
+    if (!selected_placement_names.contains(placement.name))
       continue;
     auto bucket = std::find_if(buckets.begin(), buckets.end(),
                                [&](const CachedDrawingView &item) {
                                  return item.name == placement.name;
                                });
-    // SolidWorks 19000 VBLists references the component/assembly rather than
-    // the drawing-view name. In the confirmed layout the bucket and placement
-    // arrays are parallel. Restrict this fallback to an exact cardinality
-    // match; otherwise a guessed bucket would be worse than no geometry.
-    if (bucket == buckets.end() && buckets.size() == placements.size()) {
-      bucket = buckets.begin() + static_cast<std::ptrdiff_t>(placement_index);
-    }
+    // Array order is not a relationship: omitted, suppressed, or section
+    // views make the placement and cache arrays diverge. Emit a bucket only
+    // when its serialized reference equals the owning placement name.
     if (bucket == buckets.end() || bucket->source_lines.empty())
       continue;
     const std::vector<FaceTessellation> view_faces =
         FacesForView(face_tessellations, *bucket, buckets);
+    // A bucket containing both the suppressed edge cache and owned face
+    // tessellation is a shaded drawing view. Its active edges use HLR: hidden
+    // spans are removed instead of being drawn with the hidden-line font.
+    const bool shaded_hlr_edges =
+        bucket->has_suppressed_edge_cache && !view_faces.empty();
+    const std::size_t view_entity_begin = sheet.entities.size();
 
     // Definition stores the sheet-space translation of the projected model
     // origin. Do not recenter the cached-edge bounding box: asymmetric views
@@ -817,26 +1272,33 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
                 illumination[channel] += factor * colour;
               }
             };
-            for (const DrawingSceneLight &light : scene_lights) {
-              if (!light.enabled)
-                continue;
-              used_scene_lighting = true;
-              if (light.kind == DrawingLightKind::kAmbient) {
-                add_light(light, light.ambient);
-                continue;
+            // RGB alone does not define how a material responds to the cached
+            // scene lights. Until those coefficients are decoded, retain the
+            // neutral facing fallback; otherwise valid named appearances such
+            // as item 8556's aluminium become much too dark.
+            if (appearances.size() == 1u &&
+                appearances.front().has_material_response) {
+              for (const DrawingSceneLight &light : scene_lights) {
+                if (!light.enabled)
+                  continue;
+                used_scene_lighting = true;
+                if (light.kind == DrawingLightKind::kAmbient) {
+                  add_light(light, light.ambient);
+                  continue;
+                }
+                const double direction_length =
+                    std::sqrt(light.direction.x * light.direction.x +
+                              light.direction.y * light.direction.y +
+                              light.direction.z * light.direction.z);
+                if (direction_length <= 0.0)
+                  continue;
+                const double lambert =
+                    std::max(0.0, (view_normal.x * light.direction.x +
+                                   view_normal.y * light.direction.y +
+                                   view_normal.z * light.direction.z) /
+                                      direction_length);
+                add_light(light, light.ambient + light.diffuse * lambert);
               }
-              const double direction_length =
-                  std::sqrt(light.direction.x * light.direction.x +
-                            light.direction.y * light.direction.y +
-                            light.direction.z * light.direction.z);
-              if (direction_length <= 0.0)
-                continue;
-              const double lambert =
-                  std::max(0.0, (view_normal.x * light.direction.x +
-                                 view_normal.y * light.direction.y +
-                                 view_normal.z * light.direction.z) /
-                                    direction_length);
-              add_light(light, light.ambient + light.diffuse * lambert);
             }
           }
           if (!used_scene_lighting) {
@@ -1002,16 +1464,314 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
         }
       }
     }
-    for (const Line3D &source : bucket->source_lines) {
-      std::vector<LineVisibilitySpan> spans = {{0.0, 1.0, false}};
-      if (!view_faces.empty()) {
-        spans = SplitLineByTessellation(source, view_faces,
-                                        placement.model_to_view);
+    // A visible tangent transition can occur once on each side of a thin
+    // member. In a normal projection the two model edges collapse to the same
+    // short paper-space segment. SolidWorks emits that connector once with
+    // the TanVisible line font; emitting both cached 0x23 records makes it a
+    // heavy solid stroke. Keep this deliberately conservative: long
+    // coincident outlines are ordinary silhouette geometry.
+    constexpr double kMinimumVisibilitySpanM = 1e-5;
+    constexpr double kCoincidentEdgeToleranceM = 1e-8;
+    constexpr double kMaximumTangentConnectorLengthM = 5e-4;
+    std::map<std::array<int64_t, 4>, std::vector<std::size_t>>
+        short_coincident_edges;
+    const double largest_direction_component =
+        std::max({std::abs(bucket->direction.x),
+                  std::abs(bucket->direction.y),
+                  std::abs(bucket->direction.z)});
+    if (largest_direction_component < 0.999) {
+      const auto quantize = [](double value) {
+        return static_cast<int64_t>(
+            std::llround(value / kCoincidentEdgeToleranceM));
+      };
+      for (std::size_t source_index = 0u;
+           source_index < bucket->source_lines.size(); ++source_index) {
+        const Line3D &source = bucket->source_lines[source_index];
+        if (source.source_record_type != 0x23u)
+          continue;
+        Vec2 start = project(source.start);
+        Vec2 end = project(source.end);
+        const double length = std::hypot(end.x - start.x, end.y - start.y);
+        if (length < kMinimumVisibilitySpanM ||
+            length > kMaximumTangentConnectorLengthM) {
+          continue;
+        }
+        std::array<int64_t, 2> start_key = {quantize(start.x),
+                                             quantize(start.y)};
+        std::array<int64_t, 2> end_key = {quantize(end.x), quantize(end.y)};
+        if (end_key < start_key)
+          std::swap(start_key, end_key);
+        short_coincident_edges[{start_key[0], start_key[1], end_key[0],
+                                end_key[1]}]
+            .push_back(source_index);
       }
+    }
+    std::set<std::size_t> tangent_edge_representatives;
+    std::set<std::size_t> duplicate_tangent_edges;
+    for (const auto &[key, indices] : short_coincident_edges) {
+      (void)key;
+      if (indices.size() != 2u)
+        continue;
+      tangent_edge_representatives.insert(indices.front());
+      duplicate_tangent_edges.insert(indices.back());
+    }
+
+    // Face tables in assembly drawings do not yet expose their owning body.
+    // Recover a conservative approximation from the cached edge topology:
+    // edges whose 3D endpoints join belong to one closed member. A projected
+    // convex-boundary edge of such a member is its local silhouette. Preserve
+    // it when the unowned face pool incorrectly hides the complete edge.
+    std::vector<std::size_t> edge_parents(bucket->source_lines.size());
+    for (std::size_t index = 0u; index < edge_parents.size(); ++index)
+      edge_parents[index] = index;
+    const auto find_parent = [&](std::size_t index) {
+      while (edge_parents[index] != index) {
+        edge_parents[index] = edge_parents[edge_parents[index]];
+        index = edge_parents[index];
+      }
+      return index;
+    };
+    const auto join_edges = [&](std::size_t left, std::size_t right) {
+      const std::size_t left_root = find_parent(left);
+      const std::size_t right_root = find_parent(right);
+      if (left_root != right_root)
+        edge_parents[right_root] = left_root;
+    };
+    constexpr double kTopologyEndpointToleranceM = 1e-7;
+    const auto endpoint_key = [](Vec3 point) {
+      return std::array<int64_t, 3>{
+          static_cast<int64_t>(
+              std::llround(point.x / kTopologyEndpointToleranceM)),
+          static_cast<int64_t>(
+              std::llround(point.y / kTopologyEndpointToleranceM)),
+          static_cast<int64_t>(
+              std::llround(point.z / kTopologyEndpointToleranceM))};
+    };
+    std::map<std::array<int64_t, 3>, std::size_t> endpoint_owner;
+    for (std::size_t index = 0u; index < bucket->source_lines.size(); ++index) {
+      const Line3D &line = bucket->source_lines[index];
+      for (const Vec3 endpoint : {line.start, line.end}) {
+        const auto [iterator, inserted] =
+            endpoint_owner.emplace(endpoint_key(endpoint), index);
+        if (!inserted)
+          join_edges(index, iterator->second);
+      }
+    }
+    std::map<std::size_t, std::vector<std::size_t>> connected_edges;
+    for (std::size_t index = 0u; index < bucket->source_lines.size(); ++index)
+      connected_edges[find_parent(index)].push_back(index);
+    const auto projected_turn = [](Vec2 origin, Vec2 first, Vec2 second) {
+      return (first.x - origin.x) * (second.y - origin.y) -
+             (first.y - origin.y) * (second.x - origin.x);
+    };
+    const auto point_on_segment = [](Vec2 point, Vec2 start, Vec2 end) {
+      const double dx = end.x - start.x;
+      const double dy = end.y - start.y;
+      const double length_squared = dx * dx + dy * dy;
+      if (length_squared <= 1e-24)
+        return std::hypot(point.x - start.x, point.y - start.y);
+      const double fraction = std::clamp(
+          ((point.x - start.x) * dx + (point.y - start.y) * dy) /
+              length_squared,
+          0.0, 1.0);
+      return std::hypot(point.x - (start.x + fraction * dx),
+                        point.y - (start.y + fraction * dy));
+    };
+    std::set<std::size_t> local_silhouette_edges;
+    for (const auto &[root, indices] : connected_edges) {
+      (void)root;
+      // A standalone polyline has no closed-body silhouette. Requiring several
+      // joined edges also avoids promoting isolated construction geometry.
+      if (indices.size() < 8u)
+        continue;
+      std::vector<Vec2> points;
+      for (const std::size_t index : indices) {
+        points.push_back(project(bucket->source_lines[index].start));
+        points.push_back(project(bucket->source_lines[index].end));
+      }
+      std::sort(points.begin(), points.end(), [](Vec2 left, Vec2 right) {
+        return left.x < right.x || (left.x == right.x && left.y < right.y);
+      });
+      points.erase(std::unique(points.begin(), points.end(), [](Vec2 left,
+                                                                Vec2 right) {
+                     return left.x == right.x && left.y == right.y;
+                   }),
+                   points.end());
+      if (points.size() < 3u)
+        continue;
+      std::vector<Vec2> hull;
+      hull.reserve(points.size() * 2u);
+      for (const Vec2 point : points) {
+        while (hull.size() >= 2u &&
+               projected_turn(hull[hull.size() - 2u], hull.back(), point) <=
+                   0.0) {
+          hull.pop_back();
+        }
+        hull.push_back(point);
+      }
+      const std::size_t lower_size = hull.size();
+      for (auto iterator = points.rbegin() + 1u; iterator != points.rend();
+           ++iterator) {
+        while (hull.size() > lower_size &&
+               projected_turn(hull[hull.size() - 2u], hull.back(), *iterator) <=
+                   0.0) {
+          hull.pop_back();
+        }
+        hull.push_back(*iterator);
+      }
+      hull.pop_back();
+      for (const std::size_t index : indices) {
+        const Vec2 start = project(bucket->source_lines[index].start);
+        const Vec2 end = project(bucket->source_lines[index].end);
+        for (std::size_t side = 0u; side < hull.size(); ++side) {
+          const Vec2 side_start = hull[side];
+          const Vec2 side_end = hull[(side + 1u) % hull.size()];
+          if (point_on_segment(start, side_start, side_end) <=
+                  kCoincidentEdgeToleranceM &&
+              point_on_segment(end, side_start, side_end) <=
+                  kCoincidentEdgeToleranceM) {
+            local_silhouette_edges.insert(index);
+            break;
+          }
+        }
+      }
+    }
+
+    std::vector<std::vector<LineVisibilitySpan>> visibility_spans(
+        bucket->source_lines.size());
+    std::vector<bool> fully_hidden_active_edge(bucket->source_lines.size(),
+                                               false);
+    std::vector<std::size_t> fully_hidden_active_indices;
+    for (std::size_t source_index = 0u;
+         source_index < bucket->source_lines.size(); ++source_index) {
+      const Line3D &source = bucket->source_lines[source_index];
+      const bool cached_hidden = source.source_record_type == 0x31u ||
+                                 source.source_record_type == 0x33u;
+      visibility_spans[source_index] = {{0.0, 1.0, cached_hidden}};
+      if (!view_faces.empty()) {
+        visibility_spans[source_index] = SplitLineByTessellation(
+            source, view_faces, placement.model_to_view);
+      }
+      fully_hidden_active_edge[source_index] =
+          (source.source_record_type == 0x21u ||
+           source.source_record_type == 0x23u) &&
+          visibility_spans[source_index].size() == 1u &&
+          visibility_spans[source_index].front().hidden;
+      if (fully_hidden_active_edge[source_index])
+        fully_hidden_active_indices.push_back(source_index);
+    }
+
+    // A thin member often contributes two almost coincident projected edges.
+    // When one edge lies exactly on a face boundary, the triangle clip can
+    // leave it visible even though the parallel edge immediately behind it is
+    // fully occluded. SolidWorks resolves both as hidden. Limit that inference
+    // to short topology fragments in an orthographic view; closed-body
+    // contours and their local silhouettes keep their independent visibility.
+    const auto has_hidden_parallel_companion = [&](std::size_t source_index) {
+      if (largest_direction_component < 0.999 ||
+          connected_edges[find_parent(source_index)].size() >= 8u) {
+        return false;
+      }
+      const Line3D &source = bucket->source_lines[source_index];
+      if ((source.source_record_type != 0x21u &&
+           source.source_record_type != 0x23u) ||
+          fully_hidden_active_edge[source_index]) {
+        return false;
+      }
+      const Vec2 source_start = project(source.start);
+      const Vec2 source_end = project(source.end);
+      const double source_dx = source_end.x - source_start.x;
+      const double source_dy = source_end.y - source_start.y;
+      const double source_length = std::hypot(source_dx, source_dy);
+      constexpr double kMinimumPairedEdgeLengthM = 0.005;
+      constexpr double kPairedEdgeEndpointToleranceM = 1e-7;
+      constexpr double kPairedEdgeSeparationM = 0.0002;
+      constexpr double kMaximumPairedEdgeDepthM = 0.01;
+      if (source_length < kMinimumPairedEdgeLengthM)
+        return false;
+      const double tangent_x = source_dx / source_length;
+      const double tangent_y = source_dy / source_length;
+      for (const std::size_t candidate_index : fully_hidden_active_indices) {
+        const Line3D &candidate = bucket->source_lines[candidate_index];
+        if (candidate.source_record_type != source.source_record_type)
+          continue;
+        Vec2 candidate_start = project(candidate.start);
+        Vec2 candidate_end = project(candidate.end);
+        double candidate_dx = candidate_end.x - candidate_start.x;
+        double candidate_dy = candidate_end.y - candidate_start.y;
+        if (source_dx * candidate_dx + source_dy * candidate_dy < 0.0) {
+          std::swap(candidate_start, candidate_end);
+          candidate_dx = -candidate_dx;
+          candidate_dy = -candidate_dy;
+        }
+        const double candidate_length =
+            std::hypot(candidate_dx, candidate_dy);
+        if (std::abs(candidate_length - source_length) >
+            kPairedEdgeEndpointToleranceM) {
+          continue;
+        }
+        const Vec2 start_delta{candidate_start.x - source_start.x,
+                               candidate_start.y - source_start.y};
+        const Vec2 end_delta{candidate_end.x - source_end.x,
+                             candidate_end.y - source_end.y};
+        const double start_along =
+            start_delta.x * tangent_x + start_delta.y * tangent_y;
+        const double end_along =
+            end_delta.x * tangent_x + end_delta.y * tangent_y;
+        if (std::abs(start_along) > kPairedEdgeEndpointToleranceM ||
+            std::abs(end_along) > kPairedEdgeEndpointToleranceM) {
+          continue;
+        }
+        const double start_across =
+            start_delta.x * -tangent_y + start_delta.y * tangent_x;
+        const double end_across =
+            end_delta.x * -tangent_y + end_delta.y * tangent_x;
+        if (std::abs(start_across - end_across) <=
+                kPairedEdgeEndpointToleranceM &&
+            std::abs(start_across) > kPairedEdgeEndpointToleranceM &&
+            std::abs(start_across) <= kPairedEdgeSeparationM &&
+            std::abs(ColumnDot(placement.model_to_view, 2u, candidate.start) -
+                     ColumnDot(placement.model_to_view, 2u, source.start)) <=
+                kMaximumPairedEdgeDepthM &&
+            std::abs(ColumnDot(placement.model_to_view, 2u, candidate.end) -
+                     ColumnDot(placement.model_to_view, 2u, source.end)) <=
+                kMaximumPairedEdgeDepthM) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    for (std::size_t source_index = 0u;
+         source_index < bucket->source_lines.size(); ++source_index) {
+      if (duplicate_tangent_edges.contains(source_index))
+        continue;
+      const Line3D &source = bucket->source_lines[source_index];
+      const bool cached_hidden = source.source_record_type == 0x31u ||
+                                 source.source_record_type == 0x33u;
+      const std::vector<LineVisibilitySpan> &spans =
+          visibility_spans[source_index];
+      const bool shadowed_by_hidden_companion =
+          has_hidden_parallel_companion(source_index);
       for (std::size_t span_index = 0u; span_index < spans.size();
            ++span_index) {
-        constexpr double kMinimumVisibilitySpanM = 1e-5;
         const LineVisibilitySpan &span = spans[span_index];
+        const bool complete_computed_occlusion =
+            spans.size() == 1u && spans.front().hidden;
+        const Vec2 projected_source_start = project(source.start);
+        const Vec2 projected_source_end = project(source.end);
+        constexpr double kMinimumLocalSilhouetteLengthM = 0.005;
+        const bool substantial_local_silhouette =
+            local_silhouette_edges.contains(source_index) &&
+            std::hypot(projected_source_end.x - projected_source_start.x,
+                       projected_source_end.y - projected_source_start.y) >=
+                kMinimumLocalSilhouetteLengthM;
+        const bool hidden =
+            cached_hidden || shadowed_by_hidden_companion ||
+            (span.hidden &&
+             !(complete_computed_occlusion && substantial_local_silhouette));
+        if (shaded_hlr_edges && hidden)
+          continue;
         const auto interpolate = [&](double fraction) {
           return Vec3{
               source.start.x + (source.end.x - source.start.x) * fraction,
@@ -1027,8 +1787,15 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
           continue;
         }
         LineStyle style;
-        if (span.hidden)
+        if (hidden) {
           style.pattern = LinePattern::kHidden;
+          style.source_line_weight = hidden_line_weight;
+        } else if (tangent_edge_representatives.contains(source_index)) {
+          style.pattern = LinePattern::kPhantom;
+          style.source_line_weight = tangent_line_weight;
+        } else {
+          style.source_line_weight = visible_line_weight;
+        }
         sheet.entities.emplace_back(
             Line2D{start, end, style,
                    "Contents/VBLists/uiViewBucket_c/" + placement.name +
@@ -1037,6 +1804,156 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
                        "/span=" + std::to_string(span_index)});
       }
     }
+
+    const auto point_segment_distance = [](Vec2 point, const Line2D &line) {
+      const double dx = line.end.x - line.start.x;
+      const double dy = line.end.y - line.start.y;
+      const double length_squared = dx * dx + dy * dy;
+      if (length_squared <= 1e-24)
+        return std::hypot(point.x - line.start.x, point.y - line.start.y);
+      const double fraction = std::clamp(
+          ((point.x - line.start.x) * dx + (point.y - line.start.y) * dy) /
+              length_squared,
+          0.0, 1.0);
+      return std::hypot(point.x - (line.start.x + fraction * dx),
+                        point.y - (line.start.y + fraction * dy));
+    };
+    const auto computed_hidden = [](const Line2D &line) {
+      return line.style.pattern == LinePattern::kHidden &&
+             (line.source_table.find("/record=33/") != std::string::npos ||
+              line.source_table.find("/record=35/") != std::string::npos);
+    };
+
+    // A line on the convex boundary of the complete projected cache is a
+    // drawing silhouette. No face can correctly occlude it from outside the
+    // view, even when ambiguous assembly ownership makes the depth test choose
+    // a coincident face from another component.
+    std::vector<Vec2> projected_points;
+    for (auto iterator =
+             sheet.entities.begin() +
+             static_cast<std::ptrdiff_t>(view_entity_begin);
+         iterator != sheet.entities.end(); ++iterator) {
+      const Line2D *line = std::get_if<Line2D>(&*iterator);
+      if (line == nullptr)
+        continue;
+      projected_points.push_back(line->start);
+      projected_points.push_back(line->end);
+    }
+    std::sort(projected_points.begin(), projected_points.end(),
+              [](Vec2 left, Vec2 right) {
+                return left.x < right.x ||
+                       (left.x == right.x && left.y < right.y);
+              });
+    projected_points.erase(
+        std::unique(projected_points.begin(), projected_points.end(),
+                    [](Vec2 left, Vec2 right) {
+                      return left.x == right.x && left.y == right.y;
+                    }),
+        projected_points.end());
+    const auto turn = [](Vec2 origin, Vec2 first, Vec2 second) {
+      return (first.x - origin.x) * (second.y - origin.y) -
+             (first.y - origin.y) * (second.x - origin.x);
+    };
+    std::vector<Vec2> projected_hull;
+    if (projected_points.size() >= 3u) {
+      projected_hull.reserve(projected_points.size() * 2u);
+      for (const Vec2 point : projected_points) {
+        while (projected_hull.size() >= 2u &&
+               turn(projected_hull[projected_hull.size() - 2u],
+                    projected_hull.back(), point) <= 0.0) {
+          projected_hull.pop_back();
+        }
+        projected_hull.push_back(point);
+      }
+      const std::size_t lower_size = projected_hull.size();
+      for (auto iterator = projected_points.rbegin() + 1u;
+           iterator != projected_points.rend(); ++iterator) {
+        while (projected_hull.size() > lower_size &&
+               turn(projected_hull[projected_hull.size() - 2u],
+                    projected_hull.back(), *iterator) <= 0.0) {
+          projected_hull.pop_back();
+        }
+        projected_hull.push_back(*iterator);
+      }
+      projected_hull.pop_back();
+    }
+    const auto on_projected_hull = [&](const Line2D &line) {
+      for (std::size_t index = 0u; index < projected_hull.size(); ++index) {
+        const Line2D boundary{projected_hull[index],
+                              projected_hull[(index + 1u) %
+                                             projected_hull.size()],
+                              {}, {}};
+        if (point_segment_distance(line.start, boundary) <=
+                kCoincidentEdgeToleranceM &&
+            point_segment_distance(line.end, boundary) <=
+                kCoincidentEdgeToleranceM) {
+          return true;
+        }
+      }
+      return false;
+    };
+    for (auto iterator =
+             sheet.entities.begin() +
+             static_cast<std::ptrdiff_t>(view_entity_begin);
+         iterator != sheet.entities.end(); ++iterator) {
+      Line2D *line = std::get_if<Line2D>(&*iterator);
+      if (line != nullptr && computed_hidden(*line) &&
+          on_projected_hull(*line)) {
+        line->style.pattern = LinePattern::kSolid;
+        line->style.source_line_weight = visible_line_weight;
+      }
+    }
+
+    // Assembly caches can also repeat a projected contour for two component
+    // instances with sub-millimetre coordinate drift. SolidWorks resolves the
+    // overlap in favour of the visible contour.
+    constexpr double kOutlineOverlapToleranceM = 0.0002;
+    constexpr double kParallelDirectionTolerance = 0.005;
+    std::vector<Line2D> visible_outlines;
+    for (auto iterator =
+             sheet.entities.begin() +
+             static_cast<std::ptrdiff_t>(view_entity_begin);
+         iterator != sheet.entities.end(); ++iterator) {
+      const Line2D *line = std::get_if<Line2D>(&*iterator);
+      if (line != nullptr && line->style.pattern == LinePattern::kSolid)
+        visible_outlines.push_back(*line);
+    }
+    const auto projected_outline_duplicate = [&](const Line2D &hidden) {
+      const double hidden_dx = hidden.end.x - hidden.start.x;
+      const double hidden_dy = hidden.end.y - hidden.start.y;
+      const double hidden_length = std::hypot(hidden_dx, hidden_dy);
+      if (hidden_length <= kMinimumVisibilitySpanM)
+        return false;
+      for (const Line2D &visible : visible_outlines) {
+        const double visible_dx = visible.end.x - visible.start.x;
+        const double visible_dy = visible.end.y - visible.start.y;
+        const double visible_length = std::hypot(visible_dx, visible_dy);
+        if (visible_length <= kMinimumVisibilitySpanM ||
+            std::abs(hidden_dx * visible_dy - hidden_dy * visible_dx) >
+                kParallelDirectionTolerance * hidden_length * visible_length) {
+          continue;
+        }
+        if (point_segment_distance(hidden.start, visible) <=
+                kOutlineOverlapToleranceM &&
+            point_segment_distance(hidden.end, visible) <=
+                kOutlineOverlapToleranceM) {
+          return true;
+        }
+      }
+      return false;
+    };
+    auto erase_begin = sheet.entities.begin() +
+                       static_cast<std::ptrdiff_t>(view_entity_begin);
+    sheet.entities.erase(
+        std::remove_if(erase_begin, sheet.entities.end(),
+                       [&](const DrawingEntity &entity) {
+                         const Line2D *line = std::get_if<Line2D>(&entity);
+                         if (line == nullptr || !computed_hidden(*line)) {
+                           return false;
+                         }
+                         return projected_outline_duplicate(*line);
+                       }),
+        sheet.entities.end());
   }
 
   if (!display_lists.empty()) {
@@ -1275,6 +2192,10 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
                      kDisplayListBalloonLabelToleranceM;
         });
   });
+  std::multiset<std::string> display_text_object_ids;
+  for (const TextAnnotation &annotation : display_text) {
+    display_text_object_ids.emplace(DisplayObjectId(annotation.source_table));
+  }
   for (TextAnnotation &annotation : display_text) {
     // A cached dimension owns a pair of arrowheads under the same DisplayLists
     // objID as its text. BOM balloons have only one arrowhead and therefore
@@ -1284,6 +2205,14 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
     if (!object_id.empty() &&
         display_arrowhead_object_ids.count(std::string(object_id)) >= 2u) {
       annotation.font_family = "osifont";
+      if (display_text_object_ids.count(std::string(object_id)) == 1u) {
+        AlignAngularDimensionLabel(annotation, sheet.entities);
+      }
+    } else if (!object_id.empty() &&
+               display_arrowhead_object_ids.count(std::string(object_id)) ==
+                   1u &&
+               display_text_object_ids.count(std::string(object_id)) == 1u) {
+      AlignLeaderLabel(annotation, sheet.entities);
     }
     const bool duplicate = std::any_of(
         sheet.entities.begin(), sheet.entities.end(),

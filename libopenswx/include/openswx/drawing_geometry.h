@@ -39,6 +39,10 @@ struct Line3D {
 /// The triangles are expanded from SolidWorks triangle strips.
 struct FaceTessellation {
   uint64_t source_offset = 0;
+  /// Exact descriptor-table offset and the nearest preceding model-reference
+  /// offset. One face class can contain several view/configuration groups.
+  uint64_t source_table_offset = 0;
+  uint64_t source_group_offset = 0;
   /// Source model stem recovered from the nearest preceding serialized
   /// SLDPRT/SLDASM path. Drawing-view bucket references may append an
   /// internal numeric instance suffix to this value.
@@ -64,6 +68,9 @@ struct DrawingAppearance {
   double opacity = 1.0;
   uint64_t source_offset = 0;
   DrawingAppearanceScope scope = DrawingAppearanceScope::kClassDefinition;
+  /// True only after ambient/diffuse/specular material response has been
+  /// decoded as well as the base colour.
+  bool has_material_response = false;
 };
 
 enum class DrawingLightKind {
@@ -101,6 +108,8 @@ enum class LinePattern {
   kSolid,
   kHidden,
   kCenter,
+  kChain,
+  kChainThick,
   kPhantom,
   kStitch,
 };
@@ -152,6 +161,9 @@ struct TextAnnotation {
   std::string font_family;
   std::string source_table;
   TextAnchor anchor = TextAnchor::kStart;
+  // Cached advance of the complete text run. This differs from width, which
+  // may describe a containing table cell rather than the rendered glyphs.
+  double rendered_width = 0.0;
 };
 
 /// An RGBA sketch bitmap placed in sheet-space. The serialized placement is
@@ -197,6 +209,9 @@ struct BomBalloon {
   /// case the SVG writer must only add the recovered arrowhead and label.
   bool has_cached_leader = false;
   Vec2 cached_leader_point;
+  /// Native displayed text height recovered from the balloon note record.
+  /// Zero means that the record layout did not expose a trustworthy metric.
+  double text_height_m = 0.0;
 };
 
 using DrawingEntity = std::variant<Line2D, Arc2D, FilledTriangle2D,
@@ -208,6 +223,8 @@ struct DrawingSheetGeometry {
   std::vector<DrawingEntity> entities;
   double width_m = 0.0;
   double height_m = 0.0;
+  /// Document print widths indexed by swLineWeights_e values 0..7.
+  std::array<double, 8> line_weights_m{};
 };
 
 struct DrawingGeometry {
@@ -248,10 +265,9 @@ class DrawingGeometryReader {
   [[nodiscard]] static Result<DrawingGeometry> ReadTablesXml(
       std::span<const uint8_t> xml);
 
-  /// Reverse-engineered reader for uiViewBucket_c cached edge records in the
-  /// modern Contents/VBLists stream. Only the confirmed straight-segment
-  /// record is decoded; curves and placement on the drawing sheet are not yet
-  /// interpreted.
+  /// Reverse-engineered reader for uiViewBucket_c cached edge polylines in the
+  /// modern Contents/VBLists stream. Curved edges use the same record as
+  /// straight edges with a point count greater than two.
   [[nodiscard]] static Result<std::vector<CachedDrawingView>> ReadViewBuckets(
       std::span<const uint8_t> vb_lists);
 
@@ -410,6 +426,11 @@ class DrawingGeometryReader {
       std::span<const uint8_t> definition,
       std::span<const uint8_t> sketch_bitmap);
 
+  /// Reads the Thin, Normal and Thick..Thick6 print widths stored in
+  /// Contents/Printing. Values are returned in swLineWeights_e order 0..7.
+  [[nodiscard]] static Result<std::array<double, 8>> ReadPrintLineWeights(
+      std::span<const uint8_t> printing);
+
   /// Composes one sheet from KeyWords ownership, Definition placements,
   /// VBLists cached edges, optional DisplayLists annotation strokes and
   /// (when supplied) Tables XML entities. An empty sheet_name selects the
@@ -421,7 +442,8 @@ class DrawingGeometryReader {
       std::span<const uint8_t> tables,
       std::string_view sheet_name,
       std::span<const uint8_t> display_lists = {},
-      std::span<const uint8_t> sketch_bitmap = {});
+      std::span<const uint8_t> sketch_bitmap = {},
+      std::span<const uint8_t> printing = {});
 };
 
 }  // namespace openswx

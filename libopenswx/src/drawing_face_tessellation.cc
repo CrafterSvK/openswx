@@ -132,7 +132,7 @@ std::vector<ModelReference> FindModelReferences(
   return references;
 }
 
-std::string ReferencedDocumentAt(
+const ModelReference* ModelReferenceAt(
     std::span<const ModelReference> references,
     std::size_t offset) {
   const auto owner = std::upper_bound(
@@ -140,7 +140,7 @@ std::string ReferencedDocumentAt(
       [](std::size_t value, const ModelReference& reference) {
         return value < reference.offset;
       });
-  return owner == references.begin() ? std::string{} : std::prev(owner)->stem;
+  return owner == references.begin() ? nullptr : &*std::prev(owner);
 }
 
 std::optional<ParsedTable> ParseTable(std::span<const uint8_t> data,
@@ -182,7 +182,7 @@ std::optional<ParsedTable> ParseTable(std::span<const uint8_t> data,
 
   ParsedTable parsed;
   parsed.end = cursor;
-  parsed.mesh.source_offset = table_offset;
+  parsed.mesh.source_table_offset = table_offset;
   parsed.mesh.strip_lengths.reserve(descriptors[0].count);
   uint64_t vertex_count_from_strips = 0u;
   uint64_t endpoint_count = 0u;
@@ -316,8 +316,11 @@ DrawingGeometryReader::ReadFaceTessellations(
       continue;
     }
     first->mesh.source_offset = class_offset;
-    first->mesh.referenced_document =
-        ReferencedDocumentAt(model_references, table_offset);
+    if (const ModelReference* reference =
+            ModelReferenceAt(model_references, table_offset)) {
+      first->mesh.referenced_document = reference->stem;
+      first->mesh.source_group_offset = reference->offset;
+    }
     std::size_t cursor = first->end;
     meshes.push_back(std::move(first->mesh));
 
@@ -332,8 +335,11 @@ DrawingGeometryReader::ReadFaceTessellations(
         continue;
       }
       table->mesh.source_offset = class_offset;
-      table->mesh.referenced_document =
-          ReferencedDocumentAt(model_references, cursor);
+      if (const ModelReference* reference =
+              ModelReferenceAt(model_references, cursor)) {
+        table->mesh.referenced_document = reference->stem;
+        table->mesh.source_group_offset = reference->offset;
+      }
       cursor = table->end;
       meshes.push_back(std::move(table->mesh));
     }

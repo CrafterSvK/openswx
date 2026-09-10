@@ -48,7 +48,31 @@ double ReadF64Le(std::span<const uint8_t> data, std::size_t offset) {
   return value;
 }
 
-std::optional<std::string> ReadAsciiUtf16Name(
+bool AppendUtf8(std::string& output, uint32_t code_point) {
+  if (code_point <= 0x7Fu) {
+    output.push_back(static_cast<char>(code_point));
+  } else if (code_point <= 0x7FFu) {
+    output.push_back(static_cast<char>(0xC0u | (code_point >> 6u)));
+    output.push_back(static_cast<char>(0x80u | (code_point & 0x3Fu)));
+  } else if (code_point <= 0xFFFFu) {
+    output.push_back(static_cast<char>(0xE0u | (code_point >> 12u)));
+    output.push_back(
+        static_cast<char>(0x80u | ((code_point >> 6u) & 0x3Fu)));
+    output.push_back(static_cast<char>(0x80u | (code_point & 0x3Fu)));
+  } else if (code_point <= 0x10FFFFu) {
+    output.push_back(static_cast<char>(0xF0u | (code_point >> 18u)));
+    output.push_back(
+        static_cast<char>(0x80u | ((code_point >> 12u) & 0x3Fu)));
+    output.push_back(
+        static_cast<char>(0x80u | ((code_point >> 6u) & 0x3Fu)));
+    output.push_back(static_cast<char>(0x80u | (code_point & 0x3Fu)));
+  } else {
+    return false;
+  }
+  return true;
+}
+
+std::optional<std::string> ReadUtf16Name(
     std::span<const uint8_t> data, std::size_t marker_offset) {
   if (!Has(data, marker_offset, 4u) ||
       !std::equal(kUtf16Marker.begin(), kUtf16Marker.end(),
@@ -63,10 +87,25 @@ std::optional<std::string> ReadAsciiUtf16Name(
   std::string name;
   name.reserve(count);
   for (std::size_t index = 0; index < count; ++index) {
-    const uint8_t low = data[start + index * 2u];
-    const uint8_t high = data[start + index * 2u + 1u];
-    if (high != 0u || low < 0x20u || low > 0x7Eu) return std::nullopt;
-    name.push_back(static_cast<char>(low));
+    const uint16_t unit = static_cast<uint16_t>(data[start + index * 2u]) |
+                          (static_cast<uint16_t>(
+                               data[start + index * 2u + 1u])
+                           << 8u);
+    uint32_t code_point = unit;
+    if (unit >= 0xD800u && unit <= 0xDBFFu) {
+      if (++index >= count) return std::nullopt;
+      const uint16_t low =
+          static_cast<uint16_t>(data[start + index * 2u]) |
+          (static_cast<uint16_t>(data[start + index * 2u + 1u]) << 8u);
+      if (low < 0xDC00u || low > 0xDFFFu) return std::nullopt;
+      code_point = 0x10000u +
+                   ((static_cast<uint32_t>(unit) - 0xD800u) << 10u) +
+                   (static_cast<uint32_t>(low) - 0xDC00u);
+    } else if (unit >= 0xDC00u && unit <= 0xDFFFu) {
+      return std::nullopt;
+    }
+    if (code_point < 0x20u || !AppendUtf8(name, code_point))
+      return std::nullopt;
   }
   return name;
 }
@@ -88,7 +127,7 @@ std::optional<DrawingSceneLight> ParseLightRecord(
       std::abs(coefficients.y) > 10.0 || std::abs(coefficients.z) > 10.0) {
     return std::nullopt;
   }
-  auto name = ReadAsciiUtf16Name(data, payload_offset + kNameOffset);
+  auto name = ReadUtf16Name(data, payload_offset + kNameOffset);
   if (!name) return std::nullopt;
   DrawingSceneLight light;
   light.kind = kind;
@@ -134,8 +173,8 @@ std::vector<DrawingAppearance> DrawingGeometryReader::ReadAppearances(
     // either 8 or 12 uninterpreted bytes following packed RGB. SLDDRW 19000
     // uses +12; newer CADMPEG fixtures use +16. Requiring the complete framed
     // name still rejects incidental class-name strings.
-    auto name = ReadAsciiUtf16Name(data, packed_offset + 12u);
-    if (!name) name = ReadAsciiUtf16Name(data, packed_offset + 16u);
+    auto name = ReadUtf16Name(data, packed_offset + 12u);
+    if (!name) name = ReadUtf16Name(data, packed_offset + 16u);
     if (Has(data, packed_offset, 20u) && name) {
       appearances.push_back(DrawingAppearance{
           *name, ColorRefToRgb(ReadU32Le(data, packed_offset)), 1.0,
@@ -148,8 +187,8 @@ std::vector<DrawingAppearance> DrawingGeometryReader::ReadAppearances(
   // As with class definitions, observed serializers use two prefix lengths.
   for (std::size_t offset = 0u; offset + 18u <= data.size(); ++offset) {
     if (data[offset] != 0x33u || data[offset + 1u] != 0x80u) continue;
-    auto name = ReadAsciiUtf16Name(data, offset + 14u);
-    if (!name) name = ReadAsciiUtf16Name(data, offset + 18u);
+    auto name = ReadUtf16Name(data, offset + 14u);
+    if (!name) name = ReadUtf16Name(data, offset + 18u);
     if (!name) continue;
     appearances.push_back(DrawingAppearance{
         *name, ColorRefToRgb(ReadU32Le(data, offset + 2u)), 1.0,

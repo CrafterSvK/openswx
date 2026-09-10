@@ -754,6 +754,8 @@ int main(int argc, char* argv[]) {
         inspection.value(), "swXmlContents/Tables");
     const openswx::StreamInfo* sketch_bitmap = FindDecodedStreamPrefix(
         inspection.value(), "Contents/SketchBitmap");
+    const openswx::StreamInfo* printing = FindDecodedStream(
+        inspection.value(), "Contents/Printing");
     if (keywords == nullptr || definition == nullptr || vb_lists == nullptr) {
       std::cerr << "Error: KeyWords, Definition or VBLists stream was not found\n";
       return 1;
@@ -769,7 +771,9 @@ int main(int argc, char* argv[]) {
             : std::span<const uint8_t>{},
         sketch_bitmap != nullptr
             ? std::span<const uint8_t>(sketch_bitmap->decoded_data)
-            : std::span<const uint8_t>{});
+            : std::span<const uint8_t>{},
+        printing != nullptr ? std::span<const uint8_t>(printing->decoded_data)
+                            : std::span<const uint8_t>{});
     if (!sheet.ok()) {
       std::cerr << "Error: " << sheet.error() << "\n";
       return 1;

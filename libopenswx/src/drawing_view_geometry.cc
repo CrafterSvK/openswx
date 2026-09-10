@@ -16,32 +16,25 @@ namespace {
 
 constexpr std::array<uint8_t, 4> kClassMarker = {0xFF, 0xFF, 0x01, 0x00};
 constexpr std::array<uint8_t, 2> kRepeatedClassToken = {0x01, 0x80};
-constexpr std::array<uint8_t, 7> kCachedSegmentMarkerSuffix = {
-    0x03, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00};
+constexpr std::array<uint8_t, 3> kCachedPolylineMarkerSuffix = {0x03, 0x00,
+                                                                0x00};
 constexpr std::string_view kViewBucketClass = "uiViewBucket_c";
+constexpr uint32_t kMaximumCachedPolylinePoints = 256u;
 
-bool HasCachedSegmentMarkerSuffix(std::span<const uint8_t> data,
-                                  std::size_t offset) {
-  if (offset >= data.size() || data.size() - offset < 8u)
-    return false;
-  return std::equal(kCachedSegmentMarkerSuffix.begin(),
-                    kCachedSegmentMarkerSuffix.end(),
-                    data.begin() + static_cast<std::ptrdiff_t>(offset + 1u));
-}
-
-bool IsCachedSegmentMarker(std::span<const uint8_t> data, std::size_t offset) {
-  if (!HasCachedSegmentMarkerSuffix(data, offset))
-    return false;
-  const uint8_t record_type = data[offset];
-  // The high 0x20 bit distinguishes active display edges. The otherwise
-  // identical 0x01/0x03 records form a suppressed cache in shaded views and
-  // must not be emitted as dashed wireframe geometry.
-  return record_type == 0x21u || record_type == 0x23u;
+bool IsHiddenCachedSegment(uint8_t record_type) {
+  return record_type == 0x31u || record_type == 0x33u;
 }
 
 uint16_t ReadU16Le(std::span<const uint8_t> data, std::size_t offset) {
   return static_cast<uint16_t>(data[offset]) |
          static_cast<uint16_t>(static_cast<uint16_t>(data[offset + 1]) << 8u);
+}
+
+uint32_t ReadU32Le(std::span<const uint8_t> data, std::size_t offset) {
+  return static_cast<uint32_t>(data[offset]) |
+         (static_cast<uint32_t>(data[offset + 1u]) << 8u) |
+         (static_cast<uint32_t>(data[offset + 2u]) << 16u) |
+         (static_cast<uint32_t>(data[offset + 3u]) << 24u);
 }
 
 double ReadF64Le(std::span<const uint8_t> data, std::size_t offset) {
@@ -54,6 +47,48 @@ double ReadF64Le(std::span<const uint8_t> data, std::size_t offset) {
   double value = 0.0;
   std::memcpy(&value, bytes.data(), sizeof(value));
   return value;
+}
+
+std::optional<uint32_t>
+ReadCachedPolylinePointCount(std::span<const uint8_t> data,
+                             std::size_t offset, std::size_t limit) {
+  if (limit > data.size() || offset > limit || limit - offset < 8u ||
+      !std::equal(kCachedPolylineMarkerSuffix.begin(),
+                  kCachedPolylineMarkerSuffix.end(),
+                  data.begin() + static_cast<std::ptrdiff_t>(offset + 1u))) {
+    return std::nullopt;
+  }
+  const uint8_t record_type = data[offset];
+  const bool known_type =
+      record_type == 0x01u || record_type == 0x03u ||
+      record_type == 0x11u || record_type == 0x13u ||
+      record_type == 0x21u || record_type == 0x23u ||
+      record_type == 0x31u || record_type == 0x33u;
+  if (!known_type)
+    return std::nullopt;
+  const uint32_t count = ReadU32Le(data, offset + 4u);
+  if (count < 2u || count > kMaximumCachedPolylinePoints ||
+      count > (limit - offset - 8u) / (3u * sizeof(double))) {
+    return std::nullopt;
+  }
+  for (uint32_t index = 0; index < count * 3u; ++index) {
+    const double value = ReadF64Le(data, offset + 8u + index * sizeof(double));
+    if (!std::isfinite(value) || std::abs(value) > 1.0e6)
+      return std::nullopt;
+  }
+  return count;
+}
+
+bool IsActiveCachedPolyline(uint8_t record_type) {
+  // 0x2* records are active visible edges and 0x3* records are active hidden
+  // edges. Their 0x0*/0x1* counterparts belong to the suppressed cache.
+  return record_type == 0x21u || record_type == 0x23u ||
+         record_type == 0x31u || record_type == 0x33u;
+}
+
+bool IsSuppressedCachedPolyline(uint8_t record_type) {
+  return record_type == 0x01u || record_type == 0x03u ||
+         record_type == 0x11u || record_type == 0x13u;
 }
 
 bool ValidBucketHeader(std::span<const uint8_t> data, std::size_t offset) {
@@ -207,59 +242,68 @@ DrawingGeometryReader::ReadViewBuckets(std::span<const uint8_t> data) {
     constexpr double kDuplicateCoordinateToleranceM = 1e-8;
     std::set<std::array<int64_t, 6>> emitted_segments;
 
-    for (std::size_t offset = start + 42u; offset + 8u + 48u <= end; ++offset) {
-      if (HasCachedSegmentMarkerSuffix(data, offset) &&
-          (data[offset] == 0x01u || data[offset] == 0x03u)) {
+    for (std::size_t offset = start + 42u; offset + 8u <= end; ++offset) {
+      const auto point_count =
+          ReadCachedPolylinePointCount(data, offset, end);
+      if (!point_count)
+        continue;
+      const uint8_t record_type = data[offset];
+      const std::size_t record_bytes =
+          8u + static_cast<std::size_t>(*point_count) * 3u * sizeof(double);
+      if (IsSuppressedCachedPolyline(record_type)) {
         view.has_suppressed_edge_cache = true;
+        offset += record_bytes - 1u;
         continue;
       }
-      if (!IsCachedSegmentMarker(data, offset))
+      if (!IsActiveCachedPolyline(record_type))
         continue;
-      const std::size_t coordinates = offset + 8u;
-      const Vec3 first{ReadF64Le(data, coordinates),
-                       ReadF64Le(data, coordinates + 8u),
-                       ReadF64Le(data, coordinates + 16u)};
-      const Vec3 second{ReadF64Le(data, coordinates + 24u),
-                        ReadF64Le(data, coordinates + 32u),
-                        ReadF64Le(data, coordinates + 40u)};
-      const std::array<double, 6> values = {first.x,  first.y,  first.z,
-                                            second.x, second.y, second.z};
-      if (!std::all_of(values.begin(), values.end(), [](double value) {
-            return std::isfinite(value) && std::abs(value) <= 1.0e6;
-          })) {
-        continue;
-      }
       const auto quantize = [](double value) {
         return static_cast<int64_t>(
             std::llround(value / kDuplicateCoordinateToleranceM));
       };
-      std::array<int64_t, 3> first_key = {quantize(first.x), quantize(first.y),
-                                          quantize(first.z)};
-      std::array<int64_t, 3> second_key = {
-          quantize(second.x), quantize(second.y), quantize(second.z)};
-      if (second_key < first_key)
-        std::swap(first_key, second_key);
-      const std::array<int64_t, 6> segment_key = {first_key[0],  first_key[1],
-                                                  first_key[2],  second_key[0],
-                                                  second_key[1], second_key[2]};
-      if (!emitted_segments.insert(segment_key).second) {
-        offset += 8u + 48u - 1u;
-        continue;
+      LineStyle style;
+      if (IsHiddenCachedSegment(record_type))
+        style.pattern = LinePattern::kHidden;
+      const auto point_at = [&](uint32_t point_index) {
+        const std::size_t coordinates =
+            offset + 8u + static_cast<std::size_t>(point_index) * 3u *
+                              sizeof(double);
+        return Vec3{ReadF64Le(data, coordinates),
+                    ReadF64Le(data, coordinates + 8u),
+                    ReadF64Le(data, coordinates + 16u)};
+      };
+      Vec3 first = point_at(0u);
+      for (uint32_t point_index = 1u; point_index < *point_count;
+           ++point_index) {
+        const Vec3 second = point_at(point_index);
+        std::array<int64_t, 3> first_key = {
+            quantize(first.x), quantize(first.y), quantize(first.z)};
+        std::array<int64_t, 3> second_key = {
+            quantize(second.x), quantize(second.y), quantize(second.z)};
+        if (second_key < first_key)
+          std::swap(first_key, second_key);
+        const std::array<int64_t, 6> segment_key = {
+            first_key[0], first_key[1], first_key[2],
+            second_key[0], second_key[1], second_key[2]};
+        if (emitted_segments.insert(segment_key).second) {
+          view.geometry.entities.emplace_back(Line2D{
+              Project(first, horizontal, vertical, view.scale_denominator),
+              Project(second, horizontal, vertical, view.scale_denominator),
+              style, "Contents/VBLists/uiViewBucket_c"});
+          view.source_lines.push_back({first, second,
+                                       static_cast<uint64_t>(offset),
+                                       record_type});
+        }
+        first = second;
       }
-      view.geometry.entities.emplace_back(
-          Line2D{Project(first, horizontal, vertical, view.scale_denominator),
-                 Project(second, horizontal, vertical, view.scale_denominator),
-                 LineStyle{}, "Contents/VBLists/uiViewBucket_c"});
-      view.source_lines.push_back(
-          {first, second, static_cast<uint64_t>(offset), data[offset]});
-      offset += 8u + 48u - 1u;
+      offset += record_bytes - 1u;
     }
     if (!view.geometry.entities.empty())
       views.push_back(std::move(view));
   }
   if (views.empty()) {
     return Result<std::vector<CachedDrawingView>>::Err(
-        "No confirmed cached segment records found in uiViewBucket_c");
+        "No confirmed cached edge records found in uiViewBucket_c");
   }
   return Result<std::vector<CachedDrawingView>>::Ok(std::move(views));
 }

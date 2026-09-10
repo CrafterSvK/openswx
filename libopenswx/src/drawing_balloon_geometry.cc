@@ -19,6 +19,8 @@ constexpr std::array<uint8_t, 3> kUtf16Marker = {0xFF, 0xFE, 0xFF};
 constexpr std::string_view kMagnetLineClass = "moDisplayMagnetLine_c";
 constexpr std::size_t kAnchorSearchBytes = 2048u;
 constexpr std::size_t kRepeatedAnchorSearchBytes = 2048u;
+constexpr std::size_t kTextHeightOffsetAfterString = 82u;
+constexpr std::size_t kTextCompanionMetricOffsetAfterString = 90u;
 
 double ReadF64Le(std::span<const uint8_t> data, std::size_t offset) {
   std::array<uint8_t, sizeof(double)> bytes{};
@@ -81,6 +83,25 @@ bool IsSheetPoint(double x, double y, double z) {
   return std::isfinite(x) && std::isfinite(y) && std::isfinite(z) &&
          x >= 1.0e-4 && x <= 2.0 && y >= 1.0e-4 && y <= 2.0 &&
          std::abs(z) <= 2.0;
+}
+
+double ReadBalloonTextHeight(std::span<const uint8_t> definition,
+                             std::size_t string_end) {
+  if (string_end > definition.size() ||
+      definition.size() - string_end <
+          kTextCompanionMetricOffsetAfterString + 8u) {
+    return 0.0;
+  }
+  const double height =
+      ReadF64Le(definition, string_end + kTextHeightOffsetAfterString);
+  const double companion_metric = ReadF64Le(
+      definition, string_end + kTextCompanionMetricOffsetAfterString);
+  if (!std::isfinite(height) || !std::isfinite(companion_metric) ||
+      height < 0.001 || height > 0.02 || companion_metric < 0.001 ||
+      companion_metric > 0.05) {
+    return 0.0;
+  }
+  return height;
 }
 
 bool SameBytes(std::span<const uint8_t> data, std::size_t left,
@@ -185,7 +206,8 @@ DrawingGeometryReader::ReadLegacyBomBalloons(
         static_cast<uint64_t>(candidate.offset),
         "Contents/Definition/moDisplayBalloonNote_c",
         false,
-        {}});
+        {},
+        ReadBalloonTextHeight(definition, candidate.end)});
   }
   return Result<std::vector<BomBalloon>>::Ok(std::move(balloons));
 }
