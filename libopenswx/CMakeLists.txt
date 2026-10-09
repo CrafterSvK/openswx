@@ -56,6 +56,7 @@ if(BUILD_TESTING)
     tests/document_test.cc
     tests/modern_parser_test.cc
     tests/ole2_parser_test.cc
+    tests/xml_readers_test.cc
   )
   target_include_directories(libopenswx_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

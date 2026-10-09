@@ -115,6 +115,23 @@ struct Component {
   bool is_suppressed{};     ///< True if the component is suppressed.
   bool is_hidden{};         ///< True if the component is hidden in the viewport.
   bool exclude_from_bom{};  ///< True if excluded from bill-of-materials.
+
+  /// Placement of this instance within the parent assembly's coordinate
+  /// system, as a column-major 4x4 homogeneous transform: elements
+  /// `[0..2]`, `[4..6]`, `[8..10]` are the rotation/scale basis columns,
+  /// and `[12..14]` is the translation (in metres); `[3]`, `[7]`, `[11]`
+  /// are always 0 and `[15]` is always 1.
+  ///
+  /// Source attribute: `swReference/@swTransform` in
+  /// `swXmlContents/COMPINSTANCETREE`. Defaults to the identity transform
+  /// when the attribute is absent, e.g. for a suppressed (abbreviated)
+  /// component record.
+  std::array<double, 16> transform{
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, 0, 0, 1,
+  };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

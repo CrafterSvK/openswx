@@ -11,6 +11,7 @@
 
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -98,6 +99,8 @@ json SerializeConfiguration(const Configuration& cfg) {
         {"is_suppressed", c.is_suppressed},
         {"is_hidden", c.is_hidden},
         {"exclude_from_bom", c.exclude_from_bom},
+        {"transform", json(std::vector<double>(c.transform.begin(),
+                                               c.transform.end()))},
     });
   }
   jcfg["components"] = std::move(jcomps);
