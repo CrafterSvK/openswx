@@ -3,7 +3,9 @@
 
 #include "internal/xml_readers.h"
 
+#include <array>
 #include <charconv>
+#include <optional>
 #include <sstream>
 #include <string_view>
 
@@ -108,6 +110,38 @@ std::optional<MassProperties> ParseMassPropString(std::string_view str) {
 bool ParseBoolAttr(const pugi::xml_attribute& attr) noexcept {
   std::string_view v = attr.as_string();
   return v == "YES" || v == "TRUE" || v == "yes" || v == "true";
+}
+
+// Parses a `swReference/@swTransform` attribute value: 16 whitespace-
+// separated doubles. Returns std::nullopt if the attribute is absent, does
+// not contain exactly 16 tokens, or contains a token that is not a valid
+// double; in all of those cases the caller keeps Component's identity
+// default instead.
+std::optional<std::array<double, 16>> ParseTransformAttr(
+    std::string_view str) {
+  std::array<double, 16> values{};
+  std::size_t idx = 0;
+  std::size_t pos = 0;
+
+  while (idx < 16 && pos < str.size()) {
+    while (pos < str.size() && str[pos] == ' ') ++pos;
+    if (pos >= str.size()) break;
+
+    const std::size_t end = str.find(' ', pos);
+    const std::string_view token =
+        str.substr(pos, end == std::string_view::npos ? end : end - pos);
+
+    const auto [ptr, ec] = std::from_chars(
+        token.data(), token.data() + token.size(), values[idx],
+        std::chars_format::general);
+    if (ec != std::errc{} || ptr != token.data() + token.size())
+      return std::nullopt;
+    ++idx;
+    pos = (end == std::string_view::npos) ? str.size() : end;
+  }
+
+  if (idx != 16) return std::nullopt;
+  return values;
 }
 
 
@@ -277,6 +311,14 @@ std::vector<Component> ParseComponents(std::span<const uint8_t> xml_bytes,
           ref.attribute("swConfigurationName").as_string();
       comp.component_reference =
           ref.attribute("swComponentReference").as_string();
+
+      // Leaves comp.transform at its identity default when the attribute is
+      // absent (e.g. suppressed/abbreviated records) or malformed.
+      if (const std::optional<std::array<double, 16>> transform =
+              ParseTransformAttr(ref.attribute("swTransform").as_string());
+          transform.has_value()) {
+        comp.transform = *transform;
+      }
 
       // Resolve the file path: swReference → swModel → swFile.
       std::string model_ref = ref.attribute("swModelRef").as_string();
