@@ -84,6 +84,8 @@ The first typed alternatives are:
 - NURBS curve (`B_CURVE` + `NURBS_CURVE`) and surface (`B_SURFACE` +
   `NURBS_SURFACE`), including their referenced control and knot arrays.
 - Surface curve (`SP_CURVE`), retaining surface and 2D parameter-curve IDs.
+- Trimmed curve (`TRIMMED_CURVE`), retaining its basis ID, source endpoints and
+  original basis parameters.
 
 Fields are located by resolved schema name and codec, not fixed field offsets.
 Inserted fields and reordered definitions therefore do not shift geometry roles.
@@ -110,8 +112,8 @@ padded or resampled.
 
 Semantic problems retain the graph and other successfully built geometry while
 adding `invalid_geometry` issues. No partial typed object is published. Known
-geometry candidates without a typed adapter (intersection and trimmed
-curves, procedural surfaces, foreign geometry, mesh and polyline) add
+geometry candidates without a typed adapter (intersection curves, procedural
+surfaces, foreign geometry, mesh and polyline) add
 `unsupported_geometry` issues. Auxiliary raw nodes remain in the graph.
 `typed_geometry_complete()` covers the recognized geometry candidates; it is
 not a statement about arbitrary extension-node semantics or geometric validity.
@@ -122,6 +124,14 @@ keeps missing/wrong-class findings in the reference graph. The model overload
 of `EvaluateCurve` checks 2D B-curve compatibility and evaluator availability
 and applies the natural chain rule. Typed-definition completeness is distinct
 from composition validity; auxiliary original/tolerance fields are not used.
+
+`TrimmedCurveGeometry` requires a non-null basis, finite endpoint vectors,
+distinct finite parameters and the documented positive trim sense. Definition
+construction does not resolve the basis. Model-based evaluation checks endpoint
+ordering against the known basis sense and every nested numeric trim interval.
+Endpoint point/parameter agreement, periodic span legality and tolerant vertex
+correspondence are not certified. The model evaluator uses the original basis
+parameter and natural derivative, rather than introducing a new parameter scale.
 
 No curve/surface evaluation, derivatives, trimming, tessellation, topology
 reconstruction, delta application or STEP export is performed here.

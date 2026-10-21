@@ -45,6 +45,75 @@ bool SurfaceType(uint16_t type) {
   }
 }
 
+bool CurveType(uint16_t type) {
+  switch (type) {
+    case 30:
+    case 31:
+    case 32:
+    case 38:
+    case 130:
+    case 133:
+    case 134:
+    case 137:
+    case 200:
+      return true;
+    default:
+      return false;
+  }
+}
+
+Result<const GeometryObject*> ResolveTrimmed(const Model& model,
+                                             const GeometryObject* geometry,
+                                             double parameter) {
+  constexpr std::size_t kMaxTrimDepth = 64;
+  std::array<NodeId, kMaxTrimDepth> visited{};
+  std::size_t depth = 0;
+  while (const auto* trim =
+             std::get_if<TrimmedCurveGeometry>(&geometry->payload)) {
+    for (std::size_t i = 0; i < depth; ++i) {
+      if (visited[i] == geometry->source) {
+        return Result<const GeometryObject*>::Err(
+            {ErrorCode::kInvalidRecord, 0, "Cyclic trimmed curve dependency"});
+      }
+    }
+    if (depth == visited.size()) {
+      return Result<const GeometryObject*>::Err(
+          {ErrorCode::kResourceLimit, 0,
+           "Trimmed curve dependency depth exceeds 64"});
+    }
+    visited[depth++] = geometry->source;
+    const auto* basis_node = model.FindNode(trim->basis_curve);
+    if (!basis_node || !CurveType(basis_node->node_type)) {
+      return Result<const GeometryObject*>::Err(
+          {ErrorCode::kInvalidRecord, 0,
+           "Trimmed curve basis is missing or incompatible"});
+    }
+    const auto basis = Geometry(model, trim->basis_curve);
+    if (!basis.ok()) return basis;
+    const auto sense = basis.value()->sense;
+    if (!sense || (*sense != '+' && *sense != '-')) {
+      return Result<const GeometryObject*>::Err(
+          {ErrorCode::kUnsupportedFormat, 0,
+           "Trimmed curve basis sense is unknown"});
+    }
+    const bool increasing = trim->parameter_2 > trim->parameter_1;
+    if (increasing != (*sense == '+')) {
+      return Result<const GeometryObject*>::Err(
+          {ErrorCode::kInvalidRecord, 0,
+           "Trim parameters disagree with basis sense"});
+    }
+    const double low = increasing ? trim->parameter_1 : trim->parameter_2;
+    const double high = increasing ? trim->parameter_2 : trim->parameter_1;
+    if (parameter < low || parameter > high) {
+      return Result<const GeometryObject*>::Err(
+          {ErrorCode::kInvalidOptions, 0,
+           "Curve parameter is outside a trim interval"});
+    }
+    geometry = basis.value();
+  }
+  return Result<const GeometryObject*>::Ok(geometry);
+}
+
 Result<CurveEvaluation> Compose(const GeometryPayload& parameter_curve,
                                 const GeometryPayload& surface, double t) {
   const auto* nurbs = std::get_if<NurbsCurveGeometry>(&parameter_curve);
@@ -89,7 +158,9 @@ Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
     return Result<CurveEvaluation>::Err(
         {ErrorCode::kInvalidOptions, 0, "Curve parameter must be finite"});
   }
-  const auto geometry = Geometry(model, curve);
+  const auto root = Geometry(model, curve);
+  if (!root.ok()) return Result<CurveEvaluation>::Err(root.error());
+  const auto geometry = ResolveTrimmed(model, root.value(), parameter);
   if (!geometry.ok()) return Result<CurveEvaluation>::Err(geometry.error());
   const auto* sp =
       std::get_if<SurfaceCurveGeometry>(&geometry.value()->payload);

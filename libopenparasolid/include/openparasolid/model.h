@@ -109,11 +109,18 @@ struct SurfaceCurveGeometry {
   NodeId surface;
   NodeId parameter_curve;
 };
+struct TrimmedCurveGeometry {
+  NodeId basis_curve;
+  Vector3 point_1;
+  Vector3 point_2;
+  double parameter_1 = 0;
+  double parameter_2 = 0;
+};
 using GeometryPayload =
     std::variant<PointGeometry, LineGeometry, CircleGeometry, EllipseGeometry,
                  PlaneGeometry, CylinderGeometry, ConeGeometry, SphereGeometry,
                  TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry,
-                 SurfaceCurveGeometry>;
+                 SurfaceCurveGeometry, TrimmedCurveGeometry>;
 struct GeometryObject {
   NodeId source;
   /// Raw sense byte, including '?'; points have no sense field.

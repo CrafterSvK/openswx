@@ -28,13 +28,18 @@ struct CurveEvaluation {
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
     const GeometryPayload& geometry, double parameter);
 
-/// Resolves a curve by ID in this model, including SP_CURVE's 2D NURBS and
-/// supporting surface. Applies the natural chain rule without sense reversal,
-/// trimming, placement transforms or periodic parameter wrapping. References
-/// are scoped to this model; a standalone SP_CURVE payload needs this context.
-/// Missing/wrong targets and non-2D parameter curves are invalid records;
-/// untyped/unsupported geometry returns kUnsupportedFormat. No recursion is
-/// performed. Inherited parameter/data/resource checks remain in force.
+/// Resolves a curve by ID, including TRIMMED_CURVE bases and SP_CURVE's 2D
+/// NURBS and supporting surface. Applies the natural chain rule without sense
+/// reversal, face trimming, placement transforms or periodic parameter
+/// wrapping. References are scoped to this model; a standalone SP_CURVE payload
+/// needs this context. Missing/wrong targets and non-2D parameter curves are
+/// invalid records; untyped/unsupported geometry returns kUnsupportedFormat. No
+/// recursion is performed. Trim chains are iterative, with cycle detection and
+/// at most 64 wrappers. The parameter is the original basis parameter, bounded
+/// by every inclusive trim interval. Basis sense must be known and match
+/// endpoint order; the natural derivative is not reversed or scaled. Stored
+/// endpoint points and periodic span legality are not certified. Inherited
+/// parameter/data/ resource checks remain in force.
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(const Model& model,
                                                     NodeId curve,
                                                     double parameter);
@@ -49,9 +54,9 @@ struct SurfaceEvaluation {
 /// Evaluates a PLANE, CYLINDER, CONE, SPHERE, TORUS or NURBS surface in source
 /// coordinates. Angular parameters are radians. Frames must be orthonormal
 /// within 1e-10. Sphere latitude v lies in [-pi/2, pi/2]. Cones require a
-/// positive acute half-angle and r + v*tan(angle) >= 0 (XT axis convention:
-/// axial term -v*A). Apple/lemon tori use the principal branch |v| <=
-/// acos(-major/minor); ring tori have no v restriction. No periodic branch
+/// nonzero signed acute half-angle and r + v*tan(angle) >= 0 (writer
+/// convention: axial term +v*A). Apple/lemon tori use the principal branch |v|
+/// <= acos(-major/minor); ring tori have no v restriction. No periodic branch
 /// wrapping is performed. Singular boundary points are allowed: partial
 /// derivatives may be zero. Surface/face sense, face trimming, placement
 /// transforms and units are not applied. NURBS controls have dimension 3

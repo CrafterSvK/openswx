@@ -41,33 +41,47 @@ TEST(ParasolidSurfaceEvaluate, CylinderUsesAngularUAndSignedAxialV) {
   ExpectVector(result.value().v_derivative, {1, 0, 0});
 }
 
-TEST(ParasolidSurfaceEvaluate, ConePreservesTheXTReverseAxisConvention) {
+TEST(ParasolidSurfaceEvaluate, ConeUsesSourceAxisForAxialParameter) {
   const auto result = EvaluateSurface(Cone(), 0, 3);
   ASSERT_TRUE(result.ok());
-  ExpectVector(result.value().position, {5, 0, -3});
+  ExpectVector(result.value().position, {5, 0, 3});
   ExpectVector(result.value().u_derivative, {0, 5, 0});
-  ExpectVector(result.value().v_derivative, {1, 0, -1});
+  ExpectVector(result.value().v_derivative, {1, 0, 1});
   auto cone = Cone();
   cone.sin_half_angle = 0.6;
   cone.cos_half_angle = 0.8;
   const auto acute = EvaluateSurface(cone, 0, 4);
   ASSERT_TRUE(acute.ok());
-  ExpectVector(acute.value().position, {5, 0, -4});
-  ExpectVector(acute.value().v_derivative, {0.75, 0, -1});
+  ExpectVector(acute.value().position, {5, 0, 4});
+  ExpectVector(acute.value().v_derivative, {0.75, 0, 1});
 }
 
 TEST(ParasolidSurfaceEvaluate, ConeAllowsTheApexAndRejectsTheOtherHalf) {
   const auto apex = EvaluateSurface(Cone(), 0, -2);
   ASSERT_TRUE(apex.ok());
-  ExpectVector(apex.value().position, {0, 0, 2});
+  ExpectVector(apex.value().position, {0, 0, -2});
   ExpectVector(apex.value().u_derivative, {0, 0, 0});
-  ExpectVector(apex.value().v_derivative, {1, 0, -1});
+  ExpectVector(apex.value().v_derivative, {1, 0, 1});
   const auto outside = EvaluateSurface(Cone(), 0, std::nextafter(-2., -3.));
   ASSERT_FALSE(outside.ok());
   EXPECT_EQ(outside.error().code, ErrorCode::kInvalidOptions);
   auto at_origin = Cone();
   at_origin.radius = 0;
   EXPECT_TRUE(EvaluateSurface(at_origin, 0, 0).ok());
+}
+
+TEST(ParasolidSurfaceEvaluate, ConePreservesSignedHalfAngles) {
+  auto cone = Cone();
+  cone.sin_half_angle = -cone.sin_half_angle;
+  const auto result = EvaluateSurface(cone, 0, 1);
+  ASSERT_TRUE(result.ok());
+  ExpectVector(result.value().position, {1, 0, 1});
+  ExpectVector(result.value().u_derivative, {0, 1, 0});
+  ExpectVector(result.value().v_derivative, {-1, 0, 1});
+  EXPECT_TRUE(EvaluateSurface(cone, 0, 2).ok());
+  const auto beyond = EvaluateSurface(cone, 0, std::nextafter(2., 3.));
+  ASSERT_FALSE(beyond.ok());
+  EXPECT_EQ(beyond.error().code, ErrorCode::kInvalidOptions);
 }
 
 TEST(ParasolidSurfaceEvaluate, SphereUsesLongitudeLatitudeAndAllowsPoles) {
@@ -184,7 +198,7 @@ TEST(ParasolidSurfaceEvaluate, RejectsMalformedPublicPayloads) {
       ConeGeometry{{}, {0, 0, 1}, 1, 1, 0, {1, 0, 0}},
       ConeGeometry{{}, {0, 0, 1}, 1, 0.6, 0.6, {1, 0, 0}},
       ConeGeometry{{}, {0, 0, 1}, 1, nan, 0.8, {1, 0, 0}},
-      ConeGeometry{{}, {0, 0, 1}, 1, -0.6, 0.8, {1, 0, 0}},
+      ConeGeometry{{}, {0, 0, 1}, 1, 0.6, -0.8, {1, 0, 0}},
       SphereGeometry{{}, -1, {0, 0, 1}, {1, 0, 0}},
       TorusGeometry{{}, {0, 0, 1}, 0, 2, {1, 0, 0}},
       TorusGeometry{{}, {0, 0, 1}, -2, 2, {1, 0, 0}},

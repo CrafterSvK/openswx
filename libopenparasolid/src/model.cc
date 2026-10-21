@@ -60,9 +60,10 @@ const char* ToString(ModelIssueCode code) noexcept {
 }
 const char* GeometryName(const GeometryPayload& geometry) noexcept {
   constexpr const char* names[]{
-      "point", "line",        "circle",        "ellipse",
-      "plane", "cylinder",    "cone",          "sphere",
-      "torus", "nurbs_curve", "nurbs_surface", "surface_curve"};
+      "point",        "line",        "circle",        "ellipse",
+      "plane",        "cylinder",    "cone",          "sphere",
+      "torus",        "nurbs_curve", "nurbs_surface", "surface_curve",
+      "trimmed_curve"};
   static_assert(std::size(names) == std::variant_size_v<GeometryPayload>);
   return geometry.valueless_by_exception() ? "unknown"
                                            : names[geometry.index()];
@@ -187,6 +188,25 @@ Result<BuiltGeometry> BuildSurfaceCurve(const DecodedNode& node,
         node.offset,
         "Surface curve requires non-null surface and B-curve references"));
   return Result<BuiltGeometry>::Ok({GeometryPayload{curve}, 2});
+}
+Result<BuiltGeometry> BuildTrimmedCurve(const DecodedNode& node,
+                                        ModelFields& fields) {
+  TrimmedCurveGeometry curve;
+  uint8_t sense = 0;
+  if (!fields.Reference("basis_curve", curve.basis_curve) ||
+      !fields.Vector("point_1", curve.point_1) ||
+      !fields.Vector("point_2", curve.point_2) ||
+      !fields.Number("parm_1", curve.parameter_1) ||
+      !fields.Number("parm_2", curve.parameter_2) ||
+      !fields.Byte("sense", sense, FieldType::kCharacter))
+    return Result<BuiltGeometry>::Err(fields.Error());
+  if (curve.basis_curve.value == 0 || curve.parameter_1 == curve.parameter_2 ||
+      sense != '+')
+    return Result<BuiltGeometry>::Err(
+        Invalid(node.offset,
+                "Trimmed curve requires a basis, distinct parameters and "
+                "positive sense"));
+  return Result<BuiltGeometry>::Ok({GeometryPayload{curve}, 9});
 }
 }  // namespace
 bool IsGeometryType(uint16_t type) {
@@ -448,7 +468,8 @@ std::optional<ParseError> ModelAssembler::BuildGeometry() {
     ModelFields fields(node, report_.schemas[node.schema_index].definition);
     const GeometryContext context{report_, model_.positions_,
                                   options_.max_values - copied_values};
-    auto built = node.node_type == 137 ? BuildSurfaceCurve(node, fields)
+    auto built = node.node_type == 133   ? BuildTrimmedCurve(node, fields)
+                 : node.node_type == 137 ? BuildSurfaceCurve(node, fields)
                  : node.node_type == 124 || node.node_type == 134
                      ? BuildSpline(node, fields, context)
                      : BuildAnalytic(node, fields);

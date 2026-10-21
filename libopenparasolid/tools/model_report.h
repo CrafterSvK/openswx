@@ -50,6 +50,12 @@ inline json GeometryJson(const GeometryObject& geometry) {
         } else if constexpr (std::is_same_v<T, SurfaceCurveGeometry>) {
           out["surface"] = p.surface.value;
           out["parameter_curve"] = p.parameter_curve.value;
+        } else if constexpr (std::is_same_v<T, TrimmedCurveGeometry>) {
+          out["basis_curve"] = p.basis_curve.value;
+          out["point_1"] = VectorJson(p.point_1);
+          out["point_2"] = VectorJson(p.point_2);
+          out["parameter_1"] = p.parameter_1;
+          out["parameter_2"] = p.parameter_2;
         } else {
           if constexpr (requires { p.origin; })
             out["origin"] = VectorJson(p.origin);

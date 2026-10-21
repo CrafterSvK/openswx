@@ -122,11 +122,13 @@ Result<SurfaceEvaluation> Plane(const PlaneGeometry& plane, double u,
 
 Result<SurfaceEvaluation> Cone(const ConeGeometry& cone, double u, double v) {
   if (!std::isfinite(cone.radius) || cone.radius < 0 ||
-      !Positive(cone.sin_half_angle) || !Positive(cone.cos_half_angle) ||
+      !std::isfinite(cone.sin_half_angle) || cone.sin_half_angle == 0 ||
+      !Positive(cone.cos_half_angle) ||
       std::abs(std::hypot(cone.sin_half_angle, cone.cos_half_angle) - 1) >
           kFrameTolerance) {
     return Invalid(
-        "Cone requires a nonnegative radius and a positive acute half-angle");
+        "Cone requires a nonnegative radius and a nonzero signed acute "
+        "half-angle");
   }
   const long double slope =
       static_cast<long double>(cone.sin_half_angle) / cone.cos_half_angle;
@@ -137,9 +139,10 @@ Result<SurfaceEvaluation> Cone(const ConeGeometry& cone, double u, double v) {
         "Cone evaluation produced an unrepresentable intermediate result");
   }
   if (radius < 0) return Outside("Cone parameter lies beyond the apex");
-  // XT axes point away from the selected half-cone; PK axes point towards it.
-  return Revolution(cone.origin, cone.axis, cone.x_axis,
-                    {radius, -static_cast<long double>(v), slope, -1}, u);
+  // Stored endpoint correspondences use +v*A in writer output, despite the
+  // minus sign printed in the XT reference. Preserve the signed half-angle.
+  return Revolution(cone.origin, cone.axis, cone.x_axis, {radius, v, slope, 1},
+                    u);
 }
 
 Result<SurfaceEvaluation> Sphere(const SphereGeometry& sphere, double u,

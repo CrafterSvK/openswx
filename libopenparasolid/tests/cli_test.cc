@@ -434,5 +434,35 @@ TEST_F(ParasolidInspectCliTest, GeometryModeRetainsSurfaceCurveReferences) {
   EXPECT_EQ(Report()["model"]["geometry_counts"]["surface_curve"], 1);
 }
 
+TEST_F(ParasolidInspectCliTest, GeometryModeRetainsTrimmedCurveDefinition) {
+  auto bytes = test::Header();
+  test::U16(bytes, 133);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 10);
+  test::U32(bytes, 10);
+  for (int i = 0; i < 5; ++i) test::CompactIndex(bytes, 0);
+  bytes.push_back('+');
+  test::CompactIndex(bytes, 1);
+  for (double v : {1., 2., 3., 4., 5., 6., 1., 3.}) test::F64(bytes, v);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run("--geometry"), 2);
+  const auto r = Report();
+  const auto& geometry = r["model"]["geometry"][0];
+  EXPECT_EQ(geometry["kind"], "trimmed_curve");
+  EXPECT_EQ(geometry["basis_curve"], 1);
+  EXPECT_EQ(geometry["point_1"], json::array({1., 2., 3.}));
+  EXPECT_EQ(geometry["point_2"], json::array({4., 5., 6.}));
+  EXPECT_EQ(geometry["parameter_1"], 1);
+  EXPECT_EQ(geometry["parameter_2"], 3);
+  EXPECT_EQ(r["model"]["missing_reference_count"], 1);
+  ASSERT_EQ(Run("--geometry --summary"), 2);
+  EXPECT_EQ(Report()["model"]["geometry_counts"]["trimmed_curve"], 1);
+}
 }  // namespace
 }  // namespace openparasolid

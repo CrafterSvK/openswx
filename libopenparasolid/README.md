@@ -94,12 +94,15 @@ for a plane). Frames must be orthonormal within absolute tolerance `1e-10`.
 | Ring torus (`major > minor`) | Angles `u`, `v` in radians, both unbounded |
 | Apple/lemon torus | Angle `u`, unbounded; principal minor angle `abs(v) <= acos(-major/minor)` |
 
-The cone uses the XT convention `P - v*A + (r + v*tan(a))*radial(u)`.
-Its axis has the opposite direction to the PK interface's cone axis. The
-supported half-angle is positive and acute; its stored sine and cosine must
-be positive and satisfy unit length within `1e-10`. Cone radius may be zero.
-The evaluator rejects parameters beyond the apex instead of returning the
-other mathematical half-cone.
+The cone uses `P + v*A + (r + v*tan(a))*radial(u)`, as observed in the
+SolidWorks writer output and independently checked against stored trim
+endpoints and the local XT-to-STEP mapping. The printed XT Format Reference
+uses a minus sign for the axial term; that formula disagrees with these
+endpoint correspondences. The evaluator uses the writer convention, including
+`+A` in the v partial. Half-angles may be signed and must be nonzero and acute
+in magnitude: the stored sine must be nonzero, cosine positive, and their
+length must be one within `1e-10`. Cone radius may be zero. Parameters beyond
+the apex are rejected through the signed radial condition.
 
 Torus minor radii must be positive. Positive major radii support ring, apple
 and horn (`major == minor`) tori. Negative major radii preserve the XT lemon
@@ -122,7 +125,7 @@ values must fit in `double`. The implementation adds no dependencies or CLI
 options and requires no dynamic scratch storage for analytic evaluation.
 
 Formulas and torus types follow the XT Format Reference (July 2022, pp. 53–59).
-Synthetic tests cover rotated frames, natural derivatives, the XT cone axis,
+Synthetic tests cover rotated frames, natural derivatives, the writer cone axis,
 singular/domain boundaries, malformed payloads, numerical overflow and model
 integration without applying surface sense.
 An independent NumPy comparison checks 2,910 samples from 600 synthetic
@@ -236,6 +239,59 @@ An independent SciPy/NumPy comparison checks 9,138 samples from 2,140 SP-curves
 in 30 private streams. There are 158 curves with unavailable typed dependencies
 and 772 sample-domain errors; these are retained as explicit limitations rather
 than approximated. Comparison tools and private data stay outside the repository.
+
+## Trimmed curves
+
+`TRIMMED_CURVE` now has a typed `TrimmedCurveGeometry`: its `basis_curve` ID,
+`point_1`, `point_2`, `parameter_1` and `parameter_2`. The inspector emits these
+fields under `kind: "trimmed_curve"` and includes the count in summaries.
+Construction requires finite endpoint vectors and distinct finite parameters,
+a non-null basis and positive trim sense. Source values are preserved. Missing
+and wrong-class references remain separate graph issues.
+
+Use `EvaluateCurve(model, trimmed_id, t)` to evaluate in the **original basis
+parameter**, retaining the natural `dP/dt`. The accepted interval includes both
+endpoints and is bounded by `min(parameter_1, parameter_2)` and their maximum.
+The basis sense must be known: `+` requires increasing endpoint parameters,
+and `-` requires decreasing parameters. Descending bounds do not reverse or
+rescale the natural derivative. There is no new normalized trim parameter.
+Standalone trimmed payloads require model context and return
+`kUnsupportedFormat` without it.
+
+Nested trims are followed iteratively with fixed scratch storage. Every trim
+interval is enforced; cycles return `kInvalidRecord`, and more than 64 wrappers
+return `kResourceLimit`. The final basis can be a supported analytic curve,
+NURBS curve or SP-curve. Missing/wrong bases, incompatible parameter order,
+unknown basis sense and unsupported geometry remain explicit errors. Outside
+intervals return `kInvalidOptions`. Existing component domain and resource
+checks continue to apply. An analytic circle can cross its angular seam using
+its original unbounded angular parameter; periodic NURBS wrapping is still
+unsupported.
+
+This API checks numeric intervals and basis sense, not the full validity of an
+XT trim. Stored points are retained without snapping or fitting. Their agreement
+with evaluated endpoints, tolerant-vertex correspondence, base-range placement
+and the one-period span restriction on periodic bases are not certified.
+No face clipping, approximation, unit conversion or placement transform is
+introduced. Definition rules follow the XT Format Reference (July 2022,
+pp. 49–50); basis-parameter interpretation was cross-checked against the local
+XT-to-STEP mapping without incorporating its implementation. Code remains MIT
+and adds no dependencies or CLI settings.
+
+Tests cover inclusive and descending bounds, nested intervals, analytic seam
+crossing, NURBS/SP bases, copy/move behavior, malformed definitions, missing/
+wrong/unsupported bases, unknown sense, cycles and the 64-wrapper boundary.
+CLI tests preserve the definition and unresolved references in full and summary
+reports.
+
+An independent comparison checks 9,703 evaluations on 2,050 typed trimmed
+curves from 30 private streams. It retains 480 sample failures for unsupported
+bases and 67 for NURBS domain limits. Successfully evaluated source endpoints
+agree with their stored trim points within `1.5e-10` in source units. This
+endpoint check exposed and verified the cone axial-sign correction above;
+the correction also preserves signed half-angles. All 9,138 earlier SP-curve
+samples were rechecked with the corrected cone convention. Comparison inputs
+and tools remain outside the repository.
 
 ## Build and run
 
