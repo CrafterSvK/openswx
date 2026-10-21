@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
-#pragma once
+#ifndef OPENPARASOLID_SRC_MODEL_INTERNAL_H_
+#define OPENPARASOLID_SRC_MODEL_INTERNAL_H_
 #include <span>
 #include <string_view>
 
@@ -42,6 +43,9 @@ Result<BuiltGeometry> BuildAnalytic(const DecodedNode& node,
                                     ModelFields& fields);
 Result<BuiltGeometry> BuildSpline(const DecodedNode& node, ModelFields& fields,
                                   const GeometryContext& context);
+Result<BuiltGeometry> BuildIntersection(const DecodedNode& node,
+                                       ModelFields& fields,
+                                       const GeometryContext& context);
 bool IsGeometryType(uint16_t type);
 class ModelAssembler {
  public:
@@ -60,3 +64,5 @@ class ModelAssembler {
   Model model_;
 };
 }  // namespace openparasolid::internal
+
+#endif  // OPENPARASOLID_SRC_MODEL_INTERNAL_H_

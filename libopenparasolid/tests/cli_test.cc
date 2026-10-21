@@ -528,5 +528,50 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run("--geometry --summary"), 2);
   EXPECT_EQ(Report()["model"]["geometry_counts"]["swept_surface"], 1);
 }
+TEST_F(ParasolidInspectCliTest, GeometryModeReportsIntersectionChartAndLimits) {
+  auto bytes = test::Header();
+  test::U16(bytes, 38);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 1);
+  test::U32(bytes, 1);
+  for (int i = 0; i < 5; ++i) test::CompactIndex(bytes, 0);
+  bytes.push_back('+');
+  for (uint32_t id : {50u, 51u, 2u, 3u, 3u}) test::CompactIndex(bytes, id);
+  test::U16(bytes, 40);
+  bytes.push_back(255);
+  test::U32(bytes, 2);
+  test::CompactIndex(bytes, 2);
+  test::F64(bytes, .25);
+  test::F64(bytes, 1.);
+  test::U32(bytes, 2);
+  for (double value : {0., .1, 0., 0., 0., 0., 0., 1., 2., 3.})
+    test::F64(bytes, value);
+  test::U16(bytes, 41);
+  bytes.push_back(255);
+  test::U32(bytes, 1);
+  test::CompactIndex(bytes, 3);
+  bytes.push_back('L');
+  for (int i = 0; i < 3; ++i) test::F64(bytes, 0.);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run("--geometry"), 2);
+  const auto report = Report();
+  EXPECT_EQ(report["complete"], true);
+  const auto& geometry = report["model"]["geometry"][0];
+  EXPECT_EQ(geometry["kind"], "intersection_curve");
+  EXPECT_EQ(geometry["surfaces"], json::array({50, 51}));
+  EXPECT_EQ(geometry["chart"]["base_parameter"], .25);
+  EXPECT_EQ(geometry["chart"]["positions"][1], json::array({1., 2., 3.}));
+  EXPECT_EQ(geometry["start"]["type"], 'L');
+  EXPECT_FALSE(geometry["start"].contains("term_use"));
+  EXPECT_FALSE(geometry.contains("intersection_data"));
+  ASSERT_EQ(Run("--geometry --summary"), 2);
+  EXPECT_EQ(Report()["model"]["geometry_counts"]["intersection_curve"], 1);
+}
 }  // namespace
 }  // namespace openparasolid

@@ -90,6 +90,8 @@ The first typed alternatives are:
   parameter bounds and auxiliary metadata.
 - Swept surface (`SWEPT_SURF`), retaining its section ID, sweep direction and
   nullable internal scale.
+- Intersection curve (`INTERSECTION`), retaining its surface IDs, chart,
+  limits and optional additional-data ID.
 
 Fields are located by resolved schema name and codec, not fixed field offsets.
 Inserted fields and reordered definitions therefore do not shift geometry roles.
@@ -116,8 +118,8 @@ padded or resampled.
 
 Semantic problems retain the graph and other successfully built geometry while
 adding `invalid_geometry` issues. No partial typed object is published. Known
-geometry candidates without a typed adapter (intersection curves, other
-procedural surfaces, foreign geometry, mesh and polyline) add
+geometry candidates without a typed adapter (other procedural surfaces,
+foreign geometry, mesh and polyline) add
 `unsupported_geometry` issues. Auxiliary raw nodes remain in the graph.
 `typed_geometry_complete()` covers the recognized geometry candidates; it is
 not a statement about arbitrary extension-node semantics or geometric validity.
@@ -153,6 +155,15 @@ or 3D NURBS generator validation, requires a unit sweep direction and returns
 the translated section with natural partials. Internal scale remains unused
 source metadata. Definition completeness does not certify section evaluability
 or surface regularity.
+
+`IntersectionCurveGeometry` resolves CHART/LIMIT auxiliaries from the complete
+raw index and copies only transmitted positions. Nullable error estimates and
+schema-dependent `term_use`/`intersection_data` presence are retained. Missing
+or wrong auxiliary records, inconsistent counts and nonfinite values produce
+invalid-definition issues; unsupported limit kinds remain explicit. Surface
+references stay IDs with graph diagnostics. Typed-definition completeness
+certifies neither chart geometry nor evaluator availability. In particular,
+intersection curves still require a solver and do not evaluate as polylines.
 
 No curve/surface evaluation, derivatives, trimming, tessellation, topology
 reconstruction, delta application or STEP export is performed here.

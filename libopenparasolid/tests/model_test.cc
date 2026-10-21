@@ -170,7 +170,7 @@ TEST(ParasolidModel,
     const double value = bad == 1   ? std::numeric_limits<double>::infinity()
                          : bad == 0 ? 0.
                                     : 1.;
-    f.Add(bad == 4 ? 38 : 31, 1,
+    f.Add(bad == 4 ? 130 : 31, 1,
           {Numbers("center", {0., 0., 0.}, FieldType::kVector),
            Numbers("normal", {0., 0., bad == 2 ? 0. : 1.}, FieldType::kVector),
            Numbers("x_axis", {bad == 3 ? 0. : 1., 0., bad == 3 ? 1. : 0.},

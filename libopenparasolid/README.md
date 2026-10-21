@@ -392,6 +392,54 @@ samples, 120 unavailable-payload errors and 80 explicit NURBS domain errors;
 evaluated endpoints agree within `1.5e-10` in source units. Private inputs
 and comparison tools remain outside the repository.
 
+## Intersection curve definitions
+
+`INTERSECTION` (type 38) now has a typed `IntersectionCurveGeometry`, reported
+as `kind: "intersection_curve"`. It retains the ordered pair of surface IDs,
+the chart, and both limits. Charts retain their source ID, base parameter,
+positive base scale, nullable chordal/angular/parameter errors and ordered
+positions. Limits retain their source ID, raw kind, optional `term_use` byte
+and positions. Help (`H`) and arbitrary (`L`) limits require one position;
+terminators (`T`) require the singular point and branch point in that order.
+Other kinds remain explicitly unsupported.
+
+Forward references to CHART/LIMIT records are resolved by node ID and type,
+independently of node order. Definitions require a nonempty chart whose count
+matches the transmitted positions, finite coordinates and metadata, and
+nonnegative chordal/angular estimates when set. Surface IDs must be non-null;
+surface availability and class findings remain in the reference graph rather
+than requiring an evaluator during model construction. Finite parameter-error
+values are retained without inferring a tolerance contract.
+
+The resolved schema controls optional fields: absent `term_use` and
+`intersection_data` fields stay absent in JSON, whereas an explicitly null
+data reference is reported as zero. The optional data reference remains an ID;
+type-204 UV arrays remain in the raw graph. No UV tuple layout is inferred.
+Chart and limit hvecs transmit positions only in these non-delta streams;
+tangents, surface parameters and individual chart parameters are not invented.
+
+This iteration provides definitions for a future surface-intersection solver.
+`EvaluateCurve` still returns an explicit unsupported-format error for an
+intersection curve, including through a trim. The chart is a chordal guide,
+not the exact curve. Reconstructing its parameterisation requires oriented
+surface normals; interior evaluation requires solving the documented local
+three-surface intersection. Terminator handling, branch consistency, chart
+accuracy and endpoint agreement are not certified by the typed adapter.
+
+Copied chart and limit occurrences each consume their full coordinate count,
+plus 17 scalar slots for definition metadata. The budget is checked before
+allocating position arrays, including when many curves share auxiliary nodes.
+The implementation follows the XT Format Reference (July 2022, pp. 44–47),
+remains MIT and STL-only, and adds no CLI settings or dependencies.
+
+Synthetic tests cover schema variations, optional metadata, forward and
+invalid references, nullable/nonfinite values, limit cardinalities, copy/move
+behavior, copied-value limits and CLI output. A separate source-to-model
+comparison checks all 336 intersection definitions and 3,140 copied positions
+in 30 selected private streams, with no intersection-adapter issues. This is
+a preservation check, not a numerical curve-evaluation comparison. Private
+inputs and comparison tools remain outside the repository.
+
 ## Build and run
 
 The top-level build includes the library and `parasolid_inspect`:

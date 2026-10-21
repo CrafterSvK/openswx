@@ -12,6 +12,18 @@ namespace openparasolid::cli {
 inline json VectorJson(const Vector3& v) {
   return json::array({v.x, v.y, v.z});
 }
+inline json PositionsJson(const std::vector<Vector3>& positions) {
+  auto out = json::array();
+  for (const auto& point : positions) out.push_back(VectorJson(point));
+  return out;
+}
+inline json LimitJson(const IntersectionLimit& limit) {
+  json out{{"source", limit.source.value},
+           {"type", limit.type},
+           {"positions", PositionsJson(limit.positions)}};
+  if (limit.term_use) out["term_use"] = *limit.term_use;
+  return out;
+}
 inline json AxisJson(const SplineAxis& axis) {
   return {{"degree", axis.degree},
           {"control_count", axis.control_count},
@@ -36,7 +48,26 @@ inline json GeometryJson(const GeometryObject& geometry) {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, PointGeometry>)
           out["position"] = VectorJson(p.position);
-        else if constexpr (std::is_same_v<T, NurbsCurveGeometry>) {
+        else if constexpr (std::is_same_v<T, IntersectionCurveGeometry>) {
+          out["surfaces"] = {p.surfaces[0].value, p.surfaces[1].value};
+          out["chart"] = {
+              {"source", p.chart.source.value},
+              {"base_parameter", p.chart.base_parameter},
+              {"base_scale", p.chart.base_scale},
+              {"chordal_error", p.chart.chordal_error
+                                    ? json(*p.chart.chordal_error) : json(nullptr)},
+              {"angular_error", p.chart.angular_error
+                                    ? json(*p.chart.angular_error) : json(nullptr)},
+              {"parameter_error", json::array()},
+              {"positions", PositionsJson(p.chart.positions)}};
+          for (const auto& error : p.chart.parameter_error)
+            out["chart"]["parameter_error"].push_back(
+                error ? json(*error) : json(nullptr));
+          out["start"] = LimitJson(p.start);
+          out["end"] = LimitJson(p.end);
+          if (p.intersection_data)
+            out["intersection_data"] = p.intersection_data->value;
+        } else if constexpr (std::is_same_v<T, NurbsCurveGeometry>) {
           out["descriptor"] = p.descriptor.value;
           out["axis"] = AxisJson(p.axis);
           out["controls"] = ControlsJson(p.controls);

@@ -102,6 +102,11 @@ Result<CurveEvaluation> EvaluateCurve(const GeometryPayload& geometry,
         {ErrorCode::kUnsupportedFormat, 0,
          "Trimmed curves require model context"});
   }
+  if (std::holds_alternative<IntersectionCurveGeometry>(geometry)) {
+    return Result<CurveEvaluation>::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Intersection curve evaluation requires a surface intersection solver"});
+  }
   return Result<CurveEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,
        "Curve evaluation is not implemented for this geometry payload"});

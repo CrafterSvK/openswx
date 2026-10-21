@@ -64,7 +64,7 @@ const char* GeometryName(const GeometryPayload& geometry) noexcept {
       "point",         "line",         "circle",        "ellipse",
       "plane",         "cylinder",     "cone",          "sphere",
       "torus",         "nurbs_curve",  "nurbs_surface", "surface_curve",
-      "trimmed_curve", "spun_surface", "swept_surface"};
+      "trimmed_curve", "spun_surface", "swept_surface", "intersection_curve"};
   static_assert(std::size(names) == std::variant_size_v<GeometryPayload>);
   return geometry.valueless_by_exception() ? "unknown"
                                            : names[geometry.index()];
@@ -542,7 +542,8 @@ std::optional<ParseError> ModelAssembler::BuildGeometry() {
     ModelFields fields(node, report_.schemas[node.schema_index].definition);
     const GeometryContext context{report_, model_.positions_,
                                   options_.max_values - copied_values};
-    auto built = node.node_type == 67    ? BuildSweptSurface(node, fields)
+    auto built = node.node_type == 38    ? BuildIntersection(node, fields, context)
+                 : node.node_type == 67  ? BuildSweptSurface(node, fields)
                  : node.node_type == 68  ? BuildSpunSurface(node, fields)
                  : node.node_type == 133 ? BuildTrimmedCurve(node, fields)
                  : node.node_type == 137 ? BuildSurfaceCurve(node, fields)

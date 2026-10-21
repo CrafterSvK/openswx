@@ -3,6 +3,7 @@
 #ifndef OPENPARASOLID_MODEL_H_
 #define OPENPARASOLID_MODEL_H_
 
+#include <array>
 #include <compare>
 #include <cstddef>
 #include <cstdint>
@@ -134,12 +135,38 @@ struct SweptSurfaceGeometry {
   /// Internal source metadata, not an evaluation scale factor.
   std::optional<double> scale;
 };
+struct IntersectionChart {
+  NodeId source;
+  double base_parameter = 0;
+  double base_scale = 0;
+  std::optional<double> chordal_error;
+  std::optional<double> angular_error;
+  std::array<std::optional<double>, 2> parameter_error;
+  /// Only positions are transmitted, without tangents or surface parameters.
+  std::vector<Vector3> positions;
+};
+struct IntersectionLimit {
+  NodeId source;
+  uint8_t type = 0;
+  /// Absent in older schemas; retain the raw byte when declared.
+  std::optional<uint8_t> term_use;
+  std::vector<Vector3> positions;
+};
+struct IntersectionCurveGeometry {
+  std::array<NodeId, 2> surfaces;
+  IntersectionChart chart;
+  IntersectionLimit start;
+  IntersectionLimit end;
+  /// Absent in older schemas. Optional UV data remains in the raw graph.
+  std::optional<NodeId> intersection_data;
+};
 using GeometryPayload =
     std::variant<PointGeometry, LineGeometry, CircleGeometry, EllipseGeometry,
                  PlaneGeometry, CylinderGeometry, ConeGeometry, SphereGeometry,
                  TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry,
                  SurfaceCurveGeometry, TrimmedCurveGeometry,
-                 SpunSurfaceGeometry, SweptSurfaceGeometry>;
+                 SpunSurfaceGeometry, SweptSurfaceGeometry,
+                 IntersectionCurveGeometry>;
 struct GeometryObject {
   NodeId source;
   /// Raw sense byte, including '?'; points have no sense field.
