@@ -249,9 +249,10 @@ numeric-or-null `body_type` retain raw values, including unknown bytes.
 The body owner must be null or a WORLD. Both concrete pointers and the
 reviewed `BODY_OWNER` union class 1040 are supported; that class permits WORLD
 or BODY targets. A BODY owner identifies a child body, whose region chain
-continues into siblings. Direct child queries therefore return
-`kUnsupportedFormat`; query the compound parent for its combined region
-chain. This API does not resolve child grouping or validate the child list.
+continues into siblings. `TraverseBodyBoundary` therefore rejects child IDs
+with `kUnsupportedFormat`; query the compound parent or use
+`TraverseChildBodyBoundary` for a checked child selection. The baseline body
+API does not resolve child grouping or validate the child list.
 
 Every listed region must reference the queried body and its preceding region.
 The head's previous pointer must be null, next pointers must terminate without
@@ -322,8 +323,9 @@ failures add compound-parent context. No failure returns partial results.
 This API requires the transmitted `BODY.child`, child
 owner/previous/next/child/region roles and `REGION.owner`. Older layouts missing
 `BODY.child` or `REGION.owner` can still use `TraverseBodyBoundary` to read the
-combined boundary without child grouping. Direct child queries remain
-unsupported: query the parent and use its indexed child range. The query does
+combined boundary without child grouping. For a child ID, use
+`TraverseChildBodyBoundary` below, which selects its checked parent range.
+The compound query does
 not scan for unlisted children, classify exterior regions, read child geometry
 lists or establish geometric validity, full incidence, volume or manifoldness.
 The rules follow the XT Format Reference (July 2022, pp. 88-94). The library
@@ -338,6 +340,42 @@ usable independently of child-grouping metadata. A raw-schema scan of all
 `BODY.child` head, so real nonempty-compound validation remains unavailable.
 The previous 130-stream body comparison is retained as regression coverage;
 private inputs and comparison programs remain outside the repository.
+
+## Child body boundaries
+
+`TraverseChildBodyBoundary(model, child_id, options)` in
+`openparasolid/topology.h` returns an owned `ChildBodyBoundary`. `parent`
+identifies the compound parent; `boundary.body` and `boundary.kind` identify
+the selected child, and `boundary.regions` contains only its region range.
+Nested `RegionBoundary.body` IDs retain the transmitted compound-parent
+reference. Source topology IDs are preserved rather than rewritten.
+
+The child must have a non-null BODY owner and occur in that parent's checked
+child list. The query first runs the full compound-parent traversal, then
+moves the selected range into its result. It handles non-null previous-region
+links at the beginning of a child's range and stops before sibling regions.
+A claimed parent alone does not establish child membership; unlisted children,
+self-ownership, null/missing/wrong-type parents and invalid root targets return
+`kInvalidRecord`. Unavailable metadata and unreviewed classes remain
+`kUnsupportedFormat`.
+
+`CompoundBodyTraversalOptions` retains exactly the compound query's meaning:
+all seven positive limits cover the entire parent and its children, including
+siblings, before selection. A small child does not bypass parent limits or
+invalid sibling topology/grouping. Nested errors retain code and source offset
+and add child/parent context. No failure returns partial data. Results own
+their selected boundary, can outlive the model and can be copied or moved.
+The source model is unchanged; geometry, placements, units, exterior-region
+classification and further body-validity claims remain outside this API.
+`TraverseBodyBoundary` retains its existing standard/parent-only contract.
+
+Synthetic tests verify first and later children, exact range selection,
+retained parent IDs and nested data after source destruction, all parent-wide
+limits, invalid options before lookup, malformed parent references,
+unlisted children, unavailable metadata and errors in siblings. Real child
+samples remain unavailable after the preceding corpus scan; the existing
+130-stream body comparison remains regression coverage. No dependencies or
+CLI settings are added; the library remains MIT and STL-only.
 
 ## Curve evaluation
 

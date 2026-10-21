@@ -12,6 +12,10 @@
 
 namespace openparasolid {
 namespace {
+bool PositiveBodyLimits(const BodyTraversalOptions& options) {
+  return options.max_regions && options.max_shells && options.max_face_uses &&
+         options.max_loops && options.max_fins && options.max_wire_edges;
+}
 bool Matches(uint16_t expected, uint16_t actual) {
   if (expected < 1000) return expected == actual;
   const std::initializer_list<uint16_t> curves{30,  31,  32,  38, 130,
@@ -34,6 +38,8 @@ class TopologyReader {
                                     bool allow_zero_limits = false);
   Result<BodyBoundary> ReadBody(NodeId id, const BodyTraversalOptions& options);
   Result<CompoundBodyBoundary> ReadCompound(
+      NodeId id, const CompoundBodyTraversalOptions& options);
+  Result<ChildBodyBoundary> ReadChild(
       NodeId id, const CompoundBodyTraversalOptions& options);
 
  private:
@@ -584,8 +590,7 @@ bool TopologyReader::Kind(const ModelNode& node, BodyKind& kind) {
 }
 Result<BodyBoundary> TopologyReader::ReadBody(
     NodeId id, const BodyTraversalOptions& options) {
-  if (!options.max_regions || !options.max_shells || !options.max_face_uses ||
-      !options.max_loops || !options.max_fins || !options.max_wire_edges)
+  if (!PositiveBodyLimits(options))
     return Result<BodyBoundary>::Err(
         {ErrorCode::kInvalidOptions, 0,
          "Body traversal requires positive limits"});
@@ -747,6 +752,47 @@ Result<CompoundBodyBoundary> TopologyReader::ReadCompound(
   return Result<CompoundBodyBoundary>::Ok(std::move(result));
 }
 
+Result<ChildBodyBoundary> TopologyReader::ReadChild(
+    NodeId id, const CompoundBodyTraversalOptions& options) {
+  if (!options.max_children || !PositiveBodyLimits(options.body))
+    return Result<ChildBodyBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Child traversal requires positive limits"});
+  const auto* child = Node(id, 12);
+  if (!child) return Result<ChildBodyBoundary>::Err(*error_);
+  NodeId parent;
+  if (!Reference(*child, "owner", 12, false, parent))
+    return Result<ChildBodyBoundary>::Err(*error_);
+  if (parent == id) {
+    Fail(*child, "owner", "Child body cannot own itself");
+    return Result<ChildBodyBoundary>::Err(*error_);
+  }
+  auto compound = ReadCompound(parent, options);
+  if (!compound.ok()) {
+    auto error = compound.error();
+    error.message = "Child body " + std::to_string(id.value) + ", parent " +
+                    std::to_string(parent.value) + ": " + error.message;
+    return Result<ChildBodyBoundary>::Err(std::move(error));
+  }
+  auto& value = compound.value();
+  const auto found = std::find_if(
+      value.children.begin(), value.children.end(),
+      [id](const ChildBodyRange& range) { return range.body == id; });
+  if (found == value.children.end()) {
+    Fail(*child, "owner", "Child body is not listed by its compound parent");
+    return Result<ChildBodyBoundary>::Err(*error_);
+  }
+  ChildBodyBoundary result;
+  result.parent = parent;
+  result.boundary.body = id;
+  result.boundary.kind = found->kind;
+  result.boundary.regions.reserve(found->region_count);
+  for (std::size_t i = 0; i < found->region_count; ++i)
+    result.boundary.regions.push_back(
+        std::move(value.boundary.regions[found->first_region + i]));
+  return Result<ChildBodyBoundary>::Ok(std::move(result));
+}
+
 }  // namespace
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
@@ -776,6 +822,12 @@ Result<CompoundBodyBoundary> TraverseCompoundBodyBoundary(
     const Model& model, NodeId body,
     const CompoundBodyTraversalOptions& options) {
   return TopologyReader(model).ReadCompound(body, options);
+}
+
+Result<ChildBodyBoundary> TraverseChildBodyBoundary(
+    const Model& model, NodeId child,
+    const CompoundBodyTraversalOptions& options) {
+  return TopologyReader(model).ReadChild(child, options);
 }
 
 }  // namespace openparasolid

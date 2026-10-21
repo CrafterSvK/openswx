@@ -56,6 +56,9 @@ see [loop traversal](README.md#ordered-loop-boundaries),
 [body traversal](README.md#body-boundaries).
 `TraverseCompoundBodyBoundary` adds checked child ranges over one owned parent
 boundary; see [compound children](README.md#compound-body-children).
+`TraverseChildBodyBoundary` selects one child through that checked parent and
+preserves recorded region-parent IDs; see
+[child boundaries](README.md#child-body-boundaries).
 They validate selected connectivity and list ownership without changing the
 model or claiming complete body/geometric validation or a proof of manifoldness.
 

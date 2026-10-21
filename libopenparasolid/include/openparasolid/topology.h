@@ -211,7 +211,8 @@ struct BodyTraversalOptions {
 /// Requires a known scalar byte body_type (1, 2, 3 or 6). BODY.owner must be
 /// null or reference a WORLD; querying a child BODY returns kUnsupportedFormat
 /// because its region chain continues through its siblings. Query the parent
-/// instead. Validates region back-references and reciprocal previous/next
+/// instead, or use TraverseChildBodyBoundary. Validates region back-references
+/// and reciprocal previous/next
 /// links, cycles and nested boundaries. A null region head is accepted
 /// structurally (e.g. an empty compound), without asserting body validity.
 /// All limits must be positive and apply across the entire result. Nested
@@ -254,11 +255,37 @@ struct CompoundBodyTraversalOptions {
 /// max_children additionally bounds child metadata. Errors follow the other
 /// traversal APIs, preserving nested error codes/offsets without partial data.
 /// Results own their data and leave the model unchanged. Direct child queries
-/// still require the parent. Does not scan for unlisted children, certify
-/// geometric validity or classify exterior regions. An older schema lacking
-/// BODY.child or REGION.owner remains usable through TraverseBodyBoundary.
+/// use TraverseChildBodyBoundary below. Does not scan for unlisted children,
+/// certify geometric validity or classify exterior regions. An older schema
+/// lacking BODY.child or REGION.owner remains usable through
+/// TraverseBodyBoundary.
 [[nodiscard]] Result<CompoundBodyBoundary> TraverseCompoundBodyBoundary(
     const Model& model, NodeId body,
+    const CompoundBodyTraversalOptions& options = {});
+
+struct ChildBodyBoundary {
+  NodeId parent;
+  /// Identifies the child and contains only its region range. The contained
+  /// RegionBoundary.body values retain the transmitted compound parent ID.
+  BodyBoundary boundary;
+};
+
+/// Reads one child BODY through a fully checked compound-parent boundary.
+/// Requires a non-null BODY.owner pointing to its parent and membership in
+/// that parent's child list. Moves only the selected child's region range
+/// into the owned result; no sibling regions are returned. Preserves source
+/// REGION.body references to the parent, without rewriting topology IDs.
+/// All options and aggregate limits apply to the entire parent, including
+/// siblings, as in TraverseCompoundBodyBoundary. Invalid sibling topology or
+/// grouping therefore blocks the query. Options are checked before lookup.
+/// Missing/unlisted/wrong-type targets and malformed ownership return
+/// kInvalidRecord; unavailable metadata and unreviewed classes remain
+/// kUnsupportedFormat. Nested errors retain code/offset with child/parent
+/// context. Errors never return partial results and the model is unchanged.
+/// No geometry, placement, exterior status or additional body validity is
+/// inferred. TraverseBodyBoundary retains its standard/parent-only contract.
+[[nodiscard]] Result<ChildBodyBoundary> TraverseChildBodyBoundary(
+    const Model& model, NodeId child,
     const CompoundBodyTraversalOptions& options = {});
 
 }  // namespace openparasolid
