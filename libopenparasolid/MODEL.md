@@ -83,6 +83,7 @@ The first typed alternatives are:
 - Plane, cylinder, cone, sphere and torus.
 - NURBS curve (`B_CURVE` + `NURBS_CURVE`) and surface (`B_SURFACE` +
   `NURBS_SURFACE`), including their referenced control and knot arrays.
+- Surface curve (`SP_CURVE`), retaining surface and 2D parameter-curve IDs.
 
 Fields are located by resolved schema name and codec, not fixed field offsets.
 Inserted fields and reordered definitions therefore do not shift geometry roles.
@@ -109,11 +110,18 @@ padded or resampled.
 
 Semantic problems retain the graph and other successfully built geometry while
 adding `invalid_geometry` issues. No partial typed object is published. Known
-geometry candidates without a typed adapter (intersection, trimmed and SP
+geometry candidates without a typed adapter (intersection and trimmed
 curves, procedural surfaces, foreign geometry, mesh and polyline) add
 `unsupported_geometry` issues. Auxiliary raw nodes remain in the graph.
 `typed_geometry_complete()` covers the recognized geometry candidates; it is
 not a statement about arbitrary extension-node semantics or geometric validity.
+
+`SurfaceCurveGeometry` retains non-null surface and parameter-curve IDs without
+resolving geometry during construction. This supports forward references and
+keeps missing/wrong-class findings in the reference graph. The model overload
+of `EvaluateCurve` checks 2D B-curve compatibility and evaluator availability
+and applies the natural chain rule. Typed-definition completeness is distinct
+from composition validity; auxiliary original/tolerance fields are not used.
 
 No curve/surface evaluation, derivatives, trimming, tessellation, topology
 reconstruction, delta application or STEP export is performed here.
@@ -200,7 +208,8 @@ array/count mismatches, resource bounds and diagnostic truncation. CLI and
 configuration tests cover output, summaries, exit status, rejected deltas,
 partial input, environment precedence and invalid settings.
 
-The local corpus run builds 5084 non-delta models with 5,036,695 nodes and
+The earlier corpus run, before the surface-curve adapter, built 5084 non-delta
+models with 5,036,695 nodes and
 715,451 typed geometry objects. All 892 delta streams are explicitly rejected
 for model construction. There are 146,718 unsupported geometry candidates and
 100 candidates that fail the initial geometry-data checks. The graph reports

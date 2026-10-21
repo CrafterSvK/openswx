@@ -60,8 +60,9 @@ const char* ToString(ModelIssueCode code) noexcept {
 }
 const char* GeometryName(const GeometryPayload& geometry) noexcept {
   constexpr const char* names[]{
-      "point", "line",   "circle", "ellipse",     "plane",        "cylinder",
-      "cone",  "sphere", "torus",  "nurbs_curve", "nurbs_surface"};
+      "point", "line",        "circle",        "ellipse",
+      "plane", "cylinder",    "cone",          "sphere",
+      "torus", "nurbs_curve", "nurbs_surface", "surface_curve"};
   static_assert(std::size(names) == std::variant_size_v<GeometryPayload>);
   return geometry.valueless_by_exception() ? "unknown"
                                            : names[geometry.index()];
@@ -174,6 +175,18 @@ ParseError Invalid(uint64_t offset, const char* message) {
 }
 ParseError Limit(uint64_t offset) {
   return {ErrorCode::kResourceLimit, offset, "Model resource limit exceeded"};
+}
+Result<BuiltGeometry> BuildSurfaceCurve(const DecodedNode& node,
+                                        ModelFields& fields) {
+  SurfaceCurveGeometry curve;
+  if (!fields.Reference("surface", curve.surface) ||
+      !fields.Reference("b_curve", curve.parameter_curve))
+    return Result<BuiltGeometry>::Err(fields.Error());
+  if (curve.surface.value == 0 || curve.parameter_curve.value == 0)
+    return Result<BuiltGeometry>::Err(Invalid(
+        node.offset,
+        "Surface curve requires non-null surface and B-curve references"));
+  return Result<BuiltGeometry>::Ok({GeometryPayload{curve}, 2});
 }
 }  // namespace
 bool IsGeometryType(uint16_t type) {
@@ -435,7 +448,8 @@ std::optional<ParseError> ModelAssembler::BuildGeometry() {
     ModelFields fields(node, report_.schemas[node.schema_index].definition);
     const GeometryContext context{report_, model_.positions_,
                                   options_.max_values - copied_values};
-    auto built = node.node_type == 124 || node.node_type == 134
+    auto built = node.node_type == 137 ? BuildSurfaceCurve(node, fields)
+                 : node.node_type == 124 || node.node_type == 134
                      ? BuildSpline(node, fields, context)
                      : BuildAnalytic(node, fields);
     if (!built.ok()) {

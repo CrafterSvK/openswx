@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
-#pragma once
+#ifndef OPENPARASOLID_TOOLS_MODEL_REPORT_H_
+#define OPENPARASOLID_TOOLS_MODEL_REPORT_H_
 #include <map>
 #include <type_traits>
 
@@ -46,6 +47,9 @@ inline json GeometryJson(const GeometryObject& geometry) {
           out["v"] = AxisJson(p.v);
           out["controls"] = ControlsJson(p.controls);
           out["surface_form"] = p.surface_form;
+        } else if constexpr (std::is_same_v<T, SurfaceCurveGeometry>) {
+          out["surface"] = p.surface.value;
+          out["parameter_curve"] = p.parameter_curve.value;
         } else {
           if constexpr (requires { p.origin; })
             out["origin"] = VectorJson(p.origin);
@@ -133,3 +137,5 @@ inline json ModelReport(const Model& model, const ModelOptions& options,
   return out;
 }
 }  // namespace openparasolid::cli
+
+#endif  // OPENPARASOLID_TOOLS_MODEL_REPORT_H_

@@ -28,6 +28,17 @@ struct CurveEvaluation {
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
     const GeometryPayload& geometry, double parameter);
 
+/// Resolves a curve by ID in this model, including SP_CURVE's 2D NURBS and
+/// supporting surface. Applies the natural chain rule without sense reversal,
+/// trimming, placement transforms or periodic parameter wrapping. References
+/// are scoped to this model; a standalone SP_CURVE payload needs this context.
+/// Missing/wrong targets and non-2D parameter curves are invalid records;
+/// untyped/unsupported geometry returns kUnsupportedFormat. No recursion is
+/// performed. Inherited parameter/data/resource checks remain in force.
+[[nodiscard]] Result<CurveEvaluation> EvaluateCurve(const Model& model,
+                                                    NodeId curve,
+                                                    double parameter);
+
 struct SurfaceEvaluation {
   Vector3 position;
   /// Natural partial derivatives, without normalization or sense reversal.

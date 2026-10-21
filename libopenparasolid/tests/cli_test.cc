@@ -402,5 +402,37 @@ TEST_F(ParasolidInspectCliTest,
   EXPECT_EQ(r["model"]["issues"][0]["code"], "missing_target");
 }
 
+TEST_F(ParasolidInspectCliTest, GeometryModeRetainsSurfaceCurveReferences) {
+  auto bytes = test::Header();
+  test::U16(bytes, 137);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 10);
+  test::U32(bytes, 10);
+  for (int i = 0; i < 5; ++i) test::CompactIndex(bytes, 0);
+  bytes.push_back('-');
+  test::CompactIndex(bytes, 20);
+  test::CompactIndex(bytes, 1);
+  test::CompactIndex(bytes, 10);  // Ignored original reference may be cyclic.
+  test::F64(bytes, 0);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run("--geometry"), 2);
+  auto r = Report();
+  EXPECT_EQ(r["complete"], true);
+  const auto& geometry = r["model"]["geometry"][0];
+  EXPECT_EQ(geometry["kind"], "surface_curve");
+  EXPECT_EQ(geometry["surface"], 20);
+  EXPECT_EQ(geometry["parameter_curve"], 1);
+  EXPECT_EQ(r["model"]["typed_geometry_complete"], true);
+  EXPECT_EQ(r["model"]["missing_reference_count"], 2);
+  ASSERT_EQ(Run("--geometry --summary"), 2);
+  EXPECT_EQ(Report()["model"]["geometry_counts"]["surface_curve"], 1);
+}
+
 }  // namespace
 }  // namespace openparasolid

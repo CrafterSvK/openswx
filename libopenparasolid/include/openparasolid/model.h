@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
-#pragma once
+#ifndef OPENPARASOLID_MODEL_H_
+#define OPENPARASOLID_MODEL_H_
 
 #include <compare>
 #include <cstddef>
@@ -104,10 +105,15 @@ struct NurbsSurfaceGeometry {
   SplineControlNet controls;
   uint8_t surface_form = 0;
 };
+struct SurfaceCurveGeometry {
+  NodeId surface;
+  NodeId parameter_curve;
+};
 using GeometryPayload =
     std::variant<PointGeometry, LineGeometry, CircleGeometry, EllipseGeometry,
                  PlaneGeometry, CylinderGeometry, ConeGeometry, SphereGeometry,
-                 TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry>;
+                 TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry,
+                 SurfaceCurveGeometry>;
 struct GeometryObject {
   NodeId source;
   /// Raw sense byte, including '?'; points have no sense field.
@@ -218,3 +224,5 @@ class ModelBuilder {
 [[nodiscard]] const char* GeometryName(
     const GeometryPayload& geometry) noexcept;
 }  // namespace openparasolid
+
+#endif  // OPENPARASOLID_MODEL_H_

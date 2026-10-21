@@ -92,6 +92,11 @@ Result<CurveEvaluation> EvaluateCurve(const GeometryPayload& geometry,
   if (const auto* curve = std::get_if<NurbsCurveGeometry>(&geometry)) {
     return internal::EvaluateNurbsCurve(*curve, parameter);
   }
+  if (std::holds_alternative<SurfaceCurveGeometry>(geometry)) {
+    return Result<CurveEvaluation>::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Surface curves require model context"});
+  }
   return Result<CurveEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,
        "Curve evaluation is not implemented for this geometry payload"});

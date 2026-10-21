@@ -173,6 +173,70 @@ synthetic surfaces and 120 surfaces in 25 private streams. Rechecking the
 shared kernel also preserves agreement on all 8,565 earlier curve samples.
 Comparison tools, data and SciPy remain outside the library and repository.
 
+## Curves on surfaces
+
+`SP_CURVE` now has a typed `SurfaceCurveGeometry` with `surface` and
+`parameter_curve` node IDs. Model JSON reports it as `kind: "surface_curve"`;
+full geometry reports retain both IDs and summaries include its count.
+Non-null definitions can be represented with forward or unresolved references;
+the reference graph reports missing/wrong targets independently. The raw
+`original` and `tolerance_to_original` fields remain in the parse report, and
+original references remain in the graph. These documented unused fields do
+not provide a fallback evaluator or an approximation tolerance.
+
+Use the model overload to evaluate an SP-curve:
+
+```cpp
+auto evaluated = openparasolid::EvaluateCurve(
+    model, openparasolid::NodeId{42}, parameter);
+if (!evaluated.ok()) {
+  // Handle missing dependencies, unsupported geometry or parameter errors.
+  return;
+}
+const auto& point = evaluated.value().position;
+const auto& tangent = evaluated.value().first_derivative;
+```
+
+This overload also resolves ordinary supported curves by ID. A standalone
+SP-curve payload has no dependency context and returns `kUnsupportedFormat`.
+Targets are scoped to the supplied model; copies and moves retain their ID
+relationships. No mutable caches, ownership pointers or recursive traversal
+are introduced.
+
+The parameter curve must be a `B_CURVE` with two spatial components: dimension
+2 when nonrational or homogeneous dimension 3 when rational. Its evaluation
+returns `(u(t), v(t))`; the supporting analytic or NURBS surface then returns
+`P = S(u,v)`. The natural derivative uses the chain rule
+`dP/dt = S_u * du/dt + S_v * dv/dt`. All three senses remain unchanged and are
+not applied to this derivative. Source units, parameters and placements are
+not converted. Curve and surface domain/resource rules remain in force;
+periodic wrapping, face trimming and approximation are not added.
+
+Missing or wrong-class dependencies and 3D parameter curves return
+`kInvalidRecord`. Dependencies without typed payloads or supporting evaluators
+return `kUnsupportedFormat`. Parameter/domain and resource errors propagate
+from the component evaluators; an unrepresentable composed derivative is an
+invalid-record error. Cyclic SP dependencies are incompatible with the required
+2D B-curve/surface roles and are rejected without recursion. The unused
+`original` reference is never followed, including when it is cyclic.
+
+The builder's typed-definition count does not certify that the referenced
+curve is 2D or the composition is evaluable. The model evaluator performs
+those stronger checks; unrelated model findings do not prevent evaluation of
+an otherwise supported curve. SP-curve definitions follow the XT Format
+Reference (July 2022, pp. 51–52). The implementation is MIT code with no new
+runtime dependencies or CLI options.
+
+Synthetic tests cover forward references, rational UV curves, analytic and
+NURBS supporting surfaces, natural chain-rule derivatives, copying/moving,
+cyclic and wrong/missing targets, null definitions, 3D parameter-curve
+rejection, domain/resource propagation and composed derivative overflow. CLI
+tests check the new payload and summary count without hiding reference issues.
+An independent SciPy/NumPy comparison checks 9,138 samples from 2,140 SP-curves
+in 30 private streams. There are 158 curves with unavailable typed dependencies
+and 772 sample-domain errors; these are retained as explicit limitations rather
+than approximated. Comparison tools and private data stay outside the repository.
+
 ## Build and run
 
 The top-level build includes the library and `parasolid_inspect`:
