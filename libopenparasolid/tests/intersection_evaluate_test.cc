@@ -429,5 +429,133 @@ TEST(ParasolidIntersectionEvaluate,
   }
   EXPECT_FALSE(EvaluateCurve(model.value(), NodeId{1}, 2, {0, 1e-13}).ok());
 }
+TEST(ParasolidIntersectionEvaluate,
+     EndpointToleranceIsExplicitAndReturnsNaturalEndpointData) {
+  ModelFixture f;
+  Definition(f, CirclePoints({0, .8}));
+  Plane(f);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-13);
+  ASSERT_TRUE(chart.ok());
+  const auto& times = chart.value().parameterization.parameters;
+  for (bool upper : {false, true}) {
+    const double endpoint = upper ? times.back() : times.front();
+    const double outside = std::nextafter(
+        endpoint, upper ? std::numeric_limits<double>::infinity()
+                        : -std::numeric_limits<double>::infinity());
+    const auto strict = EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                                  outside, {1e-13, 1e-13});
+    ASSERT_FALSE(strict.ok());
+    EXPECT_EQ(strict.error().code, ErrorCode::kInvalidOptions);
+    const auto exact = EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                                 endpoint, {1e-13, 1e-13});
+    const auto snapped = EvaluateIntersectionCurve(
+        model.value(), NodeId{1}, outside, {1e-13, 1e-13, 1e-12});
+    ASSERT_TRUE(exact.ok());
+    ASSERT_TRUE(snapped.ok());
+    EXPECT_EQ(snapped.value().position.x, exact.value().position.x);
+    EXPECT_EQ(snapped.value().position.y, exact.value().position.y);
+    EXPECT_EQ(snapped.value().first_derivative.x,
+              exact.value().first_derivative.x);
+    EXPECT_EQ(snapped.value().first_derivative.y,
+              exact.value().first_derivative.y);
+    const auto too_far = EvaluateIntersectionCurve(
+        model.value(), NodeId{1}, endpoint + (upper ? 1e-4 : -1e-4),
+        {1e-13, 1e-13, 1e-8});
+    ASSERT_FALSE(too_far.ok());
+    EXPECT_EQ(too_far.error().code, ErrorCode::kInvalidOptions);
+  }
+  // Inclusive tolerance comparison, using exactly representable values.
+  const auto boundary = EvaluateIntersectionCurve(
+      model.value(), NodeId{1}, times.front() - .125, {1e-13, 1e-13, .125});
+  EXPECT_TRUE(boundary.ok());
+}
+TEST(ParasolidIntersectionEvaluate,
+     EndpointToleranceDoesNotMoveInteriorQueriesOrKnots) {
+  ModelFixture f;
+  Definition(f, CirclePoints({0, .4, 1.1}));
+  Plane(f);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-13);
+  ASSERT_TRUE(chart.ok());
+  const auto& times = chart.value().parameterization.parameters;
+  for (double t :
+       {times[1], times[1] + 1e-5, std::midpoint(times[1], times[2])}) {
+    const auto strict =
+        EvaluateIntersectionCurve(model.value(), NodeId{1}, t, {1e-13, 1e-13});
+    const auto tolerant = EvaluateIntersectionCurve(model.value(), NodeId{1}, t,
+                                                    {1e-13, 1e-13, 1000});
+    ASSERT_TRUE(strict.ok());
+    ASSERT_TRUE(tolerant.ok());
+    EXPECT_EQ(strict.value().position.x, tolerant.value().position.x);
+    EXPECT_EQ(strict.value().position.y, tolerant.value().position.y);
+    EXPECT_EQ(strict.value().first_derivative.y,
+              tolerant.value().first_derivative.y);
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     EndpointToleranceLeavesEveryTrimIntervalStrict) {
+  ModelFixture f;
+  const auto points = CirclePoints({0, .8});
+  // The upper stored trim parameter is one representable step beyond the
+  // reconstructed chart end. It remains an inclusive trim endpoint.
+  Definition(f, points);
+  Plane(f);
+  Sphere(f);
+  auto first = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(first.ok());
+  const auto chart = EvaluateIntersectionChart(first.value(), NodeId{1}, 1e-13);
+  ASSERT_TRUE(chart.ok());
+  const double chart_end = chart.value().parameterization.parameters.back();
+  const double trim_end =
+      std::nextafter(chart_end, std::numeric_limits<double>::infinity());
+  Trim(f, 10, 1, trim_end, -1.8);
+  Trim(f, 11, 1, .1, -1.8);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const IntersectionEvaluationOptions options{1e-13, 1e-13, 1e-12};
+  const auto accepted =
+      EvaluateCurve(model.value(), NodeId{10}, trim_end, options);
+  ASSERT_TRUE(accepted.ok());
+  EXPECT_EQ(accepted.value().position.x, points.back().x);
+  EXPECT_FALSE(
+      EvaluateCurve(model.value(), NodeId{10}, trim_end, {1e-13, 1e-13}).ok());
+  for (auto [id, t] :
+       {std::pair{10u, std::nextafter(trim_end,
+                                      std::numeric_limits<double>::infinity())},
+        std::pair{11u, std::nextafter(
+                           .1, std::numeric_limits<double>::infinity())}}) {
+    const auto direct =
+        EvaluateIntersectionCurve(model.value(), NodeId{1}, t, options);
+    ASSERT_TRUE(direct.ok());
+    const auto wrapped = EvaluateCurve(model.value(), NodeId{id}, t, options);
+    ASSERT_FALSE(wrapped.ok());
+    EXPECT_EQ(wrapped.error().code, ErrorCode::kInvalidOptions);
+    EXPECT_NE(wrapped.error().message.find("trim interval"), std::string::npos);
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     EndpointToleranceMustBeFiniteAndNonnegativeForAllCurves) {
+  ModelFixture f;
+  f.Spline();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (double tolerance : {-1., std::numeric_limits<double>::infinity(),
+                           std::numeric_limits<double>::quiet_NaN()}) {
+    const IntersectionEvaluationOptions options{0, 1e-13, tolerance};
+    const auto general = EvaluateCurve(model.value(), NodeId{1}, .5, options);
+    const auto direct =
+        EvaluateIntersectionCurve(model.value(), NodeId{1}, .5, options);
+    ASSERT_FALSE(general.ok());
+    ASSERT_FALSE(direct.ok());
+    EXPECT_EQ(general.error().code, ErrorCode::kInvalidOptions);
+    EXPECT_EQ(direct.error().code, ErrorCode::kInvalidOptions);
+  }
+  EXPECT_TRUE(EvaluateCurve(model.value(), NodeId{1}, .5, {0, 1e-13, 0}).ok());
+}
 }  // namespace
 }  // namespace openparasolid

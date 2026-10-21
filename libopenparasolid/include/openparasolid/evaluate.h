@@ -169,6 +169,10 @@ struct IntersectionEvaluationOptions {
   double chart_tolerance = 0;
   /// Positive absolute residual tolerance for interior coincidence/plane solves.
   double solve_tolerance = 0;
+  /// Nonnegative absolute tolerance in original curve parameter units. Allows
+  /// snapping just outside outer chart endpoints; zero retains strict bounds.
+  /// Does not relax trim intervals or move interior parameters/chart knots.
+  double chart_parameter_tolerance = 0;
 };
 
 /// Evaluates model curves with explicit options for analytic intersections,
@@ -176,15 +180,17 @@ struct IntersectionEvaluationOptions {
 /// options for every geometry kind. Other curves retain the existing evaluator
 /// behavior. Trim intervals, basis sense, cycle/depth and resource checks still
 /// apply; the original basis parameter and natural derivative are preserved.
-/// Intersection chart bounds also apply, with no terminator extension. Stored
-/// trim endpoints and branch topology are not certified. The overload without
+/// Intersection chart bounds and optional endpoint snapping also apply, with
+/// no terminator extension. Stored trim endpoints and branch topology are not
+/// certified. The overload without
 /// options retains its unsupported result for intersections.
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);
 
 /// Evaluates a directly referenced analytic INTERSECTION within its chart.
-/// Requires a finite parameter and explicit finite tolerances in source units.
+/// Requires a finite parameter and explicit finite chart/solve tolerances in
+/// source units. Optional endpoint tolerance uses original parameter units.
 /// Prepares the chart, then locally solves coincidence of its
 /// two supporting surfaces with the XT chord-normal plane. Returns the natural
 /// dP/dt; curve sense does not reverse it. Exact chart parameters return their
@@ -192,10 +198,13 @@ struct IntersectionEvaluationOptions {
 /// Interior solves use at most 32 Newton updates and 16
 /// damping trials per update; singular/stalled/nonconvergent solves are errors.
 /// Chart/inversion/normal resource and validity checks remain in force.
-/// Outside-chart parameters are invalid options. No terminator extension, trim
-/// unwrapping, global branch certification or nonanalytic inversion is provided.
-/// EvaluateCurve retains its unsupported result for intersections because it
-/// has no explicit distance tolerance argument.
+/// Outside-chart parameters beyond chart_parameter_tolerance are invalid
+/// options. Within that explicit parameter tolerance, an outside query returns
+/// the nearest outer chart endpoint and its natural derivative (not the zero
+/// derivative of a clamped extension). Inside queries are unchanged.
+/// No terminator extension, trim unwrapping, global branch certification or
+/// nonanalytic inversion is provided. EvaluateCurve without options retains
+/// its unsupported result for intersections.
 [[nodiscard]] Result<CurveEvaluation> EvaluateIntersectionCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);

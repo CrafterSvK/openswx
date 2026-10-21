@@ -589,7 +589,9 @@ direct analytic `INTERSECTION` inside its reconstructed chart. It returns
 a point and natural first derivative without flipping them for curve sense.
 `IntersectionEvaluationOptions` requires two explicit finite tolerances in
 source units: nonnegative `chart_tolerance` for stored-point membership and
-positive `solve_tolerance` for interior residuals. A coarse source chart does
+positive `solve_tolerance` for interior residuals. Optional
+`chart_parameter_tolerance` controls outer endpoint snapping in original curve
+parameter units, with zero as the strict default. A coarse source chart does
 not force a loose numerical solve. The `EvaluateCurve` overload without options
 retains an explicit unsupported-format result and points callers to this API.
 
@@ -620,7 +622,8 @@ interior solve tolerance. Knot derivatives use the following chord, except
 at the final endpoint. Source rounding can affect numerical C1 agreement.
 
 Chart preparation is repeated per call and retains its bounds and dependency
-checks. Parameters outside the chart are invalid options; terminator extensions,
+checks. Parameters outside the chart beyond the explicit endpoint tolerance
+are invalid options; terminator extensions,
 trim wrappers and nonanalytic surfaces remain unsupported by this API.
 Residual tolerances are not bounds on point/derivative error near poorly
 conditioned intersections. Global branch identity, regularity, chart accuracy
@@ -652,7 +655,8 @@ interval and basis-sense check applies, with cycle detection and a maximum of
 64 wrappers. Missing/wrong bases and untyped dependencies remain explicit
 errors. Source basis parameters and natural derivatives are preserved without
 reparameterising or reversing them; the intersection's reconstructed chart
-bounds also apply. Stored endpoint agreement, periodic spans, branch topology
+bounds and optional chart endpoint tolerance also apply. Stored endpoint
+agreement, periodic spans, branch topology
 and terminator extension are not certified or inferred. No default tolerances,
 CLI settings or dependencies are added; code remains MIT and STL-only.
 
@@ -668,10 +672,43 @@ Of their 120 queries, 118 match independent SciPy/complex-step evaluation:
 maximum point component difference is below `5e-14`, normalized derivative
 difference below `2e-13`, and agreement with evaluated stored trim endpoints
 within `2.3e-12` in source units. Two stored endpoint parameters exceed the
-reconstructed chart maximum by approximately `1.7e-17` and `2.4e-17`; strict
-chart bounds currently reject them. There is no implicit parameter tolerance
-or endpoint snapping. Private inputs and comparison tools remain outside the
-repository.
+reconstructed chart maximum by approximately `1.7e-17` and `2.4e-17`; the strict
+default rejects them. The optional parameter tolerance below handles these
+queries without changing that default. Private inputs and comparison tools
+remain outside the repository.
+
+## Chart endpoint parameter tolerance
+
+`IntersectionEvaluationOptions::chart_parameter_tolerance` is a finite
+nonnegative absolute tolerance in the **original curve parameter units**.
+It defaults to zero. If a query lies outside the reconstructed chart by no
+more than this tolerance, intersection evaluation returns the nearest outer
+chart endpoint and its natural first derivative. It does not extrapolate a
+new curve segment or return the zero derivative of a clamped continuation.
+
+Only outside queries are adjusted. Interior queries and inner chart knots
+retain their parameters, even if the configured tolerance exceeds an interval's
+width. Larger outside gaps remain invalid options. Gap comparison uses wide
+intermediates. Trim intervals remain strictly inclusive and are checked before
+intersection evaluation; this option cannot admit a query outside any enclosing
+trim. Chart membership and solver residual tolerances keep their separate
+roles and source-distance units. Auxiliary chart error estimates never supply
+an implicit tolerance. Invalid parameter tolerances are rejected by both the
+direct intersection API and the model curve overload, including ordinary
+curves evaluated with options.
+
+Tests cover both endpoints, strict defaults, the inclusive tolerance boundary,
+larger gaps, unchanged interior samples/knots, natural endpoint derivatives,
+trim-bound enforcement and invalid options. The targeted seven-stream,
+24-trim comparison now verifies all 120 queries with
+`chart_tolerance = 1e-9`, `solve_tolerance = 1e-13` and
+`chart_parameter_tolerance = 1e-16`. Independent SciPy/complex-step comparison
+still gives maximum point component difference below `5e-14`, normalized
+derivative difference below `2e-13`, and stored endpoint distance below
+`2.3e-12` in source units. Repeating the same comparison with the zero default
+retains the original 118 successes and two explicit chart-bound errors.
+There are no new CLI settings or dependencies; code remains MIT and STL-only.
+Private inputs and comparison tools remain outside the repository.
 
 ## Intersection curve definitions
 

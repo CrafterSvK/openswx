@@ -183,19 +183,28 @@ Result<CurveEvaluation> EvaluateIntersectionCurve(
     const IntersectionEvaluationOptions& options) {
   if (!std::isfinite(parameter) || !std::isfinite(options.chart_tolerance) ||
       options.chart_tolerance < 0 || !std::isfinite(options.solve_tolerance) ||
-      options.solve_tolerance <= 0)
+      options.solve_tolerance <= 0 ||
+      !std::isfinite(options.chart_parameter_tolerance) ||
+      options.chart_parameter_tolerance < 0)
     return Result<CurveEvaluation>::Err(
         {ErrorCode::kInvalidOptions, 0,
          "Intersection evaluation requires a finite parameter and valid "
-         "chart/solve tolerances"});
+         "chart, solve and parameter tolerances"});
   const auto prepared =
       EvaluateIntersectionChart(model, curve, options.chart_tolerance);
   if (!prepared.ok()) return Result<CurveEvaluation>::Err(prepared.error());
   const auto& parameters = prepared.value().parameterization.parameters;
-  if (parameter < parameters.front() || parameter > parameters.back())
-    return Result<CurveEvaluation>::Err(
-        {ErrorCode::kInvalidOptions, 0,
-         "Intersection parameter is outside its chart"});
+  if (parameter < parameters.front() || parameter > parameters.back()) {
+    const double endpoint = parameter < parameters.front() ? parameters.front()
+                                                           : parameters.back();
+    const long double gap =
+        std::abs(static_cast<long double>(parameter) - endpoint);
+    if (gap > options.chart_parameter_tolerance)
+      return Result<CurveEvaluation>::Err(
+          {ErrorCode::kInvalidOptions, 0,
+           "Intersection parameter is outside its chart"});
+    parameter = endpoint;
+  }
   const auto& geometry = model.geometry()[*model.FindNode(curve)->geometry];
   const auto& intersection =
       std::get<IntersectionCurveGeometry>(geometry.payload);

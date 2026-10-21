@@ -219,10 +219,13 @@ Result<CurveEvaluation> EvaluateCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options) {
   if (!std::isfinite(options.chart_tolerance) || options.chart_tolerance < 0 ||
-      !std::isfinite(options.solve_tolerance) || options.solve_tolerance <= 0)
+      !std::isfinite(options.solve_tolerance) || options.solve_tolerance <= 0 ||
+      !std::isfinite(options.chart_parameter_tolerance) ||
+      options.chart_parameter_tolerance < 0)
     return Result<CurveEvaluation>::Err(
         {ErrorCode::kInvalidOptions, 0,
-         "Curve evaluation requires valid chart/solve tolerances"});
+         "Curve evaluation requires valid chart, solve and parameter "
+         "tolerances"});
   return EvaluateModelCurve(model, curve, parameter, &options);
 }
 
