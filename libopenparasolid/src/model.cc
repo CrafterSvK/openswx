@@ -61,10 +61,10 @@ const char* ToString(ModelIssueCode code) noexcept {
 }
 const char* GeometryName(const GeometryPayload& geometry) noexcept {
   constexpr const char* names[]{
-      "point",         "line",        "circle",        "ellipse",
-      "plane",         "cylinder",    "cone",          "sphere",
-      "torus",         "nurbs_curve", "nurbs_surface", "surface_curve",
-      "trimmed_curve", "spun_surface"};
+      "point",         "line",         "circle",        "ellipse",
+      "plane",         "cylinder",     "cone",          "sphere",
+      "torus",         "nurbs_curve",  "nurbs_surface", "surface_curve",
+      "trimmed_curve", "spun_surface", "swept_surface"};
   static_assert(std::size(names) == std::variant_size_v<GeometryPayload>);
   return geometry.valueless_by_exception() ? "unknown"
                                            : names[geometry.index()];
@@ -241,6 +241,20 @@ bool NullableVector(ModelFields& fields, const char* name,
   }
   result = Vector3{values[0], values[1], values[2]};
   return true;
+}
+Result<BuiltGeometry> BuildSweptSurface(const DecodedNode& node,
+                                        ModelFields& fields) {
+  SweptSurfaceGeometry surface;
+  if (!fields.Reference("section", surface.section) ||
+      !fields.Vector("sweep", surface.sweep))
+    return Result<BuiltGeometry>::Err(fields.Error());
+  if (surface.section.value == 0 ||
+      (surface.sweep.x == 0 && surface.sweep.y == 0 && surface.sweep.z == 0) ||
+      !NullableNumber(fields, "scale", surface.scale))
+    return Result<BuiltGeometry>::Err(
+        Invalid(node.offset,
+                "Invalid swept surface section, direction or internal scale"));
+  return Result<BuiltGeometry>::Ok({GeometryPayload{surface}, 5});
 }
 Result<BuiltGeometry> BuildSpunSurface(const DecodedNode& node,
                                        ModelFields& fields) {
@@ -528,7 +542,8 @@ std::optional<ParseError> ModelAssembler::BuildGeometry() {
     ModelFields fields(node, report_.schemas[node.schema_index].definition);
     const GeometryContext context{report_, model_.positions_,
                                   options_.max_values - copied_values};
-    auto built = node.node_type == 68    ? BuildSpunSurface(node, fields)
+    auto built = node.node_type == 67    ? BuildSweptSurface(node, fields)
+                 : node.node_type == 68  ? BuildSpunSurface(node, fields)
                  : node.node_type == 133 ? BuildTrimmedCurve(node, fields)
                  : node.node_type == 137 ? BuildSurfaceCurve(node, fields)
                  : node.node_type == 124 || node.node_type == 134

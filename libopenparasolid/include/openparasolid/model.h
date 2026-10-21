@@ -128,12 +128,18 @@ struct SpunSurfaceGeometry {
   /// Internal source metadata, not an evaluation scale factor.
   std::optional<double> scale;
 };
+struct SweptSurfaceGeometry {
+  NodeId section;
+  Vector3 sweep;
+  /// Internal source metadata, not an evaluation scale factor.
+  std::optional<double> scale;
+};
 using GeometryPayload =
     std::variant<PointGeometry, LineGeometry, CircleGeometry, EllipseGeometry,
                  PlaneGeometry, CylinderGeometry, ConeGeometry, SphereGeometry,
                  TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry,
                  SurfaceCurveGeometry, TrimmedCurveGeometry,
-                 SpunSurfaceGeometry>;
+                 SpunSurfaceGeometry, SweptSurfaceGeometry>;
 struct GeometryObject {
   NodeId source;
   /// Raw sense byte, including '?'; points have no sense field.

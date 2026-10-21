@@ -115,6 +115,30 @@ Result<const GeometryObject*> ResolveTrimmed(const Model& model,
   return Result<const GeometryObject*>::Ok(geometry);
 }
 
+Result<CurveEvaluation> SampleSection(const Model& model, NodeId profile_id,
+                                      double u) {
+  const auto* node = model.FindNode(profile_id);
+  if (!node || (node->node_type != 30 && node->node_type != 31 &&
+                node->node_type != 32 && node->node_type != 134)) {
+    return Result<CurveEvaluation>::Err(
+        {ErrorCode::kInvalidRecord, 0,
+         "Profile surface requires an analytic or B-curve profile"});
+  }
+  const auto profile = Geometry(model, profile_id);
+  if (!profile.ok()) return Result<CurveEvaluation>::Err(profile.error());
+  const auto* nurbs =
+      std::get_if<NurbsCurveGeometry>(&profile.value()->payload);
+  if (nurbs &&
+      nurbs->controls.dimension != (nurbs->controls.rational ? 4 : 3)) {
+    return Result<CurveEvaluation>::Err(
+        {ErrorCode::kInvalidRecord, 0,
+         "Surface generator must be three-dimensional"});
+  }
+  const auto sampled = EvaluateCurve(profile.value()->payload, u);
+  if (!sampled.ok()) return Result<CurveEvaluation>::Err(sampled.error());
+  return sampled;
+}
+
 Result<CurveEvaluation> Compose(const Model& model,
                                 const GeometryPayload& parameter_curve,
                                 NodeId surface, double t) {
@@ -188,6 +212,12 @@ Result<SurfaceEvaluation> EvaluateSurface(const Model& model, NodeId surface,
   }
   const auto geometry = Geometry(model, surface);
   if (!geometry.ok()) return Result<SurfaceEvaluation>::Err(geometry.error());
+  if (const auto* swept =
+          std::get_if<SweptSurfaceGeometry>(&geometry.value()->payload)) {
+    const auto sampled = SampleSection(model, swept->section, u);
+    if (!sampled.ok()) return Result<SurfaceEvaluation>::Err(sampled.error());
+    return internal::EvaluateSweptSection(*swept, sampled.value(), v);
+  }
   const auto* spun =
       std::get_if<SpunSurfaceGeometry>(&geometry.value()->payload);
   if (!spun) return EvaluateSurface(geometry.value()->payload, u, v);
@@ -197,24 +227,7 @@ Result<SurfaceEvaluation> EvaluateSurface(const Model& model, NodeId surface,
         {ErrorCode::kInvalidOptions, 0,
          "Spun surface parameter is outside its profile bounds"});
   }
-  const auto* node = model.FindNode(spun->profile);
-  if (!node || (node->node_type != 30 && node->node_type != 31 &&
-                node->node_type != 32 && node->node_type != 134)) {
-    return Result<SurfaceEvaluation>::Err(
-        {ErrorCode::kInvalidRecord, 0,
-         "Spun surface requires an analytic or B-curve profile"});
-  }
-  const auto profile = Geometry(model, spun->profile);
-  if (!profile.ok()) return Result<SurfaceEvaluation>::Err(profile.error());
-  const auto* nurbs =
-      std::get_if<NurbsCurveGeometry>(&profile.value()->payload);
-  if (nurbs &&
-      nurbs->controls.dimension != (nurbs->controls.rational ? 4 : 3)) {
-    return Result<SurfaceEvaluation>::Err(
-        {ErrorCode::kInvalidRecord, 0,
-         "Spun surface profile must be three-dimensional"});
-  }
-  const auto sampled = EvaluateCurve(profile.value()->payload, u);
+  const auto sampled = SampleSection(model, spun->profile, u);
   if (!sampled.ok()) return Result<SurfaceEvaluation>::Err(sampled.error());
   return internal::EvaluateSpunProfile(*spun, sampled.value(), v);
 }

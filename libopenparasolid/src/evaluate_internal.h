@@ -14,6 +14,9 @@ namespace openparasolid::internal {
 [[nodiscard]] Result<SurfaceEvaluation> EvaluateSpunProfile(
     const SpunSurfaceGeometry& surface, const CurveEvaluation& profile,
     double v);
+[[nodiscard]] Result<SurfaceEvaluation> EvaluateSweptSection(
+    const SweptSurfaceGeometry& surface, const CurveEvaluation& section,
+    double v);
 }  // namespace openparasolid::internal
 
 #endif  // OPENPARASOLID_SRC_EVALUATE_INTERNAL_H_

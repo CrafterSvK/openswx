@@ -56,6 +56,10 @@ inline json GeometryJson(const GeometryObject& geometry) {
           out["point_2"] = VectorJson(p.point_2);
           out["parameter_1"] = p.parameter_1;
           out["parameter_2"] = p.parameter_2;
+        } else if constexpr (std::is_same_v<T, SweptSurfaceGeometry>) {
+          out["section"] = p.section.value;
+          out["sweep"] = VectorJson(p.sweep);
+          out["scale"] = p.scale ? json(*p.scale) : json(nullptr);
         } else if constexpr (std::is_same_v<T, SpunSurfaceGeometry>) {
           out["profile"] = p.profile.value;
           out["base"] = VectorJson(p.base);

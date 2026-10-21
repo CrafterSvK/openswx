@@ -88,6 +88,8 @@ The first typed alternatives are:
   original basis parameters.
 - Spun surface (`SPUN_SURF`), retaining its profile ID, axis/base and nullable
   parameter bounds and auxiliary metadata.
+- Swept surface (`SWEPT_SURF`), retaining its section ID, sweep direction and
+  nullable internal scale.
 
 Fields are located by resolved schema name and codec, not fixed field offsets.
 Inserted fields and reordered definitions therefore do not shift geometry roles.
@@ -143,6 +145,14 @@ checks the unit spin axis, and preserves original parameters and natural
 partials. Auxiliary metadata does not transform or scale the generator.
 Forward references remain IDs rather than cached pointers. Profile validity
 and evaluability are stronger checks than typed-definition completeness.
+
+`SweptSurfaceGeometry` requires a non-null section, finite nonzero sweep vector
+and nullable finite internal scale. Section references remain IDs, supporting
+forward references. Model-based evaluation shares the spun surface's analytic
+or 3D NURBS generator validation, requires a unit sweep direction and returns
+the translated section with natural partials. Internal scale remains unused
+source metadata. Definition completeness does not certify section evaluability
+or surface regularity.
 
 No curve/surface evaluation, derivatives, trimming, tessellation, topology
 reconstruction, delta application or STEP export is performed here.

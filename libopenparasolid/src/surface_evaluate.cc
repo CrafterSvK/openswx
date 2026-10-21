@@ -212,6 +212,11 @@ Result<SurfaceEvaluation> EvaluateSurface(const GeometryPayload& geometry,
         {ErrorCode::kUnsupportedFormat, 0,
          "Spun surfaces require model context"});
   }
+  if (std::holds_alternative<SweptSurfaceGeometry>(geometry)) {
+    return Result<SurfaceEvaluation>::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Swept surfaces require model context"});
+  }
   return Result<SurfaceEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,
        "Surface evaluation is not implemented for this geometry payload"});

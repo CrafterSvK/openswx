@@ -348,6 +348,50 @@ On the earlier 2,050-trim comparison set, successful evaluations increase from
 agree with stored points within `1.5e-10` in source units. Private inputs and
 comparison tools remain outside the repository.
 
+## Swept surfaces
+
+`SWEPT_SURF` (type 67) has a typed `SweptSurfaceGeometry`, reported as
+`kind: "swept_surface"` with its `section` ID, `sweep` vector and nullable
+internal `scale`. Use `EvaluateSurface(model, surface_id, u, v)` to resolve
+the section and evaluate the extruded surface:
+
+```text
+P(u,v) = C(u) + v * D
+dP/du  = C'(u)
+dP/dv  = D
+```
+
+The original section parameter `u` and its domain/resource limits are retained.
+Parameter `v` is any finite signed displacement along the stored unit sweep
+direction `D`. Unit length is checked within `1e-10`, without normalizing the
+stored coefficients. Both position and partials must remain representable.
+
+Section resolution shares the spun-surface validation: line, circle, ellipse
+and 3D NURBS sections are supported, including forward references. Missing or
+wrong section roles are invalid records; unavailable typed payloads return
+explicit unsupported-format errors. Two-dimensional, trimmed, SP, intersection
+and foreign curves are not accepted as generators. Standalone swept payloads
+require model context. SP-curves and their trims can use supported swept
+surfaces through the existing model-based composition API.
+
+Internal scale is preserved without scaling the section or sweep. Source
+senses, placement transforms and unit conversion are not applied. Parallel
+section tangents and sweep directions remain evaluable; normals, regularity,
+self-intersections, periodic wrapping and face clipping are not certified.
+The copied-value budget charges five scalar slots per definition, including
+nullable metadata. The implementation follows the XT Format Reference
+(July 2022, pp. 67–68), remains MIT and STL-only, and adds no CLI settings.
+
+Synthetic tests cover both partials, rational and nonrational sections,
+metadata, dependency errors, domain/range checks, singular generators and
+SP/trim composition. An independent NumPy/SciPy comparison verifies 1,512
+samples on 168 swept surfaces in 30 selected private streams, with no
+evaluation errors and a maximum normalized difference below `1.5e-16`.
+The earlier 2,050-trim comparison remains unchanged at 10,050 successful
+samples, 120 unavailable-payload errors and 80 explicit NURBS domain errors;
+evaluated endpoints agree within `1.5e-10` in source units. Private inputs
+and comparison tools remain outside the repository.
+
 ## Build and run
 
 The top-level build includes the library and `parasolid_inspect`:

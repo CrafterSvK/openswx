@@ -498,5 +498,35 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run("--geometry --summary"), 2);
   EXPECT_EQ(Report()["model"]["geometry_counts"]["spun_surface"], 1);
 }
+TEST_F(ParasolidInspectCliTest,
+       GeometryModeRetainsSweptSurfaceSectionAndScale) {
+  auto bytes = test::Header();
+  test::U16(bytes, 67);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 20);
+  test::U32(bytes, 20);
+  for (int i = 0; i < 5; ++i) test::CompactIndex(bytes, 0);
+  bytes.push_back('-');
+  test::CompactIndex(bytes, 1);
+  for (double v : {0., .6, .8, 0.}) test::F64(bytes, v);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run("--geometry"), 2);
+  const auto r = Report();
+  EXPECT_EQ(r["complete"], true);
+  const auto& geometry = r["model"]["geometry"][0];
+  EXPECT_EQ(geometry["kind"], "swept_surface");
+  EXPECT_EQ(geometry["section"], 1);
+  EXPECT_EQ(geometry["sweep"], json::array({0., .6, .8}));
+  EXPECT_EQ(geometry["scale"], 0);
+  EXPECT_EQ(r["model"]["missing_reference_count"], 1);
+  ASSERT_EQ(Run("--geometry --summary"), 2);
+  EXPECT_EQ(Report()["model"]["geometry_counts"]["swept_surface"], 1);
+}
 }  // namespace
 }  // namespace openparasolid
