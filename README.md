@@ -121,6 +121,56 @@ unsupported by these commands.
 The modern parser checks each inline stream's decoded size and CRC before
 accepting it. Invalid candidates are skipped and reported by container inspection.
 
+Extract embedded binary Parasolid from a modern part, assembly or drawing:
+
+```bash
+swx_dump --extract-parasolid /tmp/part-parasolid /files/example.SLDPRT
+swx_dump --extract-parasolid /tmp/assembly-parasolid /files/example.SLDASM
+swx_dump --extract-parasolid /tmp/drawing-parasolid /files/example.SLDDRW
+```
+
+Use a new or empty output directory. The command searches all active decoded
+streams, including configuration partitions, resolved features, drawing
+definitions and `SectionBodies`. Historical duplicate chunks are excluded.
+It writes separate files under `partitions/`, `deltas/`, `ghost-partitions/`,
+`section-bodies/` and `embedded/` as applicable. Binary transmit and partition
+payloads use `.x_b`; deltas and payloads with unknown headers use `.bin`.
+This extracts existing binary data; it does not generate text `.x_t` files.
+
+`manifest.json` and stdout contain the same JSON report: source stream,
+container marker offset, wrapper offset within the decoded stream, compressed
+and uncompressed sizes, configuration index/name when available, payload kind,
+Parasolid description/schema and decoding issues. Configuration names come from
+document metadata; an unavailable name or index is `null`.
+
+Length-prefixed sections can contain several compressed frames. The exporter
+concatenates every frame into one complete payload and rejects the section if
+any frame is invalid. `frame_count` and `frames` record each frame's source
+header offset and sizes. The payload's compressed/uncompressed sizes are sums
+over all frames; `section_offset` identifies the section length field and
+`stored_size` includes framing and trailing zero padding. Standalone wrappers
+have a `null` section offset. Header parsing accepts variable padding between
+the description and the length-prefixed schema token.
+
+Wrapper sizes, zlib checksums and the binary signature are checked. Damaged
+blocks are reported without hiding later valid blocks; recoverable payloads
+and the manifest are retained, but the command exits with status 1 when issues
+occur. No matches produce an empty manifest and status 0. An assembly may
+reference external parts without embedding their geometry; this command does
+not traverse those references.
+
+The compression marker is also used for non-Parasolid data. Valid unrelated
+blocks are skipped and counted as `non_parasolid_block_count`. An unreadable
+wrapper is reported even when its content type cannot be determined; a decoding
+issue in a third-party stream does not prove that model geometry is damaged.
+
+Extraction does not establish whether a payload is independently readable by
+a Parasolid kernel. Delta records require a base; the manifest identifies a
+preceding partition in the same stream as a **candidate**, without resolving
+dependencies or applying deltas. Ghost partitions remain explicitly separate.
+The library exposes the same extraction and diagnostics through
+`ExtractParasolidStreams(const ContainerInspection&)` in `openswx/container.h`.
+
 Export the line and text entities stored in a drawing's XML tables stream:
 
 ```bash

@@ -14,9 +14,12 @@ namespace {
 
 constexpr std::size_t kMaxInflatedSize = 128u * 1024u * 1024u;  // 128 MiB
 
-std::optional<std::vector<uint8_t>> InflateRawImpl(
-    const uint8_t* data, std::size_t size, std::size_t hint_uncompressed,
-    int window_bits) {
+std::optional<std::vector<uint8_t>>
+InflateRawImpl(const uint8_t *data, std::size_t size,
+               std::size_t hint_uncompressed, int window_bits,
+               std::size_t *consumed_size = nullptr) {
+  if (consumed_size)
+    *consumed_size = 0;
   if (size == 0) return std::vector<uint8_t>{};
   if (hint_uncompressed > kMaxInflatedSize) return std::nullopt;
   if (size > std::numeric_limits<uInt>::max()) return std::nullopt;
@@ -59,6 +62,8 @@ std::optional<std::vector<uint8_t>> InflateRawImpl(
   }
 
   std::size_t actual_size = strm.total_out;
+  if (consumed_size)
+    *consumed_size = strm.total_in;
   inflateEnd(&strm);
   out.resize(actual_size);
   return out;
@@ -72,11 +77,12 @@ std::optional<std::vector<uint8_t>> InflateRaw(
   return InflateRawImpl(compressed.data(), compressed.size(), 0, -15);
 }
 
-std::optional<std::vector<uint8_t>> InflateZlib(
-    std::span<const uint8_t> compressed, std::size_t hint_uncompressed) {
+std::optional<std::vector<uint8_t>>
+InflateZlib(std::span<const uint8_t> compressed, std::size_t hint_uncompressed,
+            std::size_t *consumed_size) {
   // wbits = 15 expects the standard two-byte zlib header and checksum trailer.
   return InflateRawImpl(compressed.data(), compressed.size(), hint_uncompressed,
-                        15);
+                        15, consumed_size);
 }
 
 std::optional<std::vector<uint8_t>> InflateZlb(

@@ -4,6 +4,7 @@
 // swx_dump.cc — Linux CLI tool that demonstrates the openswx library.
 //
 // Usage: swx_dump [--list-streams] [--dump-streams DIR] [--dump-unknown DIR]
+//                 [--extract-parasolid DIR]
 //                 [--export-tables-svg FILE [--sheet NAME]]
 //                 [--export-view-svg FILE [--view NAME]]
 //                 [--export-sheet-svg FILE [--sheet NAME]]
@@ -465,12 +466,12 @@ bool WriteTextFile(const std::filesystem::path& path,
                    const std::string& contents) {
   std::ofstream output(path, std::ios::binary);
   if (!output.is_open()) {
-    std::cerr << "Cannot open SVG output: " << path << "\n";
+    std::cerr << "Cannot open output file: " << path << "\n";
     return false;
   }
   output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
   if (!output) {
-    std::cerr << "Cannot write SVG output: " << path << "\n";
+    std::cerr << "Cannot write output file: " << path << "\n";
     return false;
   }
   return true;
@@ -490,6 +491,144 @@ bool WriteBinaryFile(const std::filesystem::path& path,
     return false;
   }
   return true;
+}
+
+std::string ParasolidCategory(const openswx::ParasolidPayload &payload) {
+  if (payload.source_stream.starts_with("SectionBodies/"))
+    return "section-bodies";
+  if (payload.ghost_partition)
+    return "ghost-partitions";
+  if (payload.kind == openswx::ParasolidPayloadKind::kPartition)
+    return "partitions";
+  if (payload.kind == openswx::ParasolidPayloadKind::kDeltas)
+    return "deltas";
+  return "embedded";
+}
+
+bool ExportParasolid(const openswx::ContainerInspection &inspection,
+                     const std::filesystem::path &input,
+                     const std::filesystem::path &directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  if (error) {
+    std::cerr << "Cannot create Parasolid output directory: " << error.message()
+              << "\n";
+    return false;
+  }
+  const bool empty = std::filesystem::is_empty(directory, error);
+  if (error || !empty) {
+    std::cerr << "Parasolid output directory must be empty: " << directory
+              << "\n";
+    return false;
+  }
+  const auto extracted = openswx::ExtractParasolidStreams(inspection);
+  std::map<uint32_t, std::string> configurations;
+  auto document = openswx::SwxDocument::Open(input);
+  if (document.ok()) {
+    for (const auto &configuration : document.value().configurations())
+      configurations.emplace(configuration.index, configuration.name);
+  }
+  json manifest = {
+      {"schema_version", 1},
+      {"source_file", input.string()},
+      {"source_file_size", inspection.file_size},
+      {"format", "binary_parasolid"},
+      {"scope", "primary_decoded_streams"},
+      {"inspected_stream_count", extracted.inspected_stream_count},
+      {"wrapper_count", extracted.wrapper_count},
+      {"non_parasolid_block_count", extracted.non_parasolid_block_count},
+      {"payload_count", extracted.payloads.size()},
+      {"issue_count", extracted.issues.size()},
+      {"verification", "framing_sizes_zlib_checksums_and_signature"},
+      {"standalone_readability", "unverified"},
+      {"payloads", json::array()},
+      {"issues", json::array()}};
+  for (std::size_t index = 0; index < extracted.payloads.size(); ++index) {
+    const auto &payload = extracted.payloads[index];
+    const auto &block = payload.payload;
+    const std::string category = ParasolidCategory(payload);
+    const std::string extension =
+        payload.header_valid &&
+                payload.kind != openswx::ParasolidPayloadKind::kDeltas &&
+                payload.kind != openswx::ParasolidPayloadKind::kUnknown
+            ? ".x_b"
+            : ".bin";
+    const auto relative = std::filesystem::path(category) /
+                          ("payload-" + std::to_string(index) + "-offset-" +
+                           std::to_string(block.marker_offset) + extension);
+    std::filesystem::create_directories(directory / category, error);
+    if (error) {
+      std::cerr << "Cannot create Parasolid category directory: "
+                << error.message() << "\n";
+      return false;
+    }
+    if (!WriteBinaryFile(directory / relative, block.data))
+      return false;
+    json entry = {
+        {"index", index},
+        {"file", relative.generic_string()},
+        {"category", category},
+        {"kind", openswx::ToString(payload.kind)},
+        {"source_stream", payload.source_stream},
+        {"container_marker_offset", payload.container_marker_offset},
+        {"marker_offset", block.marker_offset},
+        {"compressed_size", block.compressed_size},
+        {"uncompressed_size", block.uncompressed_size},
+        {"bytes", block.data.size()},
+        {"frame_count", block.frames.size()},
+        {"section_offset",
+         block.section_offset ? json(*block.section_offset) : json(nullptr)},
+        {"stored_size", block.stored_size},
+        {"frames", json::array()},
+        {"header_valid", payload.header_valid},
+        {"description", payload.description},
+        {"schema", payload.schema},
+        {"ghost_partition", payload.ghost_partition},
+        {"configuration_index", payload.configuration_index
+                                    ? json(*payload.configuration_index)
+                                    : json(nullptr)},
+        {"configuration_name", nullptr}};
+    for (const auto &frame : block.frames) {
+      entry["frames"].push_back(
+          {{"header_offset", frame.header_offset},
+           {"compressed_size", frame.compressed_size},
+           {"uncompressed_size", frame.uncompressed_size}});
+    }
+    if (payload.configuration_index) {
+      auto config = configurations.find(*payload.configuration_index);
+      if (config != configurations.end())
+        entry["configuration_name"] = config->second;
+    }
+    if (payload.kind == openswx::ParasolidPayloadKind::kDeltas) {
+      entry["requires_base"] = true;
+      entry["dependency_resolution"] = "not_attempted";
+      entry["base_partition_candidate"] = nullptr;
+      // A preceding partition in the same stream is a useful candidate, not
+      // proof of a kernel-level dependency or a complete reconstruction.
+      for (std::size_t previous = index; previous > 0u; --previous) {
+        const auto &candidate = extracted.payloads[previous - 1u];
+        if (candidate.source_stream == payload.source_stream &&
+            candidate.kind == openswx::ParasolidPayloadKind::kPartition) {
+          entry["base_partition_candidate"] = previous - 1u;
+          break;
+        }
+      }
+    }
+    manifest["payloads"].push_back(std::move(entry));
+  }
+  for (const auto &issue : extracted.issues) {
+    manifest["issues"].push_back(
+        {{"source_stream", issue.source_stream},
+         {"marker_offset",
+          issue.marker_offset ? json(*issue.marker_offset) : json(nullptr)},
+         {"message", issue.message}});
+  }
+  if (!WriteTextFile(directory / "manifest.json", manifest.dump(2) + "\n"))
+    return false;
+  std::cout << manifest.dump(2) << "\n";
+  // Retain recoverable payloads and the report, but make incomplete extraction
+  // visible to scripts as well as interactive users.
+  return extracted.issues.empty();
 }
 
 json SerializeDrawingProbe(const openswx::DrawingBinaryProbe& probe) {
@@ -609,6 +748,7 @@ json ProbeDrawingStreams(const openswx::ContainerInspection& inspection) {
 struct Options {
   std::filesystem::path input;
   bool list_streams = false;
+  std::optional<std::filesystem::path> extract_parasolid;
   std::optional<std::filesystem::path> dump_streams;
   std::optional<std::filesystem::path> dump_unknown;
   std::optional<std::filesystem::path> export_tables_svg;
@@ -626,6 +766,10 @@ std::optional<Options> ParseOptions(int argc, char* argv[]) {
     const std::string argument = argv[i];
     if (argument == "--list-streams") {
       options.list_streams = true;
+    } else if (argument == "--extract-parasolid") {
+      if (++i >= argc)
+        return std::nullopt;
+      options.extract_parasolid = std::filesystem::path(argv[i]);
     } else if (argument == "--dump-streams") {
       if (++i >= argc) return std::nullopt;
       options.dump_streams = std::filesystem::path(argv[i]);
@@ -661,12 +805,12 @@ std::optional<Options> ParseOptions(int argc, char* argv[]) {
     }
   }
   if (options.input.empty()) return std::nullopt;
-  const int exclusive_actions =
-      (options.export_tables_svg ? 1 : 0) +
-      (options.export_view_svg ? 1 : 0) +
-      (options.export_sheet_svg ? 1 : 0) +
-      (options.export_sheet_preview_png ? 1 : 0) +
-      (options.probe_drawing_geometry ? 1 : 0);
+  const int exclusive_actions = (options.extract_parasolid ? 1 : 0) +
+                                (options.export_tables_svg ? 1 : 0) +
+                                (options.export_view_svg ? 1 : 0) +
+                                (options.export_sheet_svg ? 1 : 0) +
+                                (options.export_sheet_preview_png ? 1 : 0) +
+                                (options.probe_drawing_geometry ? 1 : 0);
   if (exclusive_actions > 1) return std::nullopt;
   if (options.sheet && !options.export_tables_svg &&
       !options.export_sheet_preview_png && !options.export_sheet_svg) {
@@ -686,13 +830,26 @@ int main(int argc, char* argv[]) {
   auto options = ParseOptions(argc, argv);
   if (!options) {
     std::cerr << "Usage: swx_dump [--list-streams] [--dump-streams DIR] "
-                 "[--dump-unknown DIR] [--export-tables-svg FILE "
+                 "[--dump-unknown DIR] [--extract-parasolid DIR] "
+                 "[--export-tables-svg FILE "
                  "[--sheet NAME]] [--export-view-svg FILE [--view NAME]] "
                  "[--export-sheet-svg FILE [--sheet NAME]] "
                  "[--export-sheet-preview-png FILE "
                  "[--sheet NAME]] [--probe-drawing-geometry] "
                  "<SolidWorks file>\n";
     return 1;
+  }
+
+  if (options->extract_parasolid) {
+    auto inspection = openswx::InspectContainer(options->input);
+    if (!inspection.ok()) {
+      std::cerr << "Error: " << inspection.error() << "\n";
+      return 1;
+    }
+    return ExportParasolid(inspection.value(), options->input,
+                           *options->extract_parasolid)
+               ? 0
+               : 1;
   }
 
   if (options->export_sheet_preview_png) {

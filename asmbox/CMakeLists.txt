@@ -127,6 +127,17 @@ if(BUILD_TESTING)
   include(GoogleTest)
   gtest_discover_tests(asmbox_tests)
 
+  find_package(ZLIB REQUIRED)
+  add_executable(swx_dump_parasolid_tests tests/swx_dump_parasolid_test.cc)
+  target_include_directories(swx_dump_parasolid_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libopenswx/tests)
+  target_link_libraries(swx_dump_parasolid_tests PRIVATE
+    GTest::gtest_main nlohmann_json::nlohmann_json ZLIB::ZLIB)
+  target_compile_definitions(swx_dump_parasolid_tests PRIVATE
+    SWX_DUMP_EXECUTABLE="$<TARGET_FILE:swx_dump>")
+  add_dependencies(swx_dump_parasolid_tests swx_dump)
+  gtest_discover_tests(swx_dump_parasolid_tests)
+
   if((PODMAN_EXECUTABLE OR DOCKER_EXECUTABLE) AND CURL_EXECUTABLE)
     if(PODMAN_EXECUTABLE)
       set(OPENSWX_CONTAINER_BIN "${PODMAN_EXECUTABLE}")
