@@ -104,6 +104,73 @@ docker run --rm \
   /files/example.SLDPRT
 ```
 
+Inspect or extract every decoded stream in a modern SolidWorks container:
+
+```bash
+swx_dump --list-streams /files/example.SLDDRW
+swx_dump --dump-streams /tmp/swx-streams /files/example.SLDDRW
+swx_dump --dump-unknown /tmp/swx-unknown /files/example.SLDDRW
+```
+
+The inspection output includes marker offsets, type IDs, compressed and decoded
+sizes, CRC validation, duplicate names, cache cells, tail-directory entries,
+unknown marker candidates, and exact unclaimed byte ranges. Container inspection
+and drawing SVG export support the modern block format; legacy OLE2 files remain
+unsupported by these commands.
+
+The modern parser checks each inline stream's decoded size and CRC before
+accepting it. Invalid candidates are skipped and reported by container inspection.
+
+Export the line and text entities stored in a drawing's XML tables stream:
+
+```bash
+swx_dump --export-tables-svg /tmp/tables.svg /files/example.SLDDRW
+swx_dump --export-tables-svg /tmp/tables.svg --sheet Sheet1 /files/example.SLDDRW
+```
+
+Export the confirmed straight-edge cache of one drawing view from `Contents/VBLists`:
+
+```bash
+swx_dump --export-view-svg /tmp/view.svg --view "Drawing View1" /files/example.SLDDRW
+```
+
+The reader associates each `uiViewBucket_c` with its stored UTF-16 view reference and projects
+confirmed 3D edge endpoint records into the view plane. This diagnostic SVG is auto-cropped.
+
+Compose the first drawing sheet, or select one explicitly, using the view matrices, scales,
+placements and clipping rectangles recovered from `Contents/Definition`:
+
+```bash
+swx_dump --export-sheet-svg /tmp/sheet.svg /files/example.SLDDRW
+swx_dump --export-sheet-svg /tmp/sheet.svg --sheet Sheet1 /files/example.SLDDRW
+```
+
+The composed SVG uses the detected physical paper size, view transformations,
+scales and clipping, and merges matching entities from `swXmlContents/Tables`.
+Supported cached layouts include edge polylines, circular arcs, line patterns
+and print widths, text, linear dimensions, BOM balloons, weldment-table lines
+and text, sheet-format lines and notes, and sketch bitmaps. Cached face meshes
+support shaded views and hidden-line classification. Coverage depends on the
+stored record layout; this is not a complete SolidWorks drawing renderer.
+
+Document JSON includes drawing replacement and header reference paths, sheet
+preview PNGs when present, and `derived_from_index` for configurations whose
+parent is stored in `Contents/CMgrHdr2`. Component placement transforms remain
+available in each configuration's component records. Localized drawing sheet
+types `Sheet`, `Blatt`, and `List` (English, German, Czech/Slovak) are accepted.
+
+Export SolidWorks' stored full-sheet preview or inspect the binary geometry carriers:
+
+```bash
+swx_dump --export-sheet-preview-png /tmp/sheet.png --sheet Sheet1 /files/example.SLDDRW
+swx_dump --probe-drawing-geometry /files/example.SLDDRW
+```
+
+The geometry probe reports class declarations, sketch-marker families, structurally
+recognised coordinate-pair candidates, and their bounds for `Definition`, `DisplayLists`,
+and `VBLists`. Candidate coordinates are diagnostics, not rendered entities, until their
+view ownership and view-to-sheet transform have been confirmed.
+
 Scan a local CAD archive without uploading files:
 
 ```bash
@@ -520,3 +587,11 @@ SQLite schema (global.sqlite, persistent)
 ```
 
 Both file formats are detected automatically. The library never writes to disk and makes no system calls beyond reading the file.
+
+## Acknowledgements
+
+Many thanks to [CrafterSvK](https://github.com/CrafterSvK) for the contributions
+from [their openswx fork](https://github.com/CrafterSvK/openswx): drawing SVG
+export and rendering, container inspection and CRC validation, drawing reference
+extraction, derived-configuration information, sheet preview serialization, and
+Czech/Slovak drawing sheet support.

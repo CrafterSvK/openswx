@@ -20,10 +20,25 @@ configure_file(
 )
 
 add_library(openswx STATIC
+  src/container.cc
   src/document.cc
+  src/drawing_appearance.cc
+  src/drawing_balloon_geometry.cc
+  src/drawing_display_list_geometry.cc
+  src/drawing_dimension_geometry.cc
+  src/drawing_face_tessellation.cc
+  src/drawing_geometry.cc
+  src/drawing_hidden_line_geometry.cc
+  src/drawing_sheet_format_geometry.cc
+  src/drawing_sheet_geometry.cc
+  src/drawing_view_geometry.cc
+  src/drawing_weldment_table_geometry.cc
+  src/drawing_probe.cc
+  src/svg_writer.cc
   src/internal/decompressor.cc
   src/internal/modern_parser.cc
   src/internal/ole2_parser.cc
+  src/internal/reference_reader.cc
   src/internal/xml_readers.cc
   src/internal/sheet_name_reader.cc
 )
@@ -51,12 +66,22 @@ target_compile_options(openswx PRIVATE
 )
 
 if(BUILD_TESTING)
+  if(NOT TARGET GTest::gtest_main)
+    find_package(GTest REQUIRED)
+  endif()
   add_executable(libopenswx_tests
+    tests/container_test.cc
+    tests/cmgrhdr_reader_test.cc
     tests/decompressor_test.cc
     tests/document_test.cc
+    tests/drawing_geometry_test.cc
+    tests/drawing_probe_test.cc
+    tests/drawing_view_geometry_test.cc
     tests/modern_parser_test.cc
     tests/ole2_parser_test.cc
     tests/xml_readers_test.cc
+    tests/reference_reader_test.cc
+    tests/svg_writer_test.cc
   )
   target_include_directories(libopenswx_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

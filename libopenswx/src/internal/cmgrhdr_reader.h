@@ -37,8 +37,15 @@
 //   2. CStr   this+0x10  = config name
 //   3. DWORD  this+0x30  = configId  (→ Config-N index)
 //   4. DWORD  this+0x38  (ver >= kCfgVerUnk1    = 0x053d / 1341)
-//   5. CStr   this+0x18  = parent_name  (ver >= kCfgVerParent = 0x07f5 / 2037)
-//   6. DWORD  this+0x34  = parent_id  (ver >= kCfgVerParent)
+//   5. CStr   this+0x18  (ver >= kCfgVerParent = 0x07f5 / 2037) — observed
+//      equal to the config's own name/description in every sample file, not
+//      its parent's name; still unlabelled here pending further evidence.
+//   6. DWORD  this+0x34  = parent_index  (ver >= kCfgVerParent) — verified
+//      against 6 real files / 8+ derived-configuration pairs (both
+//      user-created "Add Derived Configuration" and auto-generated
+//      Sheet-Metal flat-pattern configs): 0xFFFFFFFF for an independent
+//      configuration, otherwise the base configuration's own configId.
+//      See ParseCMgrHdr2 / CMgrHdr2Entry::parent_index.
 //   7. DWORD  this+0x40  (ver >= kCfgVerUnk2    = 0x0858 / 2136)
 //   8. CStr   this+0x20  (ver >= kCfgVerAltName = 0x0a32 / 2610)
 //   9. CStr   this+0x28  = alt_name  (ver >= kCfgVerAltName)
@@ -220,27 +227,39 @@ inline bool ReadClassTag(ByteReader& r,
 
 }  // namespace cmgrhdr_detail
 
+// One dmConfigHeader_c record, as resolved by ParseCMgrHdr2.
+struct CMgrHdr2Entry {
+  /// Configuration name (field 2).
+  std::string name;
+
+  /// Index of the configuration this one was derived from (field 6), or
+  /// `std::nullopt` when the configuration is independent or the field could
+  /// not be read (stream too old for this document version, or truncated).
+  std::optional<int> parent_index;
+};
+
 // Parses a Contents/CMgrHdr2 (or Contents/CMgrHdr) binary stream and returns
-// a map of configId → configuration name.
+// a map of configId → CMgrHdr2Entry.
 //
 // configId maps directly to the N in docProps/Config-N-Properties.xml and the
 // related per-configuration stream names.
 //
 // version is the document version from _MO_VERSION_NNNNN stream names.
 // It controls which optional fields are read; pass 0 if unknown (only the
-// mandatory three fields will be read, which is sufficient for name resolution).
+// mandatory three fields will be read, which is sufficient for name
+// resolution — parent_index requires version >= kCfgVerParent).
 // Using the correct version is critical — reading too many optional fields
 // desynchronises the parser across successive config records.
 //
 // Returns an empty map on any parse error or if the stream is absent/malformed.
-[[nodiscard]] inline std::map<int, std::string> ParseCMgrHdr2(
+[[nodiscard]] inline std::map<int, CMgrHdr2Entry> ParseCMgrHdr2(
     std::span<const uint8_t> stream,
     int version = 0) {
   if (stream.empty()) return {};
 
   ByteReader r(stream);
   std::map<int, std::string> class_map;
-  std::map<int, std::string> result;
+  std::map<int, CMgrHdr2Entry> result;
 
   using namespace cmgrhdr_detail;
 
@@ -280,7 +299,8 @@ inline bool ReadClassTag(ByteReader& r,
     if (!config_id) break;
 
     // Record the mapping immediately — the mandatory fields are complete.
-    result[static_cast<int>(*config_id)] = std::move(*name);
+    CMgrHdr2Entry& entry = result[static_cast<int>(*config_id)];
+    entry.name = std::move(*name);
 
     // Fields 4–13: version-gated.
     // Each field is read only if the document version meets its threshold.
@@ -292,11 +312,13 @@ inline bool ReadClassTag(ByteReader& r,
     if (version < static_cast<int>(kCfgVerUnk1) || r.remaining() < 4) continue;
     r.Skip(4);
 
-    // Fields 5–6: CStr parent_name + DWORD parent_id
+    // Fields 5–6: CStr (unlabelled) + DWORD parent_index
     if (version < static_cast<int>(kCfgVerParent)) continue;
     if (!ReadCString(r)) continue;
-    if (r.remaining() < 4) continue;
-    r.Skip(4);
+    auto parent_id = r.ReadU32Le();
+    if (!parent_id) continue;
+    if (*parent_id != 0xFFFFFFFFu)
+      entry.parent_index = static_cast<int>(*parent_id);
 
     // Field 7: DWORD this+0x40
     if (version < static_cast<int>(kCfgVerUnk2) || r.remaining() < 4) continue;

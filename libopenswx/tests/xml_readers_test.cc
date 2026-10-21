@@ -93,5 +93,19 @@ TEST(XmlReadersTest, ParseComponentsDefaultsToIdentityOnMalformedTransform) {
   EXPECT_EQ(malformed.transform, kIdentityTransform);
 }
 
+TEST(XmlReadersTest, ParseKeywordsAcceptsLocalizedSheetsAndSkipsSheetFormats) {
+  const auto sheets = ParseKeywordsXml(ToBytes(R"(<Keywords>
+    <Sheet Type="Sheet" Name="English"/>
+    <Sheet Type="Blatt" Name="German"/>
+    <Sheet Type="List" Name="CzechSlovak"/>
+    <Sheet Type="Formát listu" Name="Format"/>
+  </Keywords>)"));
+
+  ASSERT_EQ(sheets.size(), 3u);
+  EXPECT_EQ(sheets[0].name, "English");
+  EXPECT_EQ(sheets[1].name, "German");
+  EXPECT_EQ(sheets[2].name, "CzechSlovak");
+}
+
 }  // namespace
 }  // namespace openswx::internal

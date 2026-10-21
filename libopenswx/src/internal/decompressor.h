@@ -17,6 +17,11 @@ namespace openswx::internal {
 [[nodiscard]] std::optional<std::vector<uint8_t>> InflateRaw(
     std::span<const uint8_t> compressed);
 
+// Decompresses a standard zlib-wrapped deflate stream.  The size hint is used
+// only for the initial allocation; output is still bounded by the global cap.
+[[nodiscard]] std::optional<std::vector<uint8_t>> InflateZlib(
+    std::span<const uint8_t> compressed, std::size_t hint_uncompressed = 0);
+
 // Decompresses a ZLB block:
 //   Offset  0  : 16-byte identification hash (ignored)
 //   Offset 16  : uint32 LE uncompressed size

@@ -413,8 +413,10 @@ std::vector<Sheet> ParseKeywordsXml(std::span<const uint8_t> xml_bytes) {
   std::vector<Sheet> sheets;
   for (pugi::xml_node snode : root.children("Sheet")) {
     std::string_view type = snode.attribute("Type").as_string();
-    // Accept "Sheet" (EN) and "Blatt" (DE); skip format/template nodes.
-    if (type != "Sheet" && type != "Blatt") continue;
+    // Accept "Sheet" (EN), "Blatt" (DE), "List" (CS/SK); skip format/template
+    // nodes (localized "Sheet Format", e.g. "Formát listu" in CS — always
+    // multi-word and always missing any <View> children, unlike real sheets).
+    if (type != "Sheet" && type != "Blatt" && type != "List") continue;
 
     Sheet sheet;
     sheet.name = snode.attribute("Name").as_string();

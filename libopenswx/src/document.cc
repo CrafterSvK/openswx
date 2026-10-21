@@ -13,6 +13,7 @@
 #include "internal/decompressor.h"
 #include "internal/modern_parser.h"
 #include "internal/ole2_parser.h"
+#include "internal/reference_reader.h"
 #include "internal/sheet_name_reader.h"
 #include "internal/stream_store.h"
 #include "internal/xml_readers.h"
@@ -193,12 +194,12 @@ std::string ResolveConfigName(
     const StreamMap& streams,
     int n,
     const std::map<int, std::string>& compinstancetree_names,
-    const std::map<int, std::string>& cmgrhdr2_names) {
+    const std::map<int, internal::CMgrHdr2Entry>& cmgrhdr2_entries) {
   // 0. CMgrHdr2
   {
-    auto it = cmgrhdr2_names.find(n);
-    if (it != cmgrhdr2_names.end() && !it->second.empty())
-      return it->second;
+    auto it = cmgrhdr2_entries.find(n);
+    if (it != cmgrhdr2_entries.end() && !it->second.name.empty())
+      return it->second.name;
   }
 
   // 1. COMPINSTANCETREE
@@ -253,12 +254,18 @@ Configuration BuildConfiguration(
     const StreamMap& streams,
     int n,
     const std::map<int, std::string>& compinstancetree_names,
-    const std::map<int, std::string>& cmgrhdr2_names,
+    const std::map<int, internal::CMgrHdr2Entry>& cmgrhdr2_entries,
     DocumentType doc_type) {
   Configuration cfg;
   cfg.index = n;
   cfg.name  = ResolveConfigName(streams, n, compinstancetree_names,
-                                 cmgrhdr2_names);
+                                 cmgrhdr2_entries);
+
+  {
+    auto it = cmgrhdr2_entries.find(n);
+    if (it != cmgrhdr2_entries.end())
+      cfg.derived_from_index = it->second.parent_index;
+  }
 
   // Custom properties: merge file-level (custom.xml) with config-level.
   auto global_span =
@@ -422,6 +429,10 @@ Result<SwxDocument> SwxDocument::Open(const std::filesystem::path& path) {
   if (doc.type == DocumentType::kDrawing) {
     // Step 6a: Drawing — build sheets.
     doc.sheets = BuildSheets(streams);
+    doc.replacement_references = internal::ExtractUtf16CadReferences(
+        internal::GetStream(streams, "SwDocMgrTempStorage/ReplaceRef"));
+    doc.header_references = internal::ExtractUtf16CadReferences(
+        internal::GetStream(streams, "Header2"));
   } else {
     // Step 6b: Part / Assembly — build configurations.
 
@@ -431,13 +442,13 @@ Result<SwxDocument> SwxDocument::Open(const std::filesystem::path& path) {
     // files that report an incorrect version number.
     // The document version is passed so that exactly the right optional fields
     // are read per config record (greedy reading desynchronises the parser).
-    std::map<int, std::string> cmgrhdr2_names;
+    std::map<int, internal::CMgrHdr2Entry> cmgrhdr2_entries;
     {
       auto span = internal::GetStream(streams, "Contents/CMgrHdr2");
       if (span.empty())
         span = internal::GetStream(streams, "Contents/CMgrHdr");
       if (!span.empty())
-        cmgrhdr2_names = internal::ParseCMgrHdr2(span, doc.version);
+        cmgrhdr2_entries = internal::ParseCMgrHdr2(span, doc.version);
     }
 
     // Pre-parse COMPINSTANCETREE for config-name resolution (fallback source).
@@ -452,7 +463,7 @@ Result<SwxDocument> SwxDocument::Open(const std::filesystem::path& path) {
     // Augment with configIds from CMgrHdr2: configs that exist in the manager
     // header but have no corresponding per-config stream are still valid and
     // may carry properties via custom.xml.
-    for (const auto& [cid, _] : cmgrhdr2_names)
+    for (const auto& [cid, _] : cmgrhdr2_entries)
       indices.insert(cid);
 
     // If no indices were found (very old file or no per-config streams), add 0.
@@ -461,7 +472,7 @@ Result<SwxDocument> SwxDocument::Open(const std::filesystem::path& path) {
     doc.configurations.reserve(indices.size());
     for (int n : indices) {
       doc.configurations.push_back(BuildConfiguration(
-          streams, n, compinstancetree_names, cmgrhdr2_names, doc.type));
+          streams, n, compinstancetree_names, cmgrhdr2_entries, doc.type));
     }
 
     // Deduplicate: SolidWorks stores display-state variants as separate config

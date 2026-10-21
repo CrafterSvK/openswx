@@ -15,9 +15,11 @@ namespace {
 constexpr std::size_t kMaxInflatedSize = 128u * 1024u * 1024u;  // 128 MiB
 
 std::optional<std::vector<uint8_t>> InflateRawImpl(
-    const uint8_t* data, std::size_t size, std::size_t hint_uncompressed) {
+    const uint8_t* data, std::size_t size, std::size_t hint_uncompressed,
+    int window_bits) {
   if (size == 0) return std::vector<uint8_t>{};
   if (hint_uncompressed > kMaxInflatedSize) return std::nullopt;
+  if (size > std::numeric_limits<uInt>::max()) return std::nullopt;
 
   // Start with the hinted size, grow as needed.
   std::size_t out_cap =
@@ -31,8 +33,7 @@ std::optional<std::vector<uint8_t>> InflateRawImpl(
   strm.next_in = const_cast<Bytef*>(data);
   strm.avail_in = static_cast<uInt>(size);
 
-  // wbits = -15 selects raw deflate (no zlib header).
-  if (inflateInit2(&strm, -15) != Z_OK) return std::nullopt;
+  if (inflateInit2(&strm, window_bits) != Z_OK) return std::nullopt;
 
   int ret = Z_OK;
   while (ret == Z_OK) {
@@ -67,7 +68,15 @@ std::optional<std::vector<uint8_t>> InflateRawImpl(
 
 std::optional<std::vector<uint8_t>> InflateRaw(
     std::span<const uint8_t> compressed) {
-  return InflateRawImpl(compressed.data(), compressed.size(), 0);
+  // wbits = -15 selects raw deflate (no zlib header).
+  return InflateRawImpl(compressed.data(), compressed.size(), 0, -15);
+}
+
+std::optional<std::vector<uint8_t>> InflateZlib(
+    std::span<const uint8_t> compressed, std::size_t hint_uncompressed) {
+  // wbits = 15 expects the standard two-byte zlib header and checksum trailer.
+  return InflateRawImpl(compressed.data(), compressed.size(), hint_uncompressed,
+                        15);
 }
 
 std::optional<std::vector<uint8_t>> InflateZlb(
@@ -87,7 +96,7 @@ std::optional<std::vector<uint8_t>> InflateZlb(
 
   if (24 + csz > zlb_block.size()) return std::nullopt;
 
-  return InflateRawImpl(zlb_block.data() + 24, csz, usz);
+  return InflateRawImpl(zlb_block.data() + 24, csz, usz, -15);
 }
 
 }  // namespace openswx::internal
