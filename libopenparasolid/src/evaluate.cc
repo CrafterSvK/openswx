@@ -105,7 +105,8 @@ Result<CurveEvaluation> EvaluateCurve(const GeometryPayload& geometry,
   if (std::holds_alternative<IntersectionCurveGeometry>(geometry)) {
     return Result<CurveEvaluation>::Err(
         {ErrorCode::kUnsupportedFormat, 0,
-         "Intersection solver requires EvaluateIntersectionCurve with an explicit tolerance"});
+         "Intersection solver requires explicit options via EvaluateCurve or "
+         "EvaluateIntersectionCurve"});
   }
   return Result<CurveEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,

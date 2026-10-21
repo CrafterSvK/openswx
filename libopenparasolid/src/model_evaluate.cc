@@ -177,10 +177,9 @@ Result<CurveEvaluation> Compose(const Model& model,
       {sampled.value().position,
        {derivative[0], derivative[1], derivative[2]}});
 }
-}  // namespace
-
-Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
-                                      double parameter) {
+Result<CurveEvaluation> EvaluateModelCurve(
+    const Model& model, NodeId curve, double parameter,
+    const IntersectionEvaluationOptions* intersection_options) {
   if (!std::isfinite(parameter)) {
     return Result<CurveEvaluation>::Err(
         {ErrorCode::kInvalidOptions, 0, "Curve parameter must be finite"});
@@ -189,6 +188,11 @@ Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
   if (!root.ok()) return Result<CurveEvaluation>::Err(root.error());
   const auto geometry = ResolveTrimmed(model, root.value(), parameter);
   if (!geometry.ok()) return Result<CurveEvaluation>::Err(geometry.error());
+  if (intersection_options &&
+      std::holds_alternative<IntersectionCurveGeometry>(
+          geometry.value()->payload))
+    return EvaluateIntersectionCurve(model, geometry.value()->source, parameter,
+                                      *intersection_options);
   const auto* sp =
       std::get_if<SurfaceCurveGeometry>(&geometry.value()->payload);
   if (!sp) return EvaluateCurve(geometry.value()->payload, parameter);
@@ -203,6 +207,23 @@ Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
   const auto uv = Geometry(model, sp->parameter_curve);
   if (!uv.ok()) return Result<CurveEvaluation>::Err(uv.error());
   return Compose(model, uv.value()->payload, sp->surface, parameter);
+}
+}  // namespace
+
+Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
+                                      double parameter) {
+  return EvaluateModelCurve(model, curve, parameter, nullptr);
+}
+
+Result<CurveEvaluation> EvaluateCurve(
+    const Model& model, NodeId curve, double parameter,
+    const IntersectionEvaluationOptions& options) {
+  if (!std::isfinite(options.chart_tolerance) || options.chart_tolerance < 0 ||
+      !std::isfinite(options.solve_tolerance) || options.solve_tolerance <= 0)
+    return Result<CurveEvaluation>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Curve evaluation requires valid chart/solve tolerances"});
+  return EvaluateModelCurve(model, curve, parameter, &options);
 }
 
 Result<SurfaceEvaluation> EvaluateSurface(const Model& model, NodeId surface,

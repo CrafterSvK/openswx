@@ -517,7 +517,7 @@ Runtime is linear, with only the two bounded output arrays retained.
 This API does not recover surface UV coordinates or tangents from positions,
 certify curve membership or chart error estimates, extend to terminators,
 or solve/evaluate the exact intersection between chart points. `EvaluateCurve`
-continues to require the separate intersection API with explicit tolerances. No CLI
+without options continues to require explicit intersection tolerances. No CLI
 settings, environment variables or dependencies are added; code remains MIT
 and STL-only.
 
@@ -566,8 +566,8 @@ The result does not certify exact surface/curve membership, chart accuracy,
 conditioning, branch topology or limit correspondence. Additional type-204
 UV data is not inferred or applied. Trim wrappers and terminator extensions
 are not traversed. The separate `EvaluateIntersectionCurve` API evaluates
-analytic interiors with explicit solver options; `EvaluateCurve` retains its
-unsupported result because it has no such controls. No CLI settings or dependencies
+analytic interiors with explicit solver options. `EvaluateCurve` without
+options retains its unsupported result. No CLI settings or dependencies
 are added; the implementation remains MIT and STL-only.
 
 Synthetic tests cover surface order/senses, forward references, source units,
@@ -590,7 +590,7 @@ a point and natural first derivative without flipping them for curve sense.
 `IntersectionEvaluationOptions` requires two explicit finite tolerances in
 source units: nonnegative `chart_tolerance` for stored-point membership and
 positive `solve_tolerance` for interior residuals. A coarse source chart does
-not force a loose numerical solve. The ordinary `EvaluateCurve` overload
+not force a loose numerical solve. The `EvaluateCurve` overload without options
 retains an explicit unsupported-format result and points callers to this API.
 
 For an interior parameter, the chart defines a chord point by linear
@@ -638,6 +638,41 @@ difference is below `3e-13` in source units, and normalized derivative component
 difference below `8e-8`. Private inputs and comparison tools remain outside
 the repository.
 
+## Trimmed analytic intersections
+
+`EvaluateCurve(model, curve_id, parameter, options)` accepts the same
+`IntersectionEvaluationOptions` as the direct intersection solver. It dispatches
+direct analytic intersections and those reached through `TRIMMED_CURVE` chains
+to that solver. Both options are validated for every geometry kind; other
+curve types use their existing evaluators. The overload without options keeps
+its explicit unsupported-format result for intersections, including trims.
+
+Both overloads share the same bounded trim resolver. Every inclusive trim
+interval and basis-sense check applies, with cycle detection and a maximum of
+64 wrappers. Missing/wrong bases and untyped dependencies remain explicit
+errors. Source basis parameters and natural derivatives are preserved without
+reparameterising or reversing them; the intersection's reconstructed chart
+bounds also apply. Stored endpoint agreement, periodic spans, branch topology
+and terminator extension are not certified or inferred. No default tolerances,
+CLI settings or dependencies are added; code remains MIT and STL-only.
+
+Tests cover nested forward references, descending intersection sense, inclusive
+trim bounds, chart bounds, unsupported bases, cycles, the 64-wrapper boundary,
+option validation and unchanged NURBS behavior. The earlier 2,050-trim comparison
+still verifies 10,050 samples in 30 streams, with 115 unsupported surface-inversion
+samples, five untyped payloads and 80 explicit NURBS domain errors. An additional
+targeted comparison checks 24 trimmed analytic intersections from seven private
+streams using `chart_tolerance = 1e-9` and `solve_tolerance = 1e-13`.
+
+Of their 120 queries, 118 match independent SciPy/complex-step evaluation:
+maximum point component difference is below `5e-14`, normalized derivative
+difference below `2e-13`, and agreement with evaluated stored trim endpoints
+within `2.3e-12` in source units. Two stored endpoint parameters exceed the
+reconstructed chart maximum by approximately `1.7e-17` and `2.4e-17`; strict
+chart bounds currently reject them. There is no implicit parameter tolerance
+or endpoint snapping. Private inputs and comparison tools remain outside the
+repository.
+
 ## Intersection curve definitions
 
 `INTERSECTION` (type 38) now has a typed `IntersectionCurveGeometry`, reported
@@ -665,7 +700,7 @@ Chart and limit hvecs transmit positions only in these non-delta streams;
 tangents, surface parameters and individual chart parameters are not invented.
 
 Model construction provides definitions for the separate intersection evaluator.
-`EvaluateCurve` still returns an explicit unsupported-format error for an
+`EvaluateCurve` without options returns an explicit unsupported-format error for an
 intersection curve, including through a trim. The chart is a chordal guide,
 not the exact curve. The separate parameterisation API requires supplied
 oriented tangents; interior evaluation requires solving the documented local

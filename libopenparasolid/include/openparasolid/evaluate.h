@@ -171,6 +171,18 @@ struct IntersectionEvaluationOptions {
   double solve_tolerance = 0;
 };
 
+/// Evaluates model curves with explicit options for analytic intersections,
+/// including intersections reached through TRIMMED_CURVE chains. Validates
+/// options for every geometry kind. Other curves retain the existing evaluator
+/// behavior. Trim intervals, basis sense, cycle/depth and resource checks still
+/// apply; the original basis parameter and natural derivative are preserved.
+/// Intersection chart bounds also apply, with no terminator extension. Stored
+/// trim endpoints and branch topology are not certified. The overload without
+/// options retains its unsupported result for intersections.
+[[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
+    const Model& model, NodeId curve, double parameter,
+    const IntersectionEvaluationOptions& options);
+
 /// Evaluates a directly referenced analytic INTERSECTION within its chart.
 /// Requires a finite parameter and explicit finite tolerances in source units.
 /// Prepares the chart, then locally solves coincidence of its

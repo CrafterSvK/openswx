@@ -256,7 +256,8 @@ TEST(ParasolidIntersectionEvaluate,
       EvaluateIntersectionCurve(model.value(), NodeId{99}, -1, {1e-13, 1e-13});
   ASSERT_FALSE(absent.ok());
 }
-TEST(ParasolidIntersectionEvaluate, StoredPointToleranceDoesNotRelaxInteriorSolve) {
+TEST(ParasolidIntersectionEvaluate,
+     StoredPointToleranceDoesNotRelaxInteriorSolve) {
   const auto points = CirclePoints({0, .8}, 1 + 1e-8);
   ModelFixture f;
   Definition(f, points);
@@ -268,8 +269,8 @@ TEST(ParasolidIntersectionEvaluate, StoredPointToleranceDoesNotRelaxInteriorSolv
   ASSERT_TRUE(chart.ok());
   const auto& times = chart.value().parameterization.parameters;
   const double t = std::midpoint(times.front(), times.back());
-  const auto sample = EvaluateIntersectionCurve(model.value(), NodeId{1}, t,
-                                                {2e-8, 1e-13});
+  const auto sample =
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, t, {2e-8, 1e-13});
   ASSERT_TRUE(sample.ok());
   const auto& p = sample.value().position;
   EXPECT_NEAR(std::hypot(p.x, p.y, p.z), 1, 1e-13);
@@ -277,8 +278,156 @@ TEST(ParasolidIntersectionEvaluate, StoredPointToleranceDoesNotRelaxInteriorSolv
                                                 times.front(), {2e-8, 1e-13});
   ASSERT_TRUE(stored.ok());
   EXPECT_EQ(stored.value().position.x, points.front().x);
-  EXPECT_FALSE(EvaluateIntersectionCurve(model.value(), NodeId{1}, t,
-                                         {1e-10, 1e-13}).ok());
+  EXPECT_FALSE(
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, t, {1e-10, 1e-13})
+          .ok());
+}
+void Trim(ModelFixture& f, uint32_t id, uint32_t basis, double first,
+          double second) {
+  f.Add(133, id,
+        {Pointer("basis_curve", basis, 1008),
+         Numbers("point_1", {0., 0., 0.}, FieldType::kVector),
+         Numbers("point_2", {0., 0., 0.}, FieldType::kVector),
+         Numbers("parm_1", {first}), Numbers("parm_2", {second}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+}
+TEST(ParasolidIntersectionEvaluate,
+     CurveDispatcherHandlesNestedTrimmedIntersections) {
+  ModelFixture f;
+  // Forward references, descending intersection sense, then a positive trim.
+  Trim(f, 11, 10, -1.5, -.4);
+  Trim(f, 10, 1, 0, -1.8);
+  Definition(f, CirclePoints({0, .8}));
+  Plane(f);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const IntersectionEvaluationOptions options{1e-13, 1e-13};
+  for (double t : {-1.5, -1., -.4}) {
+    const auto expected =
+        EvaluateIntersectionCurve(model.value(), NodeId{1}, t, options);
+    const auto direct = EvaluateCurve(model.value(), NodeId{1}, t, options);
+    const auto wrapped = EvaluateCurve(model.value(), NodeId{11}, t, options);
+    ASSERT_TRUE(expected.ok());
+    ASSERT_TRUE(direct.ok());
+    ASSERT_TRUE(wrapped.ok());
+    EXPECT_EQ(wrapped.value().position.x, expected.value().position.x);
+    EXPECT_EQ(wrapped.value().position.y, expected.value().position.y);
+    EXPECT_EQ(wrapped.value().first_derivative.x,
+              expected.value().first_derivative.x);
+    EXPECT_EQ(wrapped.value().first_derivative.y,
+              expected.value().first_derivative.y);
+    EXPECT_EQ(direct.value().position.x, expected.value().position.x);
+    const auto legacy = EvaluateCurve(model.value(), NodeId{11}, t);
+    ASSERT_FALSE(legacy.ok());
+    EXPECT_EQ(legacy.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  for (double t : {-1.6, -.3}) {
+    const auto outside = EvaluateCurve(model.value(), NodeId{11}, t, options);
+    ASSERT_FALSE(outside.ok());
+    EXPECT_EQ(outside.error().code, ErrorCode::kInvalidOptions);
+  }
+  const auto inner_endpoint =
+      EvaluateCurve(model.value(), NodeId{10}, -1.8, options);
+  EXPECT_TRUE(inner_endpoint.ok());
+}
+TEST(ParasolidIntersectionEvaluate, TrimAndChartBoundsBothRemainMandatory) {
+  ModelFixture f;
+  Trim(f, 10, 1, 1, -3);
+  Definition(f, CirclePoints({0, .8}));
+  Plane(f);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto outside =
+      EvaluateCurve(model.value(), NodeId{10}, -2.5, {1e-13, 1e-13});
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kInvalidOptions);
+  EXPECT_NE(outside.error().message.find("chart"), std::string::npos);
+}
+TEST(ParasolidIntersectionEvaluate,
+     OptionsDoNotBypassTrimSenseCycleOrDepthChecks) {
+  for (int bad = 0; bad < 3; ++bad) {
+    ModelFixture f;
+    Trim(f, 10, bad == 2 ? 10 : 1, bad == 1 ? 0 : -1.8, bad == 1 ? -1.8 : 0);
+    Definition(f, CirclePoints({0, .8}));
+    if (bad == 1) f.report.nodes[1].fields.back().values[0] = uint64_t{'?'};
+    Plane(f);
+    Sphere(f);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        EvaluateCurve(model.value(), NodeId{10}, -1, {1e-13, 1e-13});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, bad == 1 ? ErrorCode::kUnsupportedFormat
+                                            : ErrorCode::kInvalidRecord);
+  }
+  for (uint32_t depth : {64u, 65u}) {
+    ModelFixture f;
+    for (uint32_t i = 0; i < depth; ++i) {
+      const bool last = i + 1 == depth;
+      Trim(f, 100 + i, last ? 1 : 101 + i, last ? -.1 : -1.8,
+           last ? -1.9 : -.2);
+    }
+    Definition(f, CirclePoints({0, .8}));
+    Plane(f);
+    Sphere(f);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        EvaluateCurve(model.value(), NodeId{100}, -1, {1e-13, 1e-13});
+    if (depth == 64)
+      ASSERT_TRUE(result.ok());
+    else {
+      ASSERT_FALSE(result.ok());
+      EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     OptionsPreserveMissingAndUnsupportedBasisErrors) {
+  for (uint32_t basis : {50u, 99u, 70u}) {
+    ModelFixture f;
+    Trim(f, 10, basis, -1.5, -.4);
+    Definition(f, CirclePoints({0, .8}));
+    Plane(f);
+    Sphere(f);
+    f.Curve(70, 999);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        EvaluateCurve(model.value(), NodeId{10}, -1, {1e-13, 1e-13});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, basis == 70 ? ErrorCode::kUnsupportedFormat
+                                               : ErrorCode::kInvalidRecord);
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     OptionsValidateForOrdinaryCurvesAndRetainNurbsBehavior) {
+  ModelFixture f;
+  f.Spline();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto old = EvaluateCurve(model.value(), NodeId{1}, .5);
+  const auto explicit_options =
+      EvaluateCurve(model.value(), NodeId{1}, .5, {0, 1e-13});
+  ASSERT_TRUE(old.ok());
+  ASSERT_TRUE(explicit_options.ok());
+  EXPECT_EQ(explicit_options.value().position.z, old.value().position.z);
+  EXPECT_EQ(explicit_options.value().first_derivative.z,
+            old.value().first_derivative.z);
+  for (const IntersectionEvaluationOptions options :
+       {IntersectionEvaluationOptions{-1, 1e-13},
+        IntersectionEvaluationOptions{0, 0},
+        IntersectionEvaluationOptions{0,
+                                      std::numeric_limits<double>::infinity()},
+        IntersectionEvaluationOptions{std::numeric_limits<double>::quiet_NaN(),
+                                      1e-13}}) {
+    const auto result = EvaluateCurve(model.value(), NodeId{1}, .5, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+  EXPECT_FALSE(EvaluateCurve(model.value(), NodeId{1}, 2, {0, 1e-13}).ok());
 }
 }  // namespace
 }  // namespace openparasolid
