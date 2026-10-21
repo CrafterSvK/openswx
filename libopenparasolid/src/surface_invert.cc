@@ -6,6 +6,7 @@
 #include <limits>
 #include <optional>
 
+#include "evaluate_internal.h"
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid {
@@ -79,11 +80,13 @@ Result<SurfaceParameters> InvertSurface(const GeometryPayload& geometry,
          "Surface inversion requires a finite point and nonnegative finite "
          "tolerance"});
   }
+  if (const auto* nurbs = std::get_if<NurbsSurfaceGeometry>(&geometry))
+    return internal::InvertNurbsSurface(*nurbs, point, tolerance, std::nullopt);
   const auto frame = SourceFrame(geometry);
   if (!frame) {
     return Result<SurfaceParameters>::Err(
         {ErrorCode::kUnsupportedFormat, 0,
-         "Surface inversion supports only analytic surfaces"});
+         "Surface inversion supports only analytic and NURBS surfaces"});
   }
   const auto local = LocalPoint(*frame, point);
   if (!local) {
@@ -137,5 +140,17 @@ Result<SurfaceParameters> InvertSurface(const GeometryPayload& geometry,
   }
   return Result<SurfaceParameters>::Ok(
       {result_u, result_v, static_cast<double>(residual)});
+}
+Result<SurfaceParameters> InvertSurface(const GeometryPayload& geometry,
+                                        Vector3 point, double tolerance,
+                                        SurfaceParameterSeed seed) {
+  if (!Finite(point) || !std::isfinite(tolerance) || tolerance < 0 ||
+      !std::isfinite(seed.u) || !std::isfinite(seed.v))
+    return Result<SurfaceParameters>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Invalid surface inversion request or seed"});
+  if (const auto* nurbs = std::get_if<NurbsSurfaceGeometry>(&geometry))
+    return internal::InvertNurbsSurface(*nurbs, point, tolerance, seed);
+  return InvertSurface(geometry, point, tolerance);
 }
 }  // namespace openparasolid

@@ -68,6 +68,65 @@ void Sphere(ModelFixture& f) {
          ByteValue("sense", '+', FieldType::kCharacter)});
 }
 TEST(ParasolidIntersectionEvaluate,
+     RationalNurbsSupportsKeepOriginalKnotUnits) {
+  ModelFixture f;
+  f.Spline(true, true);
+  // Move spline fixture nodes away from the chart IDs. Its knot interval is
+  // wider than 2*pi: treating NURBS parameters as angles would leave the
+  // domain.
+  for (auto& node : f.report.nodes) {
+    node.index += 50;
+    const auto& fields = f.report.schemas[node.schema_index].definition.fields;
+    for (std::size_t i = 0; i < node.fields.size(); ++i) {
+      auto& values = node.fields[i].values;
+      if (fields[i].type == FieldType::kPointer)
+        values[0] = std::get<uint64_t>(values[0]) + 50;
+      if (fields[i].name == "u_degree") values[0] = int64_t{2};
+      if (fields[i].name == "n_u_vertices") values[0] = int64_t{3};
+      if (fields[i].name == "v_knot_mult") values[0] = uint64_t{56};
+      if (fields[i].name == "knots") values = {0., 10.};
+      if (fields[i].name == "multiplicities") values = {int64_t{3}, int64_t{3}};
+      if (fields[i].name == "vertices") {
+        const double w = std::sqrt(.5);
+        values = {1., 0., 0.,    1., 1., 0., 2., 1., w,  w,  0., w,
+                  w,  w,  2 * w, w,  0., 1., 0., 1., 0., 1., 2., 1.};
+      }
+    }
+  }
+  ModelFixture rebuilt;
+  for (const auto& node : f.report.nodes) {
+    const auto& definitions =
+        f.report.schemas[node.schema_index].definition.fields;
+    std::vector<ModelField> fields;
+    for (std::size_t i = 0; i < node.fields.size(); ++i)
+      fields.push_back({definitions[i], node.fields[i].values});
+    rebuilt.Add(node.node_type, node.index, std::move(fields));
+  }
+  f = std::move(rebuilt);
+  f.Add(127, 56,
+        {Array("multiplicities", FieldType::kShort, {int64_t{2}, int64_t{2}})});
+  Definition(f, {{0, 1, 1}, {1, 0, 1}});
+  Plane(f, 1);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok()) << model.error().message;
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+  ASSERT_TRUE(chart.ok()) << chart.error().message;
+  EXPECT_NEAR(chart.value().surface_parameters.front()[1].u, 10, 1e-12);
+  EXPECT_NEAR(chart.value().surface_parameters.back()[1].u, 0, 1e-12);
+  const auto& times = chart.value().parameterization.parameters;
+  const double t = std::midpoint(times.front(), times.back());
+  const auto result =
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, t, {1e-12, 1e-12});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const double w = std::sqrt(.5);
+  EXPECT_NEAR(result.value().position.x, w, 1e-12);
+  EXPECT_NEAR(result.value().position.y, w, 1e-12);
+  EXPECT_NEAR(result.value().position.z, 1, 1e-12);
+  EXPECT_NEAR(result.value().first_derivative.x, w / 3, 1e-12);
+  EXPECT_NEAR(result.value().first_derivative.y, -w / 3, 1e-12);
+  EXPECT_NEAR(result.value().first_derivative.z, 0, 1e-12);
+}
+TEST(ParasolidIntersectionEvaluate,
      SolvesCircleAndNaturalDerivativeUsingChordPlane) {
   const double height = .3, radius = std::sqrt(1 - height * height);
   ModelFixture f;

@@ -20,7 +20,7 @@ file(MAKE_DIRECTORY "${OPENPARASOLID_GENERATED_INCLUDE_DIR}/openparasolid")
 configure_file(include/openparasolid/version.h.in
   "${OPENPARASOLID_GENERATED_INCLUDE_DIR}/openparasolid/version.h" @ONLY)
 
-add_library(openparasolid STATIC src/header.cc src/inspector.cc src/types.cc src/schema.cc src/delta_packets.cc src/base_catalog.cc src/geometry_catalog.cc src/spline_catalog.cc src/procedural_catalog.cc src/model.cc src/evaluate.cc src/model_evaluate.cc src/nurbs_evaluate.cc src/surface_evaluate.cc src/spun_evaluate.cc src/swept_evaluate.cc src/normal_evaluate.cc src/chart_parameterize.cc src/surface_invert.cc src/intersection_chart.cc src/intersection_evaluate.cc src/intersection_model.cc src/analytic_model.cc src/spline_model.cc)
+add_library(openparasolid STATIC src/header.cc src/inspector.cc src/types.cc src/schema.cc src/delta_packets.cc src/base_catalog.cc src/geometry_catalog.cc src/spline_catalog.cc src/procedural_catalog.cc src/model.cc src/evaluate.cc src/model_evaluate.cc src/nurbs_evaluate.cc src/surface_evaluate.cc src/spun_evaluate.cc src/swept_evaluate.cc src/normal_evaluate.cc src/chart_parameterize.cc src/surface_invert.cc src/nurbs_invert.cc src/intersection_chart.cc src/intersection_evaluate.cc src/intersection_model.cc src/analytic_model.cc src/spline_model.cc)
 target_include_directories(openparasolid
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -44,7 +44,7 @@ if(BUILD_TESTING)
   if(NOT TARGET GTest::gtest_main)
     find_package(GTest REQUIRED)
   endif()
-  add_executable(libopenparasolid_tests tests/evaluate_test.cc tests/model_evaluate_test.cc tests/trimmed_curve_test.cc tests/spun_surface_test.cc tests/swept_surface_test.cc tests/normal_evaluate_test.cc tests/chart_parameterize_test.cc tests/surface_invert_test.cc tests/intersection_chart_test.cc tests/intersection_evaluate_test.cc tests/intersection_model_test.cc tests/nurbs_evaluate_test.cc tests/surface_evaluate_test.cc tests/nurbs_surface_evaluate_test.cc tests/model_test.cc tests/model_spline_test.cc tests/header_test.cc tests/inspector_test.cc tests/schema_test.cc tests/delta_test.cc tests/delta_packets_test.cc tests/delta_boundary_test.cc tests/delta_status_test.cc tests/embedded_intersection_test.cc tests/attribute_definition_test.cc tests/geometry_test.cc tests/spline_test.cc tests/procedural_test.cc)
+  add_executable(libopenparasolid_tests tests/evaluate_test.cc tests/model_evaluate_test.cc tests/trimmed_curve_test.cc tests/spun_surface_test.cc tests/swept_surface_test.cc tests/normal_evaluate_test.cc tests/chart_parameterize_test.cc tests/surface_invert_test.cc tests/nurbs_invert_test.cc tests/intersection_chart_test.cc tests/intersection_evaluate_test.cc tests/intersection_model_test.cc tests/nurbs_evaluate_test.cc tests/surface_evaluate_test.cc tests/nurbs_surface_evaluate_test.cc tests/model_test.cc tests/model_spline_test.cc tests/header_test.cc tests/inspector_test.cc tests/schema_test.cc tests/delta_test.cc tests/delta_packets_test.cc tests/delta_boundary_test.cc tests/delta_status_test.cc tests/embedded_intersection_test.cc tests/attribute_definition_test.cc tests/geometry_test.cc tests/spline_test.cc tests/procedural_test.cc)
   target_link_libraries(libopenparasolid_tests PRIVATE openparasolid GTest::gtest_main)
   if(OPENPARASOLID_BUILD_TOOLS AND UNIX)
     target_sources(libopenparasolid_tests PRIVATE tests/cli_test.cc tests/inspect_options_test.cc)

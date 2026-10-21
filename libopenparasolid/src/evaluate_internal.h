@@ -3,9 +3,18 @@
 #ifndef OPENPARASOLID_SRC_EVALUATE_INTERNAL_H_
 #define OPENPARASOLID_SRC_EVALUATE_INTERNAL_H_
 
+#include <array>
+#include <optional>
+
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid::internal {
+// Bounds are u-low, u-high, v-low, v-high; validates before extracting knots.
+[[nodiscard]] Result<std::array<double, 4>> NurbsSurfaceDomain(
+    const NurbsSurfaceGeometry& surface);
+[[nodiscard]] Result<SurfaceParameters> InvertNurbsSurface(
+    const NurbsSurfaceGeometry& surface, Vector3 point, double tolerance,
+    std::optional<SurfaceParameterSeed> seed);
 [[nodiscard]] Result<Vector3> UnitCrossProduct(Vector3 first, Vector3 second,
                                               bool reverse);
 [[nodiscard]] Result<Vector3> UnitSurfaceNormal(

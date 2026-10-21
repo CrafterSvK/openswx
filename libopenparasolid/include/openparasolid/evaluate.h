@@ -101,22 +101,43 @@ struct SurfaceParameters {
   /// Distance to the point returned by EvaluateSurface at these parameters.
   double residual = 0;
 };
+struct SurfaceParameterSeed {
+  double u = 0;
+  double v = 0;
+};
 
 /// Finds natural parameters on an analytic surface (plane, cylinder, cone,
-/// sphere or torus). The finite nonnegative absolute tolerance is in source
-/// units. Success requires the forward-evaluated point to be within tolerance;
-/// this is not a general closest-point projection. Angular parameters use
-/// atan2's principal branch; an undefined azimuth is represented by zero.
-/// Sphere poles and cone/torus singularities may yield parameters while the
-/// normal remains undefined. The torus's principal sheet is retained.
-/// Source frames, senses and units are not changed. Invalid request values
-/// return kInvalidOptions, nonmatching points or invalid geometry/results
-/// kInvalidRecord, other geometry kinds kUnsupportedFormat. Inherits the
-/// forward evaluator's validity/domain checks. No implicit tolerance is added.
+/// sphere or torus) or a NURBS surface. The finite nonnegative absolute
+/// tolerance is in source units. Success requires the forward-evaluated point
+/// to be within tolerance; this is not a general closest-point projection.
+/// Angular parameters use atan2's principal branch; an undefined azimuth is
+/// represented by zero. Sphere poles and cone/torus singularities may yield
+/// parameters while the normal remains undefined. The torus's principal sheet
+/// is retained. Source frames, senses and units are not changed. Invalid
+/// request values return kInvalidOptions, nonmatching points or invalid
+/// geometry/results kInvalidRecord, other geometry kinds kUnsupportedFormat.
+/// Inherits the forward evaluator's validity/domain checks. No implicit
+/// tolerance is added. NURBS uses bounded damped least-squares searches in
+/// normalized knot domains: at most 512 evaluations and 32,000,000 estimated
+/// validation/evaluation work units. Exhaustion returns kResourceLimit. A
+/// failed local search is not proof that the point has no preimage; unique
+/// roots are not guaranteed.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const GeometryPayload& geometry, Vector3 point, double tolerance);
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const Model& model, NodeId surface, Vector3 point, double tolerance);
+
+/// Supplies a preferred starting UV pair for bounded NURBS inversion. Both
+/// coordinates must be finite and, for NURBS, inside the defined knot domain.
+/// Other deterministic starts are tried if local iteration fails. Analytic
+/// surfaces validate the finite seed and use their direct inversion formulas.
+/// No closest-point, unique-root or periodic-continuation guarantee is made.
+[[nodiscard]] Result<SurfaceParameters> InvertSurface(
+    const GeometryPayload& geometry, Vector3 point, double tolerance,
+    SurfaceParameterSeed seed);
+[[nodiscard]] Result<SurfaceParameters> InvertSurface(
+    const Model& model, NodeId surface, Vector3 point, double tolerance,
+    SurfaceParameterSeed seed);
 
 struct IntersectionChartParameters {
   /// One strictly increasing parameter per chart position.
@@ -149,18 +170,20 @@ struct IntersectionChartEvaluation {
 };
 
 /// Reconstructs a directly referenced INTERSECTION's chart from the model.
-/// Both surface targets must support analytic inversion and have known senses.
+/// Both surface targets must support analytic or NURBS inversion and have
+/// known senses. The previous recovered UV supplies the next point's hint;
+/// local NURBS roots and periodic seam continuity are not certified.
 /// Each stored chart position must invert onto both surfaces within the finite
 /// nonnegative absolute tolerance in source units. Normals are sampled at the
 /// recovered UV values; their cross product supplies the natural tangent.
 /// Returns one UV pair, tangent and parameter per point, plus one scale per
-/// chord. Inherits inversion, normal and chart parameterisation checks, including
-/// the limit of 1,000,000 position scalars before allocating output arrays.
-/// Missing/wrong roles, singular normals and incompatible chart order are
-/// explicit errors; unsupported dependencies remain kUnsupportedFormat.
-/// Does not unwrap trims, evaluate between chart points or extend to terminators.
-/// Auxiliary UV data/error estimates, curve/face senses and placement are not
-/// applied. The source model and chart are not modified.
+/// chord. Inherits inversion, normal and chart parameterisation checks,
+/// including the limit of 1,000,000 position scalars before allocating output
+/// arrays. Missing/wrong roles, singular normals and incompatible chart order
+/// are explicit errors; unsupported dependencies remain kUnsupportedFormat.
+/// Does not unwrap trims, evaluate between chart points or extend to
+/// terminators. Auxiliary UV data/error estimates, curve/face senses and
+/// placement are not applied. The source model and chart are not modified.
 [[nodiscard]] Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
     const Model& model, NodeId curve, double tolerance);
 
@@ -175,7 +198,7 @@ struct IntersectionEvaluationOptions {
   double chart_parameter_tolerance = 0;
 };
 
-/// Evaluates model curves with explicit options for analytic intersections,
+/// Evaluates model curves with explicit options for supported intersections,
 /// including intersections reached through TRIMMED_CURVE chains. Validates
 /// options for every geometry kind. Other curves retain the existing evaluator
 /// behavior. Trim intervals, basis sense, cycle/depth and resource checks still
@@ -188,7 +211,8 @@ struct IntersectionEvaluationOptions {
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);
 
-/// Evaluates a directly referenced analytic INTERSECTION within its chart.
+/// Evaluates a directly referenced INTERSECTION with analytic/NURBS supports
+/// within its chart.
 /// Requires a finite parameter and explicit finite chart/solve tolerances in
 /// source units. Optional endpoint tolerance uses original parameter units.
 /// Prepares the chart, then locally solves coincidence of its
@@ -203,8 +227,8 @@ struct IntersectionEvaluationOptions {
 /// the nearest outer chart endpoint and its natural derivative (not the zero
 /// derivative of a clamped extension). Inside queries are unchanged.
 /// No terminator extension, trim unwrapping, global branch certification or
-/// nonanalytic inversion is provided. EvaluateCurve without options retains
-/// its unsupported result for intersections.
+/// inversion of other surface kinds is provided. EvaluateCurve without options
+/// retains its unsupported result for intersections.
 [[nodiscard]] Result<CurveEvaluation> EvaluateIntersectionCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);

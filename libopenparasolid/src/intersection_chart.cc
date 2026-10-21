@@ -12,7 +12,7 @@ namespace {
 ParseError Invalid(const char* message) {
   return {ErrorCode::kInvalidRecord, 0, message};
 }
-Result<const GeometryObject*> AnalyticSurface(const Model& model, NodeId id) {
+Result<const GeometryObject*> InvertibleSurface(const Model& model, NodeId id) {
   const auto* node = model.FindNode(id);
   if (!node)
     return Result<const GeometryObject*>::Err(
@@ -23,6 +23,7 @@ Result<const GeometryObject*> AnalyticSurface(const Model& model, NodeId id) {
     case 52:
     case 53:
     case 54:
+    case 124:
       break;
     case 56:
     case 59:
@@ -30,11 +31,10 @@ Result<const GeometryObject*> AnalyticSurface(const Model& model, NodeId id) {
     case 67:
     case 68:
     case 120:
-    case 124:
     case 201:
       return Result<const GeometryObject*>::Err(
           {ErrorCode::kUnsupportedFormat, node->source_offset,
-           "Intersection chart requires analytic surface inversion"});
+           "Intersection chart requires supported surface inversion"});
     default:
       return Result<const GeometryObject*>::Err(
           Invalid("Intersection chart target is not a surface"));
@@ -88,7 +88,7 @@ Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
   // Borrowed surface pointers remain valid throughout this const Model call.
   std::array<const GeometryObject*, 2> surfaces{};
   for (std::size_t side = 0; side < surfaces.size(); ++side) {
-    const auto surface = AnalyticSurface(model, intersection.surfaces[side]);
+    const auto surface = InvertibleSurface(model, intersection.surfaces[side]);
     if (!surface.ok())
       return Result<IntersectionChartEvaluation>::Err(surface.error());
     surfaces[side] = surface.value();
@@ -101,7 +101,13 @@ Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
     std::array<Vector3, 2> normals{};
     for (std::size_t side = 0; side < surfaces.size(); ++side) {
       const auto uv =
-          InvertSurface(surfaces[side]->payload, chart.positions[i], tolerance);
+          i == 0 ? InvertSurface(surfaces[side]->payload, chart.positions[i],
+                                 tolerance)
+                 : InvertSurface(surfaces[side]->payload, chart.positions[i],
+                                 tolerance,
+                                 SurfaceParameterSeed{
+                                     result.surface_parameters.back()[side].u,
+                                     result.surface_parameters.back()[side].v});
       if (!uv.ok())
         return Result<IntersectionChartEvaluation>::Err(
             AtPoint(uv.error(), i, side));

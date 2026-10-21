@@ -392,10 +392,11 @@ samples, 120 unavailable-payload errors and 80 explicit NURBS domain errors;
 evaluated endpoints agree within `1.5e-10` in source units. Private inputs
 and comparison tools remain outside the repository.
 
-## Analytic surface inversion
+## Surface inversion
 
 `InvertSurface(geometry, point, tolerance)` and its model/ID overload recover
-natural `u/v` parameters on planes, cylinders, cones, spheres and tori. The
+natural `u/v` parameters on planes, cylinders, cones, spheres, tori and NURBS
+surfaces. The
 result includes the distance between the requested point and its forward
 evaluation. A finite nonnegative absolute tolerance in source units is
 required; success means that this measured distance does not exceed it.
@@ -422,16 +423,15 @@ including its geometry/frame validity, domain and representability rules.
 Invalid request values return `kInvalidOptions`; nonmatching points, candidate
 parameters outside the natural domain and invalid definitions/results return
 `kInvalidRecord`. Missing or untyped model targets retain explicit lookup
-errors. NURBS, spun, swept and other geometry kinds return
+errors. Spun, swept and other unsupported geometry kinds return
 `kUnsupportedFormat`. Surface/face senses, placement and units are not applied.
-The implementation uses bounded stack storage, adds no CLI settings or
-dependencies, and remains MIT and STL-only.
+The analytic inversion uses bounded stack storage. Both paths add no CLI
+settings or dependencies and remain MIT and STL-only.
 
 Together with `EvaluateSurfaceNormal`, inversion allows callers to obtain
-oriented normals at analytic chart positions. `EvaluateIntersectionChart`
-combines these operations with chart parameterisation. NURBS/procedural
-inversion remains unsupported; a separate local analytic intersection
-evaluator is described below.
+oriented normals at analytic and NURBS chart positions.
+`EvaluateIntersectionChart` combines these operations with chart
+parameterisation; a local intersection evaluator is described below.
 
 Tests cover oblique/translated and slightly imperfect source frames, explicit
 distance tolerances, seams, signed cone slopes, poles/apices, torus sheets,
@@ -466,8 +466,8 @@ resource and representability checks, including those on the point and both
 partials. It introduces no CLI settings or dependencies and remains MIT and
 STL-only. Oriented normals provide a building block for intersection chart
 parameterisation. The numeric chart API accepts supplied tangents; the model
-API obtains them through analytic inversion. NURBS/procedural inversion and
-nonanalytic intersection evaluation remain pending.
+API obtains them through analytic or NURBS inversion. Local intersection
+evaluation is described below; procedural surface inversion remains pending.
 
 Tests cover source orientation, rotated frames, rational/nonrational patches,
 procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,
@@ -530,15 +530,51 @@ absolute difference is below `5e-16`. This validates the parameter recurrence,
 not automatic tangent reconstruction or a complete intersection evaluator.
 Private inputs and comparison tools remain outside the repository.
 
+## NURBS surface inversion
+
+NURBS inversion preserves the original knot domains and homogeneous rational
+controls. A damped QR least-squares iteration operates in normalized UV
+coordinates to handle independent knot scales. Deterministic starts comprise
+an optional caller hint, Greville parameters of the four nearest Euclidean
+control points, and a 3-by-3 domain grid. All candidates remain inside the
+actual domain `[U[degree], U[control_count]]` in each axis, including unclamped
+axes. Closure/periodicity flags do not cause wrapping or domain extension.
+
+`SurfaceParameterSeed{u, v}` can be supplied to either `InvertSurface`
+overload. Both values must be finite; a NURBS hint must also be in-domain.
+Analytic surfaces validate the finite hint and retain their direct formulas.
+A singular or unsuccessful NURBS hint falls back to the other starts. Success
+requires the forward point's Euclidean residual to meet the unchanged caller
+tolerance. This is a bounded local membership search, not a certified global
+closest-point method or proof of root uniqueness/nonexistence.
+
+Each start permits at most 32 updates and 12 halving trials per update. A
+whole inversion permits at most 512 forward evaluations and 32,000,000
+estimated validation/evaluation work units; exhaustion is `kResourceLimit`.
+Degree, knot and control validation precedes the search and retains the
+forward evaluator's limits. An unsuccessful search is `kInvalidRecord`.
+Singular patches can yield valid membership parameters while their normal
+remains undefined. The surface and model are never changed.
+
+Tests cover curved polynomial and rational patches, corners, independently
+scaled domains, homogeneous scaling, singular hints, explicit membership
+tolerances, invalid definitions/hints, unclamped and flagged periodic axes,
+work exhaustion and model dispatch. An independent SciPy tensor-BSpline
+comparison generates 4,356 points on 1,089 NURBS surfaces from the 90-stream
+selection. All unseeded inversions succeed at `1e-10` tolerance; the maximum
+independent forward residual is below `9.85e-11` source units. Parameter
+uniqueness is not assumed for arbitrary source surfaces. Private inputs and
+comparison programs remain outside the repository.
+
 ## Model-based intersection charts
 
 `EvaluateIntersectionChart(model, curve_id, tolerance)` prepares a directly
 referenced `INTERSECTION` chart without caller-supplied tangents. Both surface
-targets must support analytic inversion (plane, cylinder, cone, sphere or
-torus) and have known senses. At each stored chart point it:
+targets must support analytic or NURBS inversion and have known senses. At each stored chart point it:
 
 1. Inverts the point onto both surfaces with the caller's explicit absolute
-   distance tolerance in source units.
+   distance tolerance in source units. The previous recovered UV supplies the
+   next point's initial hint, with the inversion's fallback starts retained.
 2. Evaluates the oriented surface normals at the recovered parameters.
 3. Forms the unit tangent `N0 cross N1` in stored surface order.
 4. Applies the existing XT chart-parameter recurrence to these directions.
@@ -546,7 +582,8 @@ torus) and have known senses. At each stored chart point it:
 `IntersectionChartEvaluation` returns one pair of `SurfaceParameters`
 (including measured residuals) and one unit tangent per chart position, plus
 the point parameters and chord scales. Returned surface parameters retain
-their principal angular branches, while chart parameters increase without
+their original NURBS knot units or analytic principal angular branches,
+while chart parameters increase without
 periodic wrapping. Source positions, surface order, frames and metadata stay
 unchanged. Curve and face senses do not flip the natural tangent. Reversed
 chart order is rejected rather than silently corrected.
@@ -566,26 +603,29 @@ The result does not certify exact surface/curve membership, chart accuracy,
 conditioning, branch topology or limit correspondence. Additional type-204
 UV data is not inferred or applied. Trim wrappers and terminator extensions
 are not traversed. The separate `EvaluateIntersectionCurve` API evaluates
-analytic interiors with explicit solver options. `EvaluateCurve` without
+analytic/NURBS interiors with explicit solver options. `EvaluateCurve` without
 options retains its unsupported result. No CLI settings or dependencies
 are added; the implementation remains MIT and STL-only.
 
 Synthetic tests cover surface order/senses, forward references, source units,
 explicit tolerances, contextual failures, singularities, closed charts,
-copy/move behavior and resource limits. An independent complex-step/80-digit
-Decimal comparison checks all 419 successfully prepared charts and 2,219
-points among 1,409 typed intersections in 90 selected private streams. The
-other 990 charts explicitly require unsupported surface inversion, with no
-other errors in this selection. At a requested tolerance of `1e-8`, the
-maximum independent forward residual is below `1.8e-10` in source units,
-tangent component difference below `9e-15`, and normalized parameter/scale
-difference below `1.2e-16`. Private inputs and comparison tools remain outside
-the repository.
+copy/move behavior and resource limits. Independent SciPy tensor-BSpline
+partials, complex-step analytic partials and an 80-digit Decimal recurrence
+check 659 prepared charts and 3,516 points among 1,409 typed intersections in
+90 selected private streams, compared with 419 charts before NURBS inversion.
+At `1e-8` tolerance the maximum independent residual is below `9.57e-9`,
+tangent component difference below `1.96e-9`, and normalized parameter/scale
+difference below `5.52e-10`. Another 720 charts have unsupported dependencies;
+30 fail explicit NURBS membership. Independent bounded SciPy searches from
+nine starts also find residuals above tolerance for those 30, ranging from
+`7.03e-8` to `6.42e-3`; this is not a proof of the global minimum. Private
+inputs and comparison programs remain outside the repository.
 
-## Analytic intersection evaluation
+## Local intersection evaluation
 
 `EvaluateIntersectionCurve(model, curve_id, parameter, options)` evaluates a
-direct analytic `INTERSECTION` inside its reconstructed chart. It returns
+direct `INTERSECTION` with analytic/NURBS supports inside its reconstructed
+chart. It returns
 a point and natural first derivative without flipping them for curve sense.
 `IntersectionEvaluationOptions` requires two explicit finite tolerances in
 source units: nonnegative `chart_tolerance` for stored-point membership and
@@ -606,7 +646,9 @@ to the second surface's evaluated point and its absolute plane residual must
 both satisfy `solve_tolerance`.
 
 The initial UV pairs interpolate recovered chart parameters, using local
-periodic branches for azimuth and ring-torus meridians. Newton updates use
+periodic branches for analytic azimuth and ring-torus meridians. NURBS
+coordinates interpolate in their original knot units without angular
+wrapping. Newton updates use
 natural surface partials, independently scaled Jacobian columns and partial
 pivoting. At most 32 updates are attempted, each with at most 16 halving
 trials that must decrease the residual. Invalid trial parameters are rejected;
@@ -624,7 +666,7 @@ at the final endpoint. Source rounding can affect numerical C1 agreement.
 Chart preparation is repeated per call and retains its bounds and dependency
 checks. Parameters outside the chart beyond the explicit endpoint tolerance
 are invalid options; terminator extensions,
-trim wrappers and nonanalytic surfaces remain unsupported by this API.
+trim wrappers and other surface kinds remain unsupported by this direct API.
 Residual tolerances are not bounds on point/derivative error near poorly
 conditioned intersections. Global branch identity, regularity, chart accuracy
 and topology are not certified. No CLI settings or dependencies are added;
@@ -641,11 +683,26 @@ difference is below `3e-13` in source units, and normalized derivative component
 difference below `8e-8`. Private inputs and comparison tools remain outside
 the repository.
 
-## Trimmed analytic intersections
+With NURBS supports enabled, the same 90-stream comparison at
+`chart_tolerance = 1e-9` and `solve_tolerance = 1e-13` prepares 659 charts.
+Of 8,571 interior queries, 8,554 return solutions and 17 explicitly report
+stalled/nonconvergent solves or incompatible tangent direction. Maximum
+position component difference from the independent SciPy root solver is
+below `9.35e-10` source units. Derivatives are more sensitive: 58 returned
+samples exceed the earlier analytic comparison's component thresholds, with
+Jacobian condition numbers above `3.9e5`; the maximum normalized derivative
+component difference is `8.02e-3`. Small coincidence residuals therefore do
+not certify derivative accuracy near poorly conditioned intersections.
+These limitations remain visible; no tolerance relaxation or tessellation
+fallback is used. The rational NURBS/plane regression separately checks
+closed-form interior points and derivatives, including a knot interval wider
+than `2*pi` to prevent accidental angular wrapping.
+
+## Trimmed intersections
 
 `EvaluateCurve(model, curve_id, parameter, options)` accepts the same
 `IntersectionEvaluationOptions` as the direct intersection solver. It dispatches
-direct analytic intersections and those reached through `TRIMMED_CURVE` chains
+supported direct intersections and those reached through `TRIMMED_CURVE` chains
 to that solver. Both options are validated for every geometry kind; other
 curve types use their existing evaluators. The overload without options keeps
 its explicit unsupported-format result for intersections, including trims.

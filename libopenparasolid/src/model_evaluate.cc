@@ -288,4 +288,11 @@ Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
   if (!geometry.ok()) return Result<SurfaceParameters>::Err(geometry.error());
   return InvertSurface(geometry.value()->payload, point, tolerance);
 }
+Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
+                                        Vector3 point, double tolerance,
+                                        SurfaceParameterSeed seed) {
+  const auto geometry = Geometry(model, surface);
+  if (!geometry.ok()) return Result<SurfaceParameters>::Err(geometry.error());
+  return InvertSurface(geometry.value()->payload, point, tolerance, seed);
+}
 }  // namespace openparasolid

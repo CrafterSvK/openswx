@@ -189,8 +189,7 @@ TEST(ParasolidSurfaceInvert,
   ASSERT_FALSE(absent.ok());
   EXPECT_EQ(absent.error().code, ErrorCode::kInvalidRecord);
   for (const GeometryPayload other :
-       {GeometryPayload{NurbsSurfaceGeometry{}},
-        GeometryPayload{SpunSurfaceGeometry{}},
+       {GeometryPayload{SpunSurfaceGeometry{}},
         GeometryPayload{SweptSurfaceGeometry{}}}) {
     const auto unsupported = InvertSurface(other, {}, 0);
     ASSERT_FALSE(unsupported.ok());

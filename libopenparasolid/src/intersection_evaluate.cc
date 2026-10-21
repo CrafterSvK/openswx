@@ -243,7 +243,8 @@ Result<CurveEvaluation> EvaluateIntersectionCurve(
     surfaces[side] = &model.geometry()[*node->geometry].payload;
     const auto& a = prepared.value().surface_parameters[index][side];
     const auto& b = prepared.value().surface_parameters[index + 1][side];
-    uv[2 * side] = Interpolate(a.u, b.u, fraction, node->node_type != 50);
+    uv[2 * side] = Interpolate(a.u, b.u, fraction,
+                               node->node_type >= 51 && node->node_type <= 54);
     const auto* torus = std::get_if<TorusGeometry>(surfaces[side]);
     uv[2 * side + 1] = Interpolate(
         a.v, b.v, fraction, torus && torus->major_radius > torus->minor_radius);
