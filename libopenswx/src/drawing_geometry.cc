@@ -153,9 +153,16 @@ Result<DrawingGeometry> DrawingGeometryReader::ReadTablesXml(
           std::make_tuple(value, *x, *y, angle, sheet_name, table_name);
       if (!seen_text.insert(key).second) return;
       sheet.entities.emplace_back(TextAnnotation{
-          value, {*x, *y}, angle,
-          height, SumWidths(node.attribute("CellWidthArray").as_string()),
-          font, table_name});
+          value,
+          {*x, *y},
+          angle,
+          height,
+          SumWidths(node.attribute("CellWidthArray").as_string()),
+          font,
+          table_name,
+          TextAnchor::kStart,
+          0.0,
+          false});
     });
   }
 

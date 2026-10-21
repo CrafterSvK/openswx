@@ -139,7 +139,11 @@ std::optional<std::string> FindViewReference(std::span<const uint8_t> data) {
       }
       AppendUtf8(value, codepoint);
     }
-    if (valid && value.find('@') != std::string::npos)
+    const auto separator = value.find('@');
+    if (valid && separator != std::string::npos && separator > 0u &&
+        separator + 1u < value.size() &&
+        value.find('@', separator + 1u) == std::string::npos &&
+        value.find_first_of("/\\") == std::string::npos)
       return value;
   }
   return std::nullopt;
@@ -201,11 +205,20 @@ DrawingGeometryReader::ReadViewBuckets(std::span<const uint8_t> data) {
   std::size_t bucket_section_end = data.size();
   for (std::size_t offset = starts.back() + 42u;
        offset + kClassMarker.size() + 2u <= data.size(); ++offset) {
-    if (std::equal(kClassMarker.begin(), kClassMarker.end(),
-                   data.begin() + static_cast<std::ptrdiff_t>(offset))) {
-      bucket_section_end = offset;
-      break;
-    }
+    if (!std::equal(kClassMarker.begin(), kClassMarker.end(),
+                    data.begin() + static_cast<std::ptrdiff_t>(offset)))
+      continue;
+    const std::size_t length = ReadU16Le(data, offset + 4u);
+    if (length == 0u || length > 256u || length > data.size() - offset - 6u)
+      continue;
+    const auto name = data.subspan(offset + 6u, length);
+    if (!std::all_of(name.begin(), name.end(), [](uint8_t c) {
+          return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '_';
+        }))
+      continue;
+    bucket_section_end = offset;
+    break;
   }
 
   std::vector<CachedDrawingView> views;

@@ -506,21 +506,28 @@ Result<std::string> SvgWriter::WriteSheet(const DrawingSheetGeometry &sheet,
             // while SVG font-size is an em square. Its cached runs use a
             // 3:4 cap-height-to-em ratio.
             constexpr double kCapHeightToEm = 4.0 / 3.0;
-            const double font_size = (item.height > 0.0 ? item.height : 0.003) *
-                                     kMetresToMillimetres * kCapHeightToEm;
+            const double font_size =
+                (item.height > 0.0 ? item.height : 0.003) *
+                kMetresToMillimetres *
+                (item.height_is_cap_height ? kCapHeightToEm : 1.0);
             const double x = item.origin.x * kMetresToMillimetres;
             const double y = -item.origin.y * kMetresToMillimetres;
             svg << "    <text x=\"" << x << "\" y=\"" << y
                 << "\" fill=\"#000000\" stroke=\"none\" font-size=\""
                 << font_size << "\"";
             if (!item.font_family.empty()) {
-              svg << " font-family=\"" << EscapeXml(item.font_family) << "\"";
+              svg << " font-family=\"" << EscapeXml(item.font_family);
+              if (item.font_family.find("sans-serif") == std::string::npos)
+                svg << ", sans-serif";
+              svg << "\"";
             }
             if (item.rendered_width > 0.0) {
               svg << " textLength=\""
                   << item.rendered_width * kMetresToMillimetres
                   << "\" lengthAdjust=\"spacing\"";
             }
+            if (item.bold)
+              svg << " font-weight=\"bold\"";
             if (item.anchor == TextAnchor::kMiddle) {
               svg << " text-anchor=\"middle\"";
             } else if (item.anchor == TextAnchor::kEnd) {

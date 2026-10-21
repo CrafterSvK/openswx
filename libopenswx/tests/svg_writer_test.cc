@@ -29,6 +29,16 @@ TEST(SvgWriterTest, WritesAutoCroppedUprightSvg) {
   EXPECT_NE(svg.find("Revision &amp; table"), std::string::npos);
 }
 
+TEST(SvgWriterTest, WritesBoldTextWeight) {
+  DrawingSheetGeometry sheet{"Notes", {}};
+  TextAnnotation text{"Instruction", {.01, .02}, 0, .003};
+  text.bold = true;
+  sheet.entities.emplace_back(text);
+  auto result = SvgWriter::WriteSheet(sheet);
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_NE(result.value().find("font-weight=\"bold\""), std::string::npos);
+}
+
 TEST(SvgWriterTest, RejectsEmptySheet) {
   auto result = SvgWriter::WriteSheet({"Empty", {}});
   EXPECT_FALSE(result.ok());
@@ -390,6 +400,18 @@ TEST(SvgWriterTest, DoesNotDuplicateCachedBomBalloonLeader) {
             std::string::npos);
   EXPECT_NE(result.value().find("<path d=\"M 334 -223"), std::string::npos);
   EXPECT_NE(result.value().find(">3</text>"), std::string::npos);
+}
+
+TEST(SvgWriterTest, KeepsXmlEmSizeAndProvidesSansSerifFallback) {
+  DrawingSheetGeometry sheet{"A", {}};
+  TextAnnotation text{"TABLE", {0.02, 0.02}, 0, 0.003, 0, "Arial", "table"};
+  text.height_is_cap_height = false;
+  sheet.entities.emplace_back(text);
+  auto result = SvgWriter::WriteSheet(sheet);
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_NE(result.value().find("font-size=\"3\""), std::string::npos);
+  EXPECT_NE(result.value().find("font-family=\"Arial, sans-serif\""),
+            std::string::npos);
 }
 
 } // namespace

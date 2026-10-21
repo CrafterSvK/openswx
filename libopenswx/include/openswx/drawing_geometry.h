@@ -164,6 +164,9 @@ struct TextAnnotation {
   // Cached advance of the complete text run. This differs from width, which
   // may describe a containing table cell rather than the rendered glyphs.
   double rendered_width = 0.0;
+  /// Binary drawing caches store cap heights; Tables XML uses an em size.
+  bool height_is_cap_height = true;
+  bool bold = false;
 };
 
 /// An RGBA sketch bitmap placed in sheet-space. The serialized placement is

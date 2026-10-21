@@ -496,10 +496,7 @@ bool IsPlacementRecord(std::span<const uint8_t> data, std::size_t offset,
     values[index] = ReadF64Le(data, offset + index * 8u);
   }
   if (!std::all_of(values.begin(), values.begin() + 10,
-                   [](double value) {
-                     return std::isfinite(value) && value >= -0.1 &&
-                            value <= 0.6;
-                   }) ||
+                   [](double value) { return std::isfinite(value); }) ||
       !std::isfinite(values[10]) || std::abs(values[10]) > 1e-12) {
     return false;
   }
@@ -822,6 +819,7 @@ struct KeywordViews {
   std::vector<std::string> sheet_names;
   std::set<std::string> all;
   std::vector<std::string> selected;
+  std::map<std::string, std::string> documents;
 };
 
 std::optional<KeywordViews> ParseKeywordViews(std::span<const uint8_t> xml,
@@ -843,7 +841,7 @@ std::optional<KeywordViews> ParseKeywordViews(std::span<const uint8_t> xml,
     // that node while accepting Type="List" sheets with zero View children.
     const std::string_view type = sheet.attribute("Type").as_string();
     const bool real_sheet =
-        type == "List" || type == "Sheet" || sheet.child("View");
+        type == "List" || type == "Sheet" || type == "Blatt";
     if (!real_sheet)
       continue;
     const std::string current_name = sheet.attribute("Name").as_string();
@@ -858,6 +856,20 @@ std::optional<KeywordViews> ParseKeywordViews(std::span<const uint8_t> xml,
       if (name.empty())
         continue;
       result.all.insert(name);
+      std::string referenced_document = view.child_value();
+      const auto begin = referenced_document.find_first_not_of(" \t\r\n");
+      if (begin != std::string::npos) {
+        referenced_document = referenced_document.substr(
+            begin,
+            referenced_document.find_last_not_of(" \t\r\n") - begin + 1u);
+        const auto separator = referenced_document.find_last_of("/\\");
+        if (separator != std::string::npos)
+          referenced_document.erase(0u, separator + 1u);
+        const auto extension = referenced_document.find_last_of('.');
+        if (extension != std::string::npos)
+          referenced_document.resize(extension);
+        result.documents.emplace(name, std::move(referenced_document));
+      }
       if (selected)
         result.selected.push_back(name);
     }
@@ -867,8 +879,99 @@ std::optional<KeywordViews> ParseKeywordViews(std::span<const uint8_t> xml,
   return result;
 }
 
+bool MatchesViewDirection(const DrawingViewPlacement &placement,
+                          const CachedDrawingView &bucket, bool rows) {
+  const auto &m = placement.model_to_view;
+  const Vec3 normal = rows ? Vec3{m[6], m[7], m[8]} : Vec3{m[2], m[5], m[8]};
+  return std::hypot(normal.x - bucket.direction.x,
+                    normal.y - bucket.direction.y,
+                    normal.z - bucket.direction.z) < 1e-7;
+}
+
+bool MatchesViewSignature(const DrawingViewPlacement &placement,
+                          const CachedDrawingView &bucket) {
+  if (bucket.source_lines.empty() ||
+      std::abs(placement.scale * bucket.scale_denominator - 1.0) >= 1e-7 ||
+      (!MatchesViewDirection(placement, bucket, false) &&
+       !MatchesViewDirection(placement, bucket, true)))
+    return false;
+  const auto inside = [&](Vec3 point) {
+    const double x =
+        placement.scale * ColumnDot(placement.model_to_view, 0u, point) +
+        placement.translation.x;
+    const double y =
+        placement.scale * ColumnDot(placement.model_to_view, 1u, point) +
+        placement.translation.y;
+    constexpr double tolerance = 1e-6;
+    return x >= placement.outer_bounds.min.x - tolerance &&
+           x <= placement.outer_bounds.max.x + tolerance &&
+           y >= placement.outer_bounds.min.y - tolerance &&
+           y <= placement.outer_bounds.max.y + tolerance;
+  };
+  const auto contained =
+      std::count_if(bucket.source_lines.begin(), bucket.source_lines.end(),
+                    [&](const Line3D &line) {
+                      return inside(line.start) && inside(line.end);
+                    });
+  return static_cast<double>(contained) >=
+         0.98 * static_cast<double>(bucket.source_lines.size());
+}
+
+void ResolveViewBuckets(std::vector<CachedDrawingView> &buckets,
+                        const std::vector<DrawingViewPlacement> &placements,
+                        const KeywordViews &keywords) {
+  const auto unresolved = [&](const CachedDrawingView &bucket) {
+    // Some caches reference a component or model rather than a drawing view.
+    // Only a name present in the placement table establishes ownership.
+    return std::none_of(placements.begin(), placements.end(),
+                        [&](const DrawingViewPlacement &placement) {
+                          return placement.name == bucket.name;
+                        });
+  };
+  std::set<std::string> claimed;
+  for (const auto &bucket : buckets) {
+    if (!unresolved(bucket))
+      claimed.insert(bucket.name);
+  }
+  std::vector<std::pair<std::size_t, std::size_t>> matches;
+  for (std::size_t i = 0; i < buckets.size(); ++i) {
+    if (!unresolved(buckets[i]))
+      continue;
+    std::optional<std::size_t> candidate;
+    bool ambiguous = false;
+    for (std::size_t j = 0; j < placements.size(); ++j) {
+      if (claimed.contains(placements[j].name) ||
+          !MatchesViewSignature(placements[j], buckets[i]))
+        continue;
+      if (candidate) {
+        ambiguous = true;
+        break;
+      }
+      candidate = j;
+    }
+    if (!candidate || ambiguous)
+      continue;
+    const auto competitors = std::count_if(
+        buckets.begin(), buckets.end(), [&](const CachedDrawingView &other) {
+          return unresolved(other) &&
+                 MatchesViewSignature(placements[*candidate], other);
+        });
+    if (competitors == 1)
+      matches.emplace_back(i, *candidate);
+  }
+  for (const auto &[i, j] : matches) {
+    buckets[i].name = placements[j].name;
+    buckets[i].geometry.name = placements[j].name;
+    if (const auto document = keywords.documents.find(placements[j].name);
+        document != keywords.documents.end())
+      buckets[i].referenced_document = document->second;
+  }
+}
+
 std::pair<double, double>
-FindStandardSheetSize(std::span<const uint8_t> definition) {
+FindStandardSheetSize(std::span<const uint8_t> definition,
+                      std::span<const std::string> sheet_names,
+                      std::string_view sheet_name) {
   static constexpr std::array<std::pair<double, double>, 5> kLandscapeSizes = {
       {{1.189, 0.841},
        {0.841, 0.594},
@@ -877,7 +980,11 @@ FindStandardSheetSize(std::span<const uint8_t> definition) {
        {0.297, 0.210}}};
   if (definition.size() < 16u)
     return {0.0, 0.0};
-  for (std::size_t offset = 0; offset + 16u <= definition.size(); ++offset) {
+  const auto range = FindDrawingSheetRange(definition, sheet_names, sheet_name);
+  const std::size_t range_begin = range ? range->first : 0u;
+  const std::size_t range_end = range ? range->second : definition.size();
+  std::vector<std::pair<double, double>> candidates;
+  for (std::size_t offset = range_begin; offset + 16u <= range_end; ++offset) {
     const double first = ReadF64Le(definition, offset);
     const double second = ReadF64Le(definition, offset + 8u);
     if (!std::isfinite(first) || !std::isfinite(second))
@@ -887,11 +994,28 @@ FindStandardSheetSize(std::span<const uint8_t> definition) {
            std::abs(second - height) < 1e-9) ||
           (std::abs(first - height) < 1e-9 &&
            std::abs(second - width) < 1e-9)) {
-        return {width, height};
+        for (const auto &size :
+             {std::pair{first, second}, std::pair{second, first}}) {
+          if (std::find(candidates.begin(), candidates.end(), size) ==
+              candidates.end())
+            candidates.push_back(size);
+        }
       }
     }
   }
-  return {0.0, 0.0};
+  if (candidates.empty())
+    return {0.0, 0.0};
+  auto selected = candidates.front();
+  std::size_t most_format_lines = 0u;
+  for (const auto &size : candidates) {
+    auto lines = DrawingGeometryReader::ReadSheetFormatLines(
+        definition, sheet_names, sheet_name, size.first, size.second);
+    if (lines.ok() && lines.value().size() > most_format_lines) {
+      most_format_lines = lines.value().size();
+      selected = size;
+    }
+  }
+  return selected;
 }
 
 } // namespace
@@ -1107,6 +1231,7 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
       return Result<DrawingSheetGeometry>::Err(parsed_placements.error());
     }
     placements = std::move(parsed_placements).value();
+    ResolveViewBuckets(buckets, placements, *keyword_views);
     auto parsed_faces = ReadFaceTessellations(vb_lists);
     if (parsed_faces.ok()) {
       face_tessellations = std::move(parsed_faces).value();
@@ -1117,7 +1242,8 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
 
   DrawingSheetGeometry sheet;
   sheet.name = keyword_views->sheet_name;
-  const auto [width, height] = FindStandardSheetSize(definition);
+  const auto [width, height] = FindStandardSheetSize(
+      definition, keyword_views->sheet_names, keyword_views->sheet_name);
   sheet.width_m = width;
   sheet.height_m = height;
   if (!printing.empty()) {
@@ -1992,12 +2118,6 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
     if (parsed_text.ok())
       display_text = std::move(parsed_text).value();
   }
-  const bool has_cached_sheet_text = std::any_of(
-      display_text.begin(), display_text.end(),
-      [](const TextAnnotation &annotation) {
-        return annotation.source_table.find("/sheet=") != std::string::npos;
-      });
-
   auto format_lines = ReadSheetFormatLines(
       definition, keyword_views->sheet_names, keyword_views->sheet_name,
       sheet.width_m, sheet.height_m,
@@ -2030,7 +2150,7 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
 
   auto format_text = ReadSheetFormatText(definition, keyword_views->sheet_names,
                                          keyword_views->sheet_name);
-  if (format_text.ok() && !has_cached_sheet_text) {
+  if (format_text.ok()) {
     std::vector<TextAnnotation> parsed_text = std::move(format_text).value();
     for (TextAnnotation &annotation : parsed_text) {
       const bool cached = std::any_of(
@@ -2038,7 +2158,11 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
           [&](const TextAnnotation &candidate) {
             return candidate.text == annotation.text &&
                    std::hypot(candidate.origin.x - annotation.origin.x,
-                              candidate.origin.y - annotation.origin.y) < 0.004;
+                              candidate.origin.y - annotation.origin.y) <
+                       1e-7 &&
+                   std::abs(std::remainder(candidate.rotation_radians -
+                                               annotation.rotation_radians,
+                                           2.0 * std::acos(-1.0))) < 1e-8;
           });
       if (cached)
         continue;
@@ -2179,6 +2303,42 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
       }
     }
   }
+  // Prefer a complete native balloon (label, frame and leader under one
+  // object ID). Definition's note origin is a layout point, not the cached
+  // glyph baseline; reconstructing it displaces the number outside its frame.
+  std::set<std::string> native_balloon_ids;
+  std::erase_if(parsed_balloons, [&](const BomBalloon &balloon) {
+    for (const TextAnnotation &text : display_text) {
+      if (text.text != balloon.text ||
+          std::hypot(text.origin.x - balloon.text_origin.x,
+                     text.origin.y - balloon.text_origin.y) >=
+              kDisplayListBalloonLabelToleranceM)
+        continue;
+      const std::string id(DisplayObjectId(text.source_table));
+      if (id.empty())
+        continue;
+      const bool frame = std::any_of(
+          sheet.entities.begin(), sheet.entities.end(), [&](const auto &e) {
+            const auto *arc = std::get_if<Arc2D>(&e);
+            return arc && DisplayObjectId(arc->source_table) == id;
+          });
+      const bool leader = std::any_of(
+          sheet.entities.begin(), sheet.entities.end(), [&](const auto &e) {
+            const auto *line = std::get_if<Line2D>(&e);
+            return line && DisplayObjectId(line->source_table) == id &&
+                   (std::hypot(line->start.x - balloon.leader_anchor.x,
+                               line->start.y - balloon.leader_anchor.y) <
+                        1e-7 ||
+                    std::hypot(line->end.x - balloon.leader_anchor.x,
+                               line->end.y - balloon.leader_anchor.y) < 1e-7);
+          });
+      if (frame && leader) {
+        native_balloon_ids.insert(id);
+        return true;
+      }
+    }
+    return false;
+  });
   // DisplayLists repeats text already represented by the richer legacy BOM
   // balloon entity. Match both label and nearby centre so ordinary dimensions
   // containing the same number are retained.
@@ -2202,8 +2362,10 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
     // keep their drawing/template font. This also covers linear dimensions,
     // which do not have the circular arc used by angular dimensions.
     const std::string_view object_id = DisplayObjectId(annotation.source_table);
-    if (!object_id.empty() &&
-        display_arrowhead_object_ids.count(std::string(object_id)) >= 2u) {
+    if (native_balloon_ids.contains(std::string(object_id))) {
+      // Native text already has the exact baseline inside its frame.
+    } else if (!object_id.empty() && display_arrowhead_object_ids.count(
+                                         std::string(object_id)) >= 2u) {
       annotation.font_family = "osifont";
       if (display_text_object_ids.count(std::string(object_id)) == 1u) {
         AlignAngularDimensionLabel(annotation, sheet.entities);
@@ -2220,7 +2382,10 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
           const TextAnnotation *existing = std::get_if<TextAnnotation>(&entity);
           return existing != nullptr && existing->text == annotation.text &&
                  std::hypot(existing->origin.x - annotation.origin.x,
-                            existing->origin.y - annotation.origin.y) < 0.004;
+                            existing->origin.y - annotation.origin.y) < 1e-7 &&
+                 std::abs(std::remainder(existing->rotation_radians -
+                                             annotation.rotation_radians,
+                                         2.0 * std::acos(-1.0))) < 1e-8;
         });
     if (duplicate)
       continue;

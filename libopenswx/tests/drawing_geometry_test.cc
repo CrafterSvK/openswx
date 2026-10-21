@@ -46,6 +46,7 @@ TEST(DrawingGeometryTest, ReadsTableLinesAndDeduplicatesMergedCellText) {
   EXPECT_DOUBLE_EQ(text->height, 0.002);
   EXPECT_NEAR(text->width, 0.006, 1e-12);
   EXPECT_EQ(text->font_family, "Arial");
+  EXPECT_FALSE(text->height_is_cap_height);
 
   const auto* line = std::get_if<Line2D>(&sheet.entities[1]);
   ASSERT_NE(line, nullptr);

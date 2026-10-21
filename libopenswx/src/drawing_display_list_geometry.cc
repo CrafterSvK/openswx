@@ -128,6 +128,8 @@ struct ObjectReference {
 struct TextStyleReference {
   std::size_t offset = 0;
   double height_m = 0.0;
+  std::string font_family;
+  bool bold = false;
 };
 
 struct SectionCalloutOwnership {
@@ -289,75 +291,42 @@ std::vector<TextStyleReference> FindTextStyles(std::span<const uint8_t> data) {
   std::vector<TextStyleReference> styles;
   for (std::size_t offset = 0; offset + kTextStylePrefixBytes <= data.size();
        ++offset) {
-    if (ReadU32Le(data, offset) != kTextStyleOpcode ||
+    const uint32_t opcode = ReadU32Le(data, offset);
+    if ((opcode != kTextStyleOpcode && opcode != 126u) ||
         ReadU32Le(data, offset + 4u) != kTextStylePayload) {
       continue;
     }
-    const double height = ReadF64Le(data, offset + 8u);
+    double height = ReadF64Le(data, offset + 8u);
+    if (height == -1.0) {
+      const uint32_t points = ReadU32Le(data, offset + 16u);
+      if (points == 0u || points > 72u)
+        continue;
+      height = static_cast<double>(points) * 0.0254 / 72.0 * 0.75;
+    }
     const auto style_name = ReadUtf16Field(data, offset + 40u);
-    if (!style_name || *style_name != "SWTxt" || !std::isfinite(height) ||
+    if (!style_name || style_name->empty() || !std::isfinite(height) ||
         height < 0.0001 || height > 0.02) {
       continue;
     }
-    styles.push_back({offset, height});
+    styles.push_back({offset, height, *style_name,
+                      (ReadU32Le(data, offset + 36u) & 8u) != 0u});
     offset += kTextStylePrefixBytes - 1u;
   }
   return styles;
 }
 
-double FindTextHeight(const std::vector<TextStyleReference> &styles,
-                      std::size_t offset) {
-  const auto style = std::upper_bound(
+const TextStyleReference *
+FindTextStyle(const std::vector<TextStyleReference> &styles,
+              std::size_t offset) {
+  const auto next = std::upper_bound(
       styles.begin(), styles.end(), offset,
       [](std::size_t value, const TextStyleReference &reference) {
         return value < reference.offset;
       });
-  if (style == styles.begin())
-    return kDefaultDimensionTextHeightM;
-  const TextStyleReference &reference = *std::prev(style);
-  if (offset - reference.offset > kMaximumTextStyleDistance) {
-    return kDefaultDimensionTextHeightM;
-  }
-  return reference.height_m;
-}
-
-std::optional<double> FindInlineTextHeight(std::span<const uint8_t> data,
-                                           std::size_t text_offset) {
-  constexpr uint32_t kInlineTextStyleOpcode = 126u;
-  constexpr double kMetresPerPoint = 0.0254 / 72.0;
-  constexpr double kCapHeightFromEm = 3.0 / 4.0;
-  const std::size_t first =
-      text_offset > kMaximumTextStyleDistance
-          ? text_offset - kMaximumTextStyleDistance
-          : 0u;
-  std::optional<double> height;
-  for (std::size_t offset = first; offset + kTextStylePrefixBytes <= text_offset;
-       ++offset) {
-    if (ReadU32Le(data, offset) != kInlineTextStyleOpcode ||
-        ReadU32Le(data, offset + 4u) != kTextStylePayload)
-      continue;
-    const auto family = ReadUtf16Field(data, offset + 40u);
-    const double stroke_scale = ReadF64Le(data, offset + 28u);
-    if (!family || !std::isfinite(stroke_scale) ||
-        std::abs(stroke_scale - 0.001) > 1e-12) {
-      continue;
-    }
-    const double candidate = ReadF64Le(data, offset + 8u);
-    if (std::isfinite(candidate) && candidate >= 0.0001 &&
-        candidate <= 0.006) {
-      height = candidate;
-      continue;
-    }
-    // A value of -1 switches the record to point-size form. The following
-    // u32 is the em size in typographic points (for example 13 for the
-    // drawing number and 9 for the company heading).
-    const uint32_t point_size = ReadU32Le(data, offset + 16u);
-    if (candidate == -1.0 && point_size >= 1u && point_size <= 72u) {
-      height = static_cast<double>(point_size) * kMetresPerPoint *
-               kCapHeightFromEm;
-    }
-  }
-  return height;
+  if (next == styles.begin())
+    return nullptr;
+  const auto &style = *std::prev(next);
+  return offset - style.offset <= kMaximumTextStyleDistance ? &style : nullptr;
 }
 
 std::optional<double> ReadTextRenderedWidth(std::span<const uint8_t> data,
@@ -594,12 +563,14 @@ Result<std::vector<Line2D>> DrawingGeometryReader::ReadDisplayListLines(
     const Vec2 end = {ReadF64Le(display_lists, offset + 32u),
                       ReadF64Le(display_lists, offset + 40u)};
     const double end_z = ReadF64Le(display_lists, offset + 48u);
+    // X/Y are already sheet coordinates. A leader attached to an isometric
+    // model point can retain a different Z at each endpoint.
     if (!IsSheetCoordinate(start.x, sheet_width_m) ||
         !IsSheetCoordinate(end.x, sheet_width_m) ||
         !IsSheetCoordinate(start.y, sheet_height_m) ||
         !IsSheetCoordinate(end.y, sheet_height_m) || !std::isfinite(start_z) ||
         !std::isfinite(end_z) || std::abs(start_z) > 1000.0 ||
-        std::abs(start_z - end_z) > 1e-8) {
+        std::abs(end_z) > 1000.0) {
       continue;
     }
     const double length = std::hypot(end.x - start.x, end.y - start.y);
@@ -766,7 +737,7 @@ Result<std::vector<TextAnnotation>> DrawingGeometryReader::ReadDisplayListText(
   }
 
   std::vector<TextAnnotation> annotations;
-  std::set<std::tuple<std::string, double, double>> seen;
+  std::set<std::tuple<std::string, double, double, double, std::string>> seen;
   for (std::size_t offset = 0;
        offset + kTextPrefixBytes <= display_lists.size(); ++offset) {
     const uint32_t opcode = ReadU32Le(display_lists, offset);
@@ -801,20 +772,25 @@ Result<std::vector<TextAnnotation>> DrawingGeometryReader::ReadDisplayListText(
     rotation = std::remainder(rotation, kTwoPi);
     if (std::abs(rotation) < 1e-10)
       rotation = 0.0;
-    if (!seen.emplace(*value, origin.x, origin.y).second)
+    if (!seen.emplace(*value, origin.x, origin.y, rotation, *owner_label)
+             .second)
       continue;
 
-    double height = FindTextHeight(text_styles, offset);
-    if (owner_label->starts_with("sheet=")) {
-      height = FindInlineTextHeight(display_lists, offset).value_or(0.0015);
-    }
-    TextAnnotation annotation{
-        *value, origin, rotation, height, 0.0, "Century Gothic",
-        "Contents/DisplayLists/text/" + std::to_string(opcode) + "/" +
-            *owner_label,
-        TextAnchor::kStart};
+    const auto *style = FindTextStyle(text_styles, offset);
+    const double height =
+        style ? style->height_m : kDefaultDimensionTextHeightM;
+    TextAnnotation annotation{*value,
+                              origin,
+                              rotation,
+                              height,
+                              0.0,
+                              style ? style->font_family : "Century Gothic",
+                              "Contents/DisplayLists/text/" +
+                                  std::to_string(opcode) + "/" + *owner_label,
+                              TextAnchor::kStart};
     annotation.rendered_width =
         ReadTextRenderedWidth(display_lists, offset + 48u).value_or(0.0);
+    annotation.bold = style && style->bold;
     annotations.push_back(std::move(annotation));
   }
   return Result<std::vector<TextAnnotation>>::Ok(std::move(annotations));
@@ -838,9 +814,14 @@ Result<std::vector<uint32_t>> DrawingGeometryReader::ReadDisplayObjectIds(
   std::set<uint32_t> ids;
   constexpr std::array<uint8_t, 8> kDefinitionObjectSuffix = {
       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x38, 0x4A};
+  constexpr std::array<uint8_t, 8> kLegacyNoteObjectSuffix = {
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x50, 0x46};
   for (std::size_t offset = 0; offset + 12u <= definition.size(); ++offset) {
     if (!std::equal(
             kDefinitionObjectSuffix.begin(), kDefinitionObjectSuffix.end(),
+            definition.begin() + static_cast<std::ptrdiff_t>(offset + 4u)) &&
+        !std::equal(
+            kLegacyNoteObjectSuffix.begin(), kLegacyNoteObjectSuffix.end(),
             definition.begin() + static_cast<std::ptrdiff_t>(offset + 4u))) {
       continue;
     }

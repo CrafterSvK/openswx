@@ -858,6 +858,9 @@ TEST(DrawingViewGeometryTest, UsesSerializedBomBalloonSheetOwnership) {
   AppendF64(data, 0.30);
   AppendF64(data, 0.20);
   AppendF64(data, 0.04);
+  data.resize(data.size() + 58u, 0u);
+  AppendF64(data, 0.003);
+  AppendF64(data, 0.004);
   AppendF64(data, 0.28);
   AppendF64(data, 0.19);
   AppendF64(data, 0.04);
@@ -1781,6 +1784,415 @@ TEST(DrawingViewGeometryTest, RejectsMalformedCachedFaceDescriptorTable) {
   auto result = DrawingGeometryReader::ReadFaceTessellations(data);
 
   EXPECT_FALSE(result.ok());
+}
+
+std::span<const uint8_t> XmlBytes(const std::string &xml) {
+  return {reinterpret_cast<const uint8_t *>(xml.data()), xml.size()};
+}
+
+std::vector<uint8_t> PlacementFixture(
+    std::string_view name,
+    const std::array<double, 9> &matrix = {1, 0, 0, 0, 1, 0, 0, 0, 1},
+    double x = 0.1) {
+  std::vector<uint8_t> data(520u, 0u);
+  const std::array<uint8_t, 5> marker{0x09, 0x89, 0xFF, 0xFE, 0xFF};
+  std::copy(marker.begin(), marker.end(), data.begin());
+  data[5] = static_cast<uint8_t>(name.size());
+  for (std::size_t i = 0; i < name.size(); ++i)
+    data[6u + i * 2u] = static_cast<uint8_t>(name[i]);
+  for (std::size_t i = 0; i < matrix.size(); ++i)
+    SetF64(data, 83u + i * 8u, matrix[i]);
+  SetF64(data, 155u, x);
+  SetF64(data, 163u, 0.1);
+  SetF64(data, 179u, 0.1);
+  const std::array<double, 11> rectangle{x - 0.06, 0.04, x + 0.10, 0.20,
+                                         x - 0.05, 0.05, x + 0.09, 0.19,
+                                         x,        0.1,  0};
+  for (std::size_t i = 0; i < rectangle.size(); ++i)
+    SetF64(data, 400u + i * 8u, rectangle[i]);
+  return data;
+}
+
+std::vector<uint8_t> UnnamedBucketFixture(Vec3 direction = {0, 0, 1}) {
+  constexpr std::string_view cls = "uiViewBucket_c";
+  std::vector<uint8_t> data{
+      1, 0, 0, 0, 255, 255, 1, 0, static_cast<uint8_t>(cls.size()), 0};
+  data.insert(data.end(), cls.begin(), cls.end());
+  for (double value : {direction.x, direction.y, direction.z, 1.0, 10.0})
+    AppendF64(data, value);
+  data.insert(data.end(), {0, 0, 0x21, 3, 0, 0, 2, 0, 0, 0});
+  for (double value : {0.2, 0.0, -0.3, 0.4, 0.0, -0.3})
+    AppendF64(data, value);
+  return data;
+}
+
+TEST(DrawingViewGeometryTest, AcceptsGermanSheetWithoutModelViews) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Blatt\"/></Keywords>";
+  std::vector<uint8_t> definition(32u, 0u);
+  SetF64(definition, 0u, 0.297);
+  SetF64(definition, 8u, 0.210);
+  AppendUtf16(definition, "A");
+  AppendSheetFormatNote(definition, "TITLE", 0.02, 0.02, "Arial", 0.002);
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_EQ(result.value().name, "A");
+}
+
+TEST(DrawingViewGeometryTest, PreservesPortraitPaperDimensions) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition(32u, 0u);
+  SetF64(definition, 0u, 0.210);
+  SetF64(definition, 8u, 0.297);
+  AppendUtf16(definition, "A");
+  AppendSheetFormatNote(definition, "TITLE", 0.02, 0.02, "Arial", 0.002);
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_DOUBLE_EQ(result.value().width_m, 0.210);
+  EXPECT_DOUBLE_EQ(result.value().height_m, 0.297);
+}
+
+TEST(DrawingViewGeometryTest,
+     UsesSheetBorderToResolveStandardPaperOrientation) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition(32u, 0u);
+  SetF64(definition, 0u, 0.297);
+  SetF64(definition, 8u, 0.210);
+  AppendUtf16(definition, "A");
+  for (const Vec2 p : {Vec2{0.01, 0.01}, Vec2{0.20, 0.01}, Vec2{0.20, 0.287},
+                       Vec2{0.01, 0.287}})
+    AppendSheetSketchPoint(definition, p.x, p.y);
+  for (uint16_t i = 0; i < 4; ++i)
+    AppendSheetSketchLine(definition, i, static_cast<uint16_t>((i + 1) % 4));
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_DOUBLE_EQ(result.value().width_m, 0.210);
+  EXPECT_DOUBLE_EQ(result.value().height_m, 0.297);
+}
+
+TEST(DrawingViewGeometryTest, ResolvesPaperSizeWithinSelectedSheetObject) {
+  const std::string kw = "<Keywords><Sheet Name=\"A\" Type=\"Sheet\"/>"
+                         "<Sheet Name=\"B\" Type=\"Sheet\"/></Keywords>";
+  constexpr std::string_view cls = "moDrSheet";
+  std::vector<uint8_t> definition{
+      255, 255, 1, 0, static_cast<uint8_t>(cls.size()), 0};
+  definition.insert(definition.end(), cls.begin(), cls.end());
+  definition.insert(definition.end(), {0x77, 0x88});
+  AppendUtf16(definition, "A");
+  AppendF64(definition, 0.420);
+  AppendF64(definition, 0.297);
+  definition.insert(definition.end(), {0x77, 0x88});
+  AppendUtf16(definition, "B");
+  AppendF64(definition, 0.210);
+  AppendF64(definition, 0.297);
+  AppendSheetFormatNote(definition, "TITLE", 0.02, 0.02, "Arial", 0.002);
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "B");
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_DOUBLE_EQ(result.value().width_m, 0.210);
+  EXPECT_DOUBLE_EQ(result.value().height_m, 0.297);
+}
+
+TEST(DrawingViewGeometryTest, AcceptsPlacementOnRightSideOfA1Sheet) {
+  auto data = PlacementFixture("V", {1, 0, 0, 0, 1, 0, 0, 0, 1}, 0.7);
+  const std::array<std::string, 1> names{"V"};
+  auto result = DrawingGeometryReader::ReadViewPlacements(data, names);
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_DOUBLE_EQ(result.value()[0].translation.x, 0.7);
+}
+
+TEST(DrawingViewGeometryTest, PreservesDistinctNearbyLabelsAndRotatedText) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition(32u, 0u);
+  SetF64(definition, 0u, 0.297);
+  SetF64(definition, 8u, 0.210);
+  std::vector<uint8_t> display;
+  AppendDisplayTextStyle(display, 0.001);
+  AppendDisplayText(display, 356u, "11", {0.1, 0.05, 0}, 0);
+  AppendDisplayText(display, 356u, "11", {0.103, 0.05, 0}, 0);
+  AppendDisplayText(display, 356u, "11", {0.1, 0.05, 0}, 0.5);
+  AppendUtf16(display, "A");
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "A", display);
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_EQ(std::count_if(result.value().entities.begin(),
+                          result.value().entities.end(),
+                          [](const DrawingEntity &e) {
+                            return std::holds_alternative<TextAnnotation>(e);
+                          }),
+            3);
+}
+
+TEST(DrawingViewGeometryTest, RetainsUncachedFormatTextBesideCachedSheetText) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition(32u, 0u);
+  SetF64(definition, 0u, 0.297);
+  SetF64(definition, 8u, 0.210);
+  AppendUtf16(definition, "A");
+  AppendSheetFormatNote(definition, "TITLE", 0.02, 0.02, "Arial", 0.002);
+  std::vector<uint8_t> display;
+  AppendDisplayTextStyle(display, 0.001);
+  AppendDisplayText(display, 356u, "OTHER", {0.1, 0.05, 0}, 0);
+  AppendUtf16(display, "A");
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "A", display);
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_EQ(std::count_if(result.value().entities.begin(),
+                          result.value().entities.end(),
+                          [](const DrawingEntity &e) {
+                            return std::holds_alternative<TextAnnotation>(e);
+                          }),
+            2);
+}
+
+TEST(DrawingViewGeometryTest, AssociatesUnnamedCacheByUniqueDirectionAndScale) {
+  const std::string kw = "<Keywords><Sheet Name=\"A\" Type=\"Sheet\">"
+                         "<View Name=\"V\"/></Sheet></Keywords>";
+  const auto definition = PlacementFixture("V", {1, 0, 0, 0, 0, -1, 0, 1, 0});
+  const auto cache = UnnamedBucketFixture({0, 1, 0});
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       cache, {}, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().entities.size(), 1u);
+  const auto *line = std::get_if<Line2D>(&result.value().entities.front());
+  ASSERT_NE(line, nullptr);
+  EXPECT_NEAR(line->start.x, 0.12, 1e-12);
+  EXPECT_NEAR(line->start.y, 0.07, 1e-12);
+  EXPECT_NEAR(line->end.x, 0.14, 1e-12);
+}
+
+TEST(DrawingViewGeometryTest,
+     AssociatesComponentReferenceByUniqueViewSignature) {
+  const std::string kw = "<Keywords><Sheet Name=\"A\" Type=\"Sheet\">"
+                         "<View Name=\"V\"/></Sheet></Keywords>";
+  const auto definition = PlacementFixture("V", {1, 0, 0, 0, 0, -1, 0, 1, 0});
+  auto cache = UnnamedBucketFixture({0, 1, 0});
+  AppendUtf16(cache, "component-1@assembly");
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       cache, {}, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().entities.size(), 1u);
+  const auto *line = std::get_if<Line2D>(&result.value().entities.front());
+  ASSERT_NE(line, nullptr);
+  EXPECT_NEAR(line->start.x, 0.12, 1e-12);
+  EXPECT_NEAR(line->start.y, 0.07, 1e-12);
+}
+
+TEST(DrawingViewGeometryTest,
+     RetainsSheetLeadersWithDifferentAttachmentDepths) {
+  std::vector<uint8_t> display;
+  AppendDisplayObjectReference(display, 42u);
+  AppendDisplayLine(display, {.22, .21, -.01}, {.25, .24, .002});
+  const std::array<uint32_t, 1> ids{42u};
+  auto result = DrawingGeometryReader::ReadDisplayListLines(display, {}, {},
+                                                            .42, .297, ids);
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().size(), 1u);
+  EXPECT_DOUBLE_EQ(result.value().front().start.x, .22);
+  EXPECT_DOUBLE_EQ(result.value().front().end.y, .24);
+}
+
+TEST(DrawingViewGeometryTest, ReadsLegacyNoteObjectIdsWithinTheirOwnSheet) {
+  std::vector<uint8_t> definition;
+  AppendUtf16(definition, "A");
+  AppendU32(definition, 42u);
+  definition.insert(definition.end(), {0, 0, 0, 0, 0, 0, 0x50, 0x46});
+  AppendUtf16(definition, "B");
+  AppendU32(definition, 43u);
+  definition.insert(definition.end(), {0, 0, 0, 0, 0, 0, 0x50, 0x46});
+  const std::array<std::string, 2> sheets{"A", "B"};
+  auto result =
+      DrawingGeometryReader::ReadDisplayObjectIds(definition, sheets, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_EQ(result.value(), std::vector<uint32_t>{42u});
+}
+
+TEST(DrawingViewGeometryTest, PreservesNativeBalloonFrameAndTextBaseline) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Sheet\"/></Keywords>";
+  std::vector<uint8_t> definition(32u);
+  SetF64(definition, 0u, .42);
+  SetF64(definition, 8u, .297);
+  AppendUtf16(definition, "A");
+  AppendDefinitionObjectId(definition, 42u);
+  AppendF64(definition, .28);
+  AppendF64(definition, .19);
+  AppendF64(definition, .04);
+  definition.resize(definition.size() + 32u);
+  AppendUtf16(definition, "2");
+  AppendF64(definition, .30);
+  AppendF64(definition, .20);
+  AppendF64(definition, .04);
+  definition.resize(definition.size() + 58u);
+  AppendF64(definition, .003);
+  AppendF64(definition, .004);
+  AppendF64(definition, .28);
+  AppendF64(definition, .19);
+  AppendF64(definition, .04);
+  std::vector<uint8_t> display;
+  AppendDisplayObjectReference(display, 42u);
+  AppendDisplayLine(display, {.28, .19, 0}, {.298, .198, 0});
+  AppendDisplayArc(display, {.302, .198, 0}, {.302, .198, 0}, {.30, .198, 0});
+  AppendDisplayTextStyle(display, .003);
+  AppendDisplayText(display, 156u, "2", {.299, .196, 0}, 0);
+  auto result = DrawingGeometryReader::ReadCachedSheet(XmlBytes(kw), definition,
+                                                       {}, {}, "A", display);
+  ASSERT_TRUE(result.ok()) << result.error();
+  size_t texts = 0, frames = 0;
+  for (const auto &entity : result.value().entities) {
+    EXPECT_FALSE(std::holds_alternative<BomBalloon>(entity));
+    if (const auto *text = std::get_if<TextAnnotation>(&entity)) {
+      ++texts;
+      EXPECT_EQ(text->text, "2");
+      EXPECT_DOUBLE_EQ(text->origin.x, .299);
+      EXPECT_DOUBLE_EQ(text->origin.y, .196);
+    }
+    if (std::holds_alternative<Arc2D>(entity))
+      ++frames;
+  }
+  EXPECT_EQ(texts, 1u);
+  EXPECT_EQ(frames, 1u);
+}
+
+TEST(DrawingViewGeometryTest, ReadsBoldCachedNoteStyle) {
+  std::vector<uint8_t> display;
+  AppendDisplayObjectReference(display, 42u);
+  const auto style_start = display.size();
+  AppendDisplayTextStyle(display, .003);
+  display[style_start + 36u] = 8u;
+  AppendDisplayText(display, 156u, "Instruction", {.10, .20, 0}, 0);
+  const std::array<uint32_t, 1> ids{42u};
+  auto result = DrawingGeometryReader::ReadDisplayListText(display, {}, {}, .42,
+                                                           .297, ids);
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().size(), 1u);
+  EXPECT_TRUE(result.value().front().bold);
+}
+
+TEST(DrawingViewGeometryTest, DoesNotGuessBetweenPlacementsWithSameSignature) {
+  const std::string kw =
+      "<Keywords><Sheet Name=\"A\" Type=\"Sheet\">"
+      "<View Name=\"V\"/><View Name=\"W\"/></Sheet></Keywords>";
+  auto definition = PlacementFixture("V");
+  auto other = PlacementFixture("W");
+  definition.insert(definition.end(), other.begin(), other.end());
+  const auto cache = UnnamedBucketFixture();
+  const std::string tables =
+      "<Tables><Table SheetName=\"A\"><GridLines><Line>"
+      "<StartPt X=\"0.01\" Y=\"0.02\"/><EndPt X=\"0.03\" Y=\"0.04\"/>"
+      "</Line></GridLines></Table></Tables>";
+  auto result = DrawingGeometryReader::ReadCachedSheet(
+      XmlBytes(kw), definition, cache, XmlBytes(tables), "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().entities.size(), 1u);
+  const auto *line = std::get_if<Line2D>(&result.value().entities.front());
+  ASSERT_NE(line, nullptr);
+  EXPECT_DOUBLE_EQ(line->start.x, 0.01);
+  EXPECT_DOUBLE_EQ(line->start.y, 0.02);
+}
+
+TEST(DrawingViewGeometryTest, DoesNotTruncateBucketAtUnframedClassMarker) {
+  auto data = UnnamedBucketFixture();
+  data.insert(data.end(), {255, 255, 1, 0, 0, 0, 0, 0});
+  data.insert(data.end(), {0x21, 3, 0, 0, 2, 0, 0, 0});
+  for (double value : {0.5, 0.0, 0.1, 0.6, 0.0, 0.2})
+    AppendF64(data, value);
+  AppendUtf16(data, "part@V");
+  auto result = DrawingGeometryReader::ReadViewBuckets(data);
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().size(), 1u);
+  EXPECT_EQ(result.value().front().name, "V");
+  EXPECT_EQ(result.value().front().source_lines.size(), 2u);
+}
+
+TEST(DrawingViewGeometryTest,
+     RetainsCachedSheetTextStyleWithoutInlineOverride) {
+  std::vector<uint8_t> display;
+  AppendDisplayTextStyle(display, 0.0025);
+  AppendDisplayText(display, 356u, "TITLE", {0.1, 0.05, 0}, 0);
+  AppendUtf16(display, "A");
+  const std::array<std::string, 1> sheets{"A"};
+  auto result = DrawingGeometryReader::ReadDisplayListText(
+      display, {}, {}, 0.297, 0.210, {}, sheets, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().size(), 1u);
+  EXPECT_DOUBLE_EQ(result.value().front().height, 0.0025);
+}
+
+TEST(DrawingViewGeometryTest, ReadsArialPointSizeAndHonorsLaterStyleOverride) {
+  std::vector<uint8_t> display;
+  AppendU32(display, 108u);
+  AppendU32(display, 10u);
+  AppendF64(display, -1.0);
+  AppendU32(display, 8u);
+  display.resize(40u, 0u);
+  AppendUtf16(display, "Arial");
+  AppendDisplayText(display, 356u, "POINTS", {0.1, 0.05, 0}, 0);
+  AppendDisplayTextStyle(display, 0.002);
+  AppendDisplayText(display, 356u, "METRES", {0.1, 0.06, 0}, 0);
+  AppendUtf16(display, "A");
+  const std::array<std::string, 1> sheets{"A"};
+  auto result = DrawingGeometryReader::ReadDisplayListText(
+      display, {}, {}, 0.297, 0.210, {}, sheets, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().size(), 2u);
+  EXPECT_NEAR(result.value()[0].height, 8.0 * 0.0254 / 72.0 * 0.75, 1e-12);
+  EXPECT_EQ(result.value()[0].font_family, "Arial");
+  EXPECT_DOUBLE_EQ(result.value()[1].height, 0.002);
+  EXPECT_EQ(result.value()[1].font_family, "SWTxt");
+}
+
+TEST(DrawingViewGeometryTest, RejectsNumericTableCellWithoutBalloonMetrics) {
+  std::vector<uint8_t> data;
+  AppendUtf16(data, "A");
+  AppendF64(data, 0.08);
+  AppendF64(data, 0.09);
+  AppendF64(data, 0.0);
+  data.resize(data.size() + 64u, 0u);
+  AppendUtf16(data, "1");
+  AppendF64(data, 0.1);
+  AppendF64(data, 0.1);
+  AppendF64(data, 0.0);
+  AppendF64(data, 0.08);
+  AppendF64(data, 0.09);
+  AppendF64(data, 0.0);
+  const std::array<std::string, 1> sheets{"A"};
+  auto result = DrawingGeometryReader::ReadLegacyBomBalloons(data, sheets, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  EXPECT_TRUE(result.value().empty());
+}
+
+TEST(DrawingViewGeometryTest, ReadsBalloonAfterLongFirstClassHeader) {
+  std::vector<uint8_t> data;
+  AppendUtf16(data, "A");
+  AppendF64(data, 0.08);
+  AppendF64(data, 0.09);
+  AppendF64(data, 0.0);
+  data.resize(data.size() + 2600u, 0u);
+  AppendUtf16(data, "3");
+  AppendF64(data, 0.1);
+  AppendF64(data, 0.1);
+  AppendF64(data, 0.0);
+  data.resize(data.size() + 58u, 0u);
+  AppendF64(data, 0.003);
+  AppendF64(data, 0.004);
+  AppendF64(data, 0.08);
+  AppendF64(data, 0.09);
+  AppendF64(data, 0.0);
+  const std::array<std::string, 1> sheets{"A"};
+  auto result = DrawingGeometryReader::ReadLegacyBomBalloons(data, sheets, "A");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().size(), 1u);
+  EXPECT_EQ(result.value().front().text, "3");
+  EXPECT_DOUBLE_EQ(result.value().front().leader_anchor.x, 0.08);
+  EXPECT_DOUBLE_EQ(result.value().front().text_height_m, 0.003);
 }
 
 } // namespace

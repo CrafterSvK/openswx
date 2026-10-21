@@ -17,7 +17,7 @@ namespace {
 
 constexpr std::array<uint8_t, 3> kUtf16Marker = {0xFF, 0xFE, 0xFF};
 constexpr std::string_view kMagnetLineClass = "moDisplayMagnetLine_c";
-constexpr std::size_t kAnchorSearchBytes = 2048u;
+constexpr std::size_t kAnchorSearchBytes = 4096u;
 constexpr std::size_t kRepeatedAnchorSearchBytes = 2048u;
 constexpr std::size_t kTextHeightOffsetAfterString = 82u;
 constexpr std::size_t kTextCompanionMetricOffsetAfterString = 90u;
@@ -162,6 +162,9 @@ DrawingGeometryReader::ReadLegacyBomBalloons(
     if (OwnerSheetAt(strings, known_sheets, candidate.offset) != sheet_name) {
       continue;
     }
+    const double text_height = ReadBalloonTextHeight(definition, candidate.end);
+    if (text_height == 0.0)
+      continue;
     const double text_x = ReadF64Le(definition, candidate.end);
     const double text_y = ReadF64Le(definition, candidate.end + 8u);
     const double plane_z = ReadF64Le(definition, candidate.end + 16u);
@@ -198,16 +201,15 @@ DrawingGeometryReader::ReadLegacyBomBalloons(
     }
     if (anchor_offset == definition.size()) continue;
 
-    balloons.push_back(BomBalloon{
-        candidate.value,
-        {text_x, text_y},
-        {ReadF64Le(definition, anchor_offset),
-         ReadF64Le(definition, anchor_offset + 8u)},
-        static_cast<uint64_t>(candidate.offset),
-        "Contents/Definition/moDisplayBalloonNote_c",
-        false,
-        {},
-        ReadBalloonTextHeight(definition, candidate.end)});
+    balloons.push_back(BomBalloon{candidate.value,
+                                  {text_x, text_y},
+                                  {ReadF64Le(definition, anchor_offset),
+                                   ReadF64Le(definition, anchor_offset + 8u)},
+                                  static_cast<uint64_t>(candidate.offset),
+                                  "Contents/Definition/moDisplayBalloonNote_c",
+                                  false,
+                                  {},
+                                  text_height});
   }
   return Result<std::vector<BomBalloon>>::Ok(std::move(balloons));
 }
