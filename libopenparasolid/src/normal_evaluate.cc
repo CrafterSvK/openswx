@@ -22,15 +22,14 @@ bool Scale(Vector3 source, Vector& result) {
   return true;
 }
 }  // namespace
-Result<Vector3> UnitSurfaceNormal(const SurfaceEvaluation& sample,
-                                  bool reverse) {
+Result<Vector3> UnitCrossProduct(Vector3 first, Vector3 second, bool reverse) {
   Vector u{}, v{};
-  if (!Scale(sample.u_derivative, u) || !Scale(sample.v_derivative, v)) {
+  if (!Scale(first, u) || !Scale(second, v)) {
     return Result<Vector3>::Err(
         {ErrorCode::kInvalidRecord, 0,
-         "Surface normal requires finite nonzero partial derivatives"});
+         "Unit cross product requires finite nonzero vectors"});
   }
-  // Scale each partial independently before crossing, so extreme derivative
+  // Scale each input independently before crossing, so extreme vector
   // magnitudes do not overflow or underflow an otherwise regular normal.
   Vector cross{u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2],
                u[0] * v[1] - u[1] * v[0]};
@@ -38,12 +37,16 @@ Result<Vector3> UnitSurfaceNormal(const SurfaceEvaluation& sample,
   if (!std::isfinite(length) || length == 0) {
     return Result<Vector3>::Err(
         {ErrorCode::kInvalidRecord, 0,
-         "Surface normal is singular or numerically unresolvable"});
+         "Unit cross product is singular or numerically unresolvable"});
   }
   const long double sign = reverse ? -1 : 1;
   for (auto& value : cross) value = sign * value / length;
   return Result<Vector3>::Ok({static_cast<double>(cross[0]),
                               static_cast<double>(cross[1]),
                               static_cast<double>(cross[2])});
+}
+Result<Vector3> UnitSurfaceNormal(const SurfaceEvaluation& sample,
+                                  bool reverse) {
+  return UnitCrossProduct(sample.u_derivative, sample.v_derivative, reverse);
 }
 }  // namespace openparasolid::internal

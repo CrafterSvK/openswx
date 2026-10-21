@@ -6,6 +6,8 @@
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid::internal {
+[[nodiscard]] Result<Vector3> UnitCrossProduct(Vector3 first, Vector3 second,
+                                              bool reverse);
 [[nodiscard]] Result<Vector3> UnitSurfaceNormal(
     const SurfaceEvaluation& sample, bool reverse);
 // The public dispatchers validate that all parameters are finite.

@@ -3,6 +3,7 @@
 #ifndef OPENPARASOLID_EVALUATE_H_
 #define OPENPARASOLID_EVALUATE_H_
 
+#include <array>
 #include <span>
 #include <vector>
 
@@ -138,6 +139,30 @@ struct IntersectionChartParameters {
 /// estimates, extend to terminators, or evaluate between chart positions.
 [[nodiscard]] Result<IntersectionChartParameters> ParameterizeIntersectionChart(
     const IntersectionChart& chart, std::span<const Vector3> tangents);
+
+struct IntersectionChartEvaluation {
+  /// Natural parameters and measured residual for each stored surface, per point.
+  std::vector<std::array<SurfaceParameters, 2>> surface_parameters;
+  /// Unit N0 x N1 directions in stored surface order, without curve sense flips.
+  std::vector<Vector3> tangents;
+  IntersectionChartParameters parameterization;
+};
+
+/// Reconstructs a directly referenced INTERSECTION's chart from the model.
+/// Both surface targets must support analytic inversion and have known senses.
+/// Each stored chart position must invert onto both surfaces within the finite
+/// nonnegative absolute tolerance in source units. Normals are sampled at the
+/// recovered UV values; their cross product supplies the natural tangent.
+/// Returns one UV pair, tangent and parameter per point, plus one scale per
+/// chord. Inherits inversion, normal and chart parameterisation checks, including
+/// the limit of 1,000,000 position scalars before allocating output arrays.
+/// Missing/wrong roles, singular normals and incompatible chart order are
+/// explicit errors; unsupported dependencies remain kUnsupportedFormat.
+/// Does not unwrap trims, evaluate between chart points or extend to terminators.
+/// Auxiliary UV data/error estimates, curve/face senses and placement are not
+/// applied. The source model and chart are not modified.
+[[nodiscard]] Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
+    const Model& model, NodeId curve, double tolerance);
 
 }  // namespace openparasolid
 

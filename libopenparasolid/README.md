@@ -428,9 +428,9 @@ The implementation uses bounded stack storage, adds no CLI settings or
 dependencies, and remains MIT and STL-only.
 
 Together with `EvaluateSurfaceNormal`, inversion allows callers to obtain
-oriented normals at analytic chart positions. Automatic chart tangent
-construction, NURBS/procedural inversion and the exact intersection solver
-remain separate steps.
+oriented normals at analytic chart positions. `EvaluateIntersectionChart`
+combines these operations with chart parameterisation. NURBS/procedural
+inversion and the exact intersection solver remain separate steps.
 
 Tests cover oblique/translated and slightly imperfect source frames, explicit
 distance tolerances, seams, signed cone slopes, poles/apices, torus sheets,
@@ -464,9 +464,9 @@ The API propagates the complete surface evaluator's domain, dependency,
 resource and representability checks, including those on the point and both
 partials. It introduces no CLI settings or dependencies and remains MIT and
 STL-only. Oriented normals provide a building block for intersection chart
-parameterisation. The separate chart API below requires supplied tangents;
-analytic inversion is available separately, while NURBS/procedural inversion
-and a surface-intersection solver remain pending.
+parameterisation. The numeric chart API accepts supplied tangents; the model
+API obtains them through analytic inversion. NURBS/procedural inversion and
+a surface-intersection solver remain pending.
 
 Tests cover source orientation, rotated frames, rational/nonrational patches,
 procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,
@@ -528,6 +528,57 @@ selected private charts with externally supplied analytic tangents. Maximum
 absolute difference is below `5e-16`. This validates the parameter recurrence,
 not automatic tangent reconstruction or a complete intersection evaluator.
 Private inputs and comparison tools remain outside the repository.
+
+## Model-based intersection charts
+
+`EvaluateIntersectionChart(model, curve_id, tolerance)` prepares a directly
+referenced `INTERSECTION` chart without caller-supplied tangents. Both surface
+targets must support analytic inversion (plane, cylinder, cone, sphere or
+torus) and have known senses. At each stored chart point it:
+
+1. Inverts the point onto both surfaces with the caller's explicit absolute
+   distance tolerance in source units.
+2. Evaluates the oriented surface normals at the recovered parameters.
+3. Forms the unit tangent `N0 cross N1` in stored surface order.
+4. Applies the existing XT chart-parameter recurrence to these directions.
+
+`IntersectionChartEvaluation` returns one pair of `SurfaceParameters`
+(including measured residuals) and one unit tangent per chart position, plus
+the point parameters and chord scales. Returned surface parameters retain
+their principal angular branches, while chart parameters increase without
+periodic wrapping. Source positions, surface order, frames and metadata stay
+unchanged. Curve and face senses do not flip the natural tangent. Reversed
+chart order is rejected rather than silently corrected.
+
+Inversion and normal failures identify the zero-based chart point and surface
+side. Missing/wrong roles, singular/parallel normals, invalid chart order and
+numerical range failures remain explicit errors. Untyped, unsupported or
+unknown-sense surface dependencies return `kUnsupportedFormat`. The chart is
+bounded to 1,000,000 position scalars (333,333 points) before any result arrays
+are allocated. Computation is linear with bounded output arrays; no pointers
+into the model are retained in the result.
+
+Membership checks use only the supplied tolerance; auxiliary chart error
+estimates do not relax it. Normals are sampled at the recovered UV values,
+whose forward positions may differ from the stored point by that tolerance.
+The result does not certify exact surface/curve membership, chart accuracy,
+conditioning, branch topology or limit correspondence. Additional type-204
+UV data is not inferred or applied. Trim wrappers and terminator extensions
+are not traversed, and `EvaluateCurve` still requires a solver for exact
+intersection evaluation between chart points. No CLI settings or dependencies
+are added; the implementation remains MIT and STL-only.
+
+Synthetic tests cover surface order/senses, forward references, source units,
+explicit tolerances, contextual failures, singularities, closed charts,
+copy/move behavior and resource limits. An independent complex-step/80-digit
+Decimal comparison checks all 419 successfully prepared charts and 2,219
+points among 1,409 typed intersections in 90 selected private streams. The
+other 990 charts explicitly require unsupported surface inversion, with no
+other errors in this selection. At a requested tolerance of `1e-8`, the
+maximum independent forward residual is below `1.8e-10` in source units,
+tangent component difference below `9e-15`, and normalized parameter/scale
+difference below `1.2e-16`. Private inputs and comparison tools remain outside
+the repository.
 
 ## Intersection curve definitions
 
