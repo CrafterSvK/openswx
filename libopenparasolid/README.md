@@ -392,6 +392,41 @@ samples, 120 unavailable-payload errors and 80 explicit NURBS domain errors;
 evaluated endpoints agree within `1.5e-10` in source units. Private inputs
 and comparison tools remain outside the repository.
 
+## Oriented surface normals
+
+`EvaluateSurfaceNormal(model, surface_id, u, v)` returns an oriented unit
+normal in source coordinates for every currently evaluable surface: plane,
+cylinder, cone, sphere, torus, NURBS, spun and swept surfaces. It normalizes
+the natural cross product `dP/du x dP/dv` and reverses it for surface sense
+`-`. Unknown sense returns `kUnsupportedFormat`. Generator-curve senses,
+face sense, placement transforms and unit conversion do not alter this result.
+`EvaluateSurface` continues to return natural, unoriented partials.
+
+Both partials are scaled independently before crossing to avoid overflow or
+underflow caused by their magnitudes. Zero, nonfinite or numerically
+unresolvable cross products return `kInvalidRecord`. Known spherical-pole and
+apple/lemon/horn torus boundary parameters are rejected explicitly rather
+than normalizing trigonometric rounding residues. A surface point may remain
+evaluable at such a singular parameter even when its parametric normal does
+not. No arbitrary minimum angle between partials is imposed; this API does
+not certify numerical conditioning, global regularity or topology.
+
+The API propagates the complete surface evaluator's domain, dependency,
+resource and representability checks, including those on the point and both
+partials. It introduces no CLI settings or dependencies and remains MIT and
+STL-only. Oriented normals provide a building block for later intersection
+chart parameterisation; neither chart reconstruction nor a surface-intersection
+solver is included in this iteration.
+
+Tests cover source orientation, rotated frames, rational/nonrational patches,
+procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,
+singular parameters and explicit errors. An independent comparison using
+complex-step analytic derivatives, SciPy BSpline and Rotation verifies 24,441
+normal samples across 90 selected private streams, with maximum component
+difference below `9e-13`. Six further samples return explicit errors because
+their generator has no typed payload. Private inputs and comparison tools
+remain outside the repository.
+
 ## Intersection curve definitions
 
 `INTERSECTION` (type 38) now has a typed `IntersectionCurveGeometry`, reported

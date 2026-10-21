@@ -81,6 +81,16 @@ struct SurfaceEvaluation {
                                                         NodeId surface,
                                                         double u, double v);
 
+/// Evaluates a unit normal in source coordinates. Uses the natural cross
+/// product dP/du x dP/dv, reversed for surface sense '-'. The surface must
+/// have known sense '+' or '-'. Face sense and placement are not applied.
+/// Inherits EvaluateSurface's domain and resource checks. Zero or numerically
+/// unresolvable cross products return kInvalidRecord; unknown surface sense
+/// returns kUnsupportedFormat. No normal is invented at singular parameters.
+[[nodiscard]] Result<Vector3> EvaluateSurfaceNormal(const Model& model,
+                                                   NodeId surface,
+                                                   double u, double v);
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_EVALUATE_H_

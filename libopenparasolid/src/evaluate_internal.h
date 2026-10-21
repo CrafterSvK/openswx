@@ -6,6 +6,8 @@
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid::internal {
+[[nodiscard]] Result<Vector3> UnitSurfaceNormal(
+    const SurfaceEvaluation& sample, bool reverse);
 // The public dispatchers validate that all parameters are finite.
 [[nodiscard]] Result<CurveEvaluation> EvaluateNurbsCurve(
     const NurbsCurveGeometry& curve, double parameter);

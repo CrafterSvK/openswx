@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <numbers>
 
 #include "evaluate_internal.h"
 #include "openparasolid/evaluate.h"
@@ -230,5 +231,31 @@ Result<SurfaceEvaluation> EvaluateSurface(const Model& model, NodeId surface,
   const auto sampled = SampleSection(model, spun->profile, u);
   if (!sampled.ok()) return Result<SurfaceEvaluation>::Err(sampled.error());
   return internal::EvaluateSpunProfile(*spun, sampled.value(), v);
+}
+Result<Vector3> EvaluateSurfaceNormal(const Model& model, NodeId surface,
+                                      double u, double v) {
+  const auto sample = EvaluateSurface(model, surface, u, v);
+  if (!sample.ok()) return Result<Vector3>::Err(sample.error());
+  const auto geometry = Geometry(model, surface);
+  if (!geometry.ok()) return Result<Vector3>::Err(geometry.error());
+  const auto sense = geometry.value()->sense;
+  if (!sense || (*sense != '+' && *sense != '-')) {
+    return Result<Vector3>::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Surface normal requires known surface sense"});
+  }
+  // Rounded trigonometric endpoint values can leave tiny nonzero partials
+  // at known singular parameter boundaries. Do not normalize that residue.
+  const auto* sphere =
+      std::get_if<SphereGeometry>(&geometry.value()->payload);
+  const auto* torus = std::get_if<TorusGeometry>(&geometry.value()->payload);
+  if ((sphere && std::abs(v) == std::numbers::pi / 2) ||
+      (torus && torus->major_radius <= torus->minor_radius &&
+       std::abs(v) == std::acos(-torus->major_radius / torus->minor_radius))) {
+    return Result<Vector3>::Err(
+        {ErrorCode::kInvalidRecord, 0,
+         "Surface normal is undefined at a singular parameter boundary"});
+  }
+  return internal::UnitSurfaceNormal(sample.value(), *sense == '-');
 }
 }  // namespace openparasolid
