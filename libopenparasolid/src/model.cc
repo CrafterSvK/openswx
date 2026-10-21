@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <string_view>
 #include <unordered_set>
 
 #include "model_internal.h"
@@ -71,13 +72,13 @@ const char* GeometryName(const GeometryPayload& geometry) noexcept {
 }
 namespace internal {
 namespace {
-std::optional<uint8_t> TopologySenseByte(const DecodedNode& node,
-                                         const TypeDefinition& schema) {
-  if (node.node_type != 14 && node.node_type != 17) return std::nullopt;
-  std::optional<uint8_t> sense;
+std::optional<uint8_t> TopologyCharacter(const DecodedNode& node,
+                                         const TypeDefinition& schema,
+                                         std::string_view role) {
+  std::optional<uint8_t> character;
   bool found = false;
   for (std::size_t i = 0; i < schema.fields.size(); ++i) {
-    if (schema.fields[i].name != "sense") continue;
+    if (schema.fields[i].name != role) continue;
     if (found) return std::nullopt;
     found = true;
     const auto& field = node.fields[i];
@@ -85,9 +86,9 @@ std::optional<uint8_t> TopologySenseByte(const DecodedNode& node,
         field.values.size() != 1)
       continue;
     const auto* raw = std::get_if<uint64_t>(&field.values[0]);
-    if (raw && *raw <= UINT8_MAX) sense = static_cast<uint8_t>(*raw);
+    if (raw && *raw <= UINT8_MAX) character = static_cast<uint8_t>(*raw);
   }
-  return sense;
+  return character;
 }
 bool Contains(std::initializer_list<uint16_t> values, uint16_t value) {
   return std::find(values.begin(), values.end(), value) != values.end();
@@ -489,7 +490,12 @@ std::optional<ParseError> ModelAssembler::ValidateAndIndex() {
                              node.offset,
                              {},
                              {},
-                             TopologySenseByte(node, schema)});
+                             node.node_type == 14 || node.node_type == 17
+                                 ? TopologyCharacter(node, schema, "sense")
+                                 : std::nullopt,
+                             node.node_type == 19
+                                 ? TopologyCharacter(node, schema, "type")
+                                 : std::nullopt});
   }
   return std::nullopt;
 }

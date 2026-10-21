@@ -197,6 +197,9 @@ struct ModelNode {
   /// Raw FACE/FIN sense from a scalar character field. Missing or incompatible
   /// fields remain absent; no sense is inferred.
   std::optional<uint8_t> topology_sense;
+  /// Raw scalar character REGION.type, including unknown bytes. Missing or
+  /// incompatible fields remain absent; material/void status is not inferred.
+  std::optional<uint8_t> region_type;
 };
 enum class ModelIssueCode {
   kMissingTarget,

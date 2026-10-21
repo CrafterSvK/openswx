@@ -27,7 +27,10 @@ class TopologyReader {
   Result<LoopBoundary> ReadLoop(NodeId id, const LoopTraversalOptions& options);
   Result<FaceBoundary> ReadFace(NodeId id, const FaceTraversalOptions& options);
   Result<ShellBoundary> ReadShell(NodeId id,
-                                  const ShellTraversalOptions& options);
+                                  const ShellTraversalOptions& options,
+                                  bool allow_zero_limits = false);
+  Result<RegionBoundary> ReadRegion(NodeId id,
+                                    const RegionTraversalOptions& options);
 
  private:
   bool Fail(const ModelNode& node, std::string_view field, const char* message,
@@ -47,6 +50,8 @@ class TopologyReader {
   bool WireEdges(NodeId first, ShellBoundary& result, uint64_t limit);
   bool Dummy(const ModelNode& fin);
   bool VertexNext(const ModelNode& fin);
+  bool SeparateShell(const ShellBoundary& shell,
+                     std::unordered_map<uint32_t, NodeId>& owners);
   const Model& model_;
   std::optional<ParseError> error_;
 };
@@ -410,9 +415,9 @@ bool TopologyReader::WireEdges(NodeId current, ShellBoundary& result,
   return true;
 }
 Result<ShellBoundary> TopologyReader::ReadShell(
-    NodeId id, const ShellTraversalOptions& options) {
-  if (!options.max_face_uses || !options.max_loops || !options.max_fins ||
-      !options.max_wire_edges)
+    NodeId id, const ShellTraversalOptions& options, bool allow_zero_limits) {
+  if (!allow_zero_limits && (!options.max_face_uses || !options.max_loops ||
+                             !options.max_fins || !options.max_wire_edges))
     return Result<ShellBoundary>::Err(
         {ErrorCode::kInvalidOptions, 0,
          "Shell traversal requires positive limits"});
@@ -457,6 +462,99 @@ Result<ShellBoundary> TopologyReader::ReadShell(
   }
   return Result<ShellBoundary>::Ok(std::move(result));
 }
+bool TopologyReader::SeparateShell(
+    const ShellBoundary& shell, std::unordered_map<uint32_t, NodeId>& owners) {
+  auto add = [&](NodeId entity) {
+    if (!entity.value) return true;
+    const auto [found, inserted] = owners.emplace(entity.value, shell.shell);
+    if (inserted || found->second == shell.shell) return true;
+    return Fail(*model_.FindNode(entity), "region shells",
+                "Topology entity is shared by distinct shells in one region");
+  };
+  for (const auto& face : shell.faces) {
+    if (!add(face.face)) return false;
+    for (const auto& loop : face.loops) {
+      if (loop.isolated_vertex && !add(loop.isolated_vertex->vertex))
+        return false;
+      for (const auto& fin : loop.fins)
+        if (!add(fin.edge) || !add(fin.start_vertex) || !add(fin.end_vertex))
+          return false;
+    }
+  }
+  for (const auto& edge : shell.wire_edges)
+    if (!add(edge.edge) || !add(edge.start_vertex) || !add(edge.end_vertex))
+      return false;
+  return !shell.isolated_vertex || add(shell.isolated_vertex->vertex);
+}
+Result<RegionBoundary> TopologyReader::ReadRegion(
+    NodeId id, const RegionTraversalOptions& options) {
+  if (!options.max_shells || !options.max_face_uses || !options.max_loops ||
+      !options.max_fins || !options.max_wire_edges)
+    return Result<RegionBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Region traversal requires positive limits"});
+  const auto* region = Node(id, 19);
+  if (!region) return Result<RegionBoundary>::Err(*error_);
+  if (!region->region_type ||
+      (*region->region_type != 'S' && *region->region_type != 'V'))
+    return Result<RegionBoundary>::Err(
+        {ErrorCode::kUnsupportedFormat, region->source_offset,
+         "Region type is unavailable or unknown"});
+  RegionBoundary result;
+  result.region = id;
+  result.kind =
+      *region->region_type == 'S' ? RegionKind::kSolid : RegionKind::kVoid;
+  NodeId current;
+  if (!Reference(*region, "body", 12, false, result.body) ||
+      !Reference(*region, "shell", 13, true, current))
+    return Result<RegionBoundary>::Err(*error_);
+  std::unordered_set<uint32_t> visited;
+  std::unordered_map<uint32_t, NodeId> owners;
+  ShellTraversalOptions remaining{options.max_face_uses, options.max_loops,
+                                  options.max_fins, options.max_wire_edges};
+  while (current.value) {
+    const auto& shell = *model_.FindNode(current);
+    if (visited.contains(current.value)) {
+      Fail(shell, "next", "Region shell list contains a cycle");
+      return Result<RegionBoundary>::Err(*error_);
+    }
+    if (visited.size() >= options.max_shells)
+      return Result<RegionBoundary>::Err({ErrorCode::kResourceLimit,
+                                          shell.source_offset,
+                                          "Region shell limit exceeded"});
+    visited.insert(current.value);
+    NodeId owner, next;
+    if (!Reference(shell, "region", 19, false, owner) ||
+        !Reference(shell, "next", 13, true, next))
+      return Result<RegionBoundary>::Err(*error_);
+    if (owner != id) {
+      Fail(shell, "region", "Listed shell belongs to another region");
+      return Result<RegionBoundary>::Err(*error_);
+    }
+    // Remaining aggregate budgets may reach zero. Nested traversal then permits
+    // only shells whose actual corresponding counts are zero (e.g. an acorn).
+    auto boundary = ReadShell(current, remaining, true);
+    if (!boundary.ok()) {
+      auto error = boundary.error();
+      error.message = "Region " + std::to_string(id.value) + ", shell " +
+                      std::to_string(current.value) + ": " + error.message;
+      return Result<RegionBoundary>::Err(std::move(error));
+    }
+    const auto& value = boundary.value();
+    if (!SeparateShell(value, owners))
+      return Result<RegionBoundary>::Err(*error_);
+    remaining.max_face_uses -= value.face_uses.size();
+    remaining.max_wire_edges -= value.wire_edges.size();
+    for (const auto& face : value.faces) {
+      remaining.max_loops -= face.loops.size();
+      for (const auto& loop : face.loops)
+        remaining.max_fins -= loop.isolated_vertex ? 1 : loop.fins.size();
+    }
+    result.shells.push_back(std::move(boundary).value());
+    current = next;
+  }
+  return Result<RegionBoundary>::Ok(std::move(result));
+}
 }  // namespace
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
@@ -470,6 +568,11 @@ Result<FaceBoundary> TraverseFaceBoundary(const Model& model, NodeId face,
 Result<ShellBoundary> TraverseShellBoundary(
     const Model& model, NodeId shell, const ShellTraversalOptions& options) {
   return TopologyReader(model).ReadShell(shell, options);
+}
+
+Result<RegionBoundary> TraverseRegionBoundary(
+    const Model& model, NodeId region, const RegionTraversalOptions& options) {
+  return TopologyReader(model).ReadRegion(region, options);
 }
 
 }  // namespace openparasolid

@@ -187,6 +187,54 @@ without faces verify all 70 shells, including 46 acorn shells, 37 wire edges
 and 16 non-null wire vertex links. No traversal errors remain. Private inputs
 and comparison programs remain outside the repository.
 
+## Region boundaries
+
+`TraverseRegionBoundary(model, region_id, options)` in
+`openparasolid/topology.h` returns an owned `RegionBoundary` with the source
+region/body IDs, `RegionKind::kSolid` or `RegionKind::kVoid`, and complete nested
+`ShellBoundary` results in `REGION.shell` / `SHELL.next` order. The recorded
+`REGION.body` may name a compound parent; optional child ownership is not
+resolved. List order does not identify a positive/outer shell.
+
+The query requires a non-null BODY reference and a scalar character type
+`'S'` or `'V'`. Unknown, missing or incompatible types return
+`kUnsupportedFormat`. `ModelNode.region_type` preserves the raw character,
+including unknown values, or absence; full inspector model JSON exposes it
+as numeric-or-null `region_type` on each node. A null shell head is accepted
+structurally without classifying the region as finite or exterior.
+
+Shell lists must be acyclic and each listed shell must belong to this region.
+Nested shell/face/loop checks still apply. Different shells of one region must
+not share face, edge or vertex IDs, including wire and isolated vertices.
+Reuse within one shell retains the existing rules. Sharing geometry IDs or
+positions is not checked. Nested errors preserve their code and source offset
+and add region/shell context; no error returns a partial boundary.
+
+All five `RegionTraversalOptions` limits must be positive: `max_shells` and
+`max_face_uses` default to 10,000, `max_loops` to 10,000, and `max_fins` and
+`max_wire_edges` to 100,000. Limits apply across the whole region, rather than
+resetting for each shell. Each face side consumes a face use; loop/fin data
+count once per stored face boundary, and an isolated loop counts as one fin.
+An acorn consumes one shell; wire anchors are bounded by the wire-edge limit.
+Empty content may follow exhaustion of a corresponding budget. Exceeding a
+limit returns `kResourceLimit`.
+
+This checks selected topology, without proving body-list membership, full
+vertex/radial incidence, connectedness, manifoldness, geometric disjointness,
+volume or tolerances. Unlisted entities, child ownership, placements and units
+are not inferred. Rules follow the XT Format Reference (July 2022, pp. 27-29
+and 93-94). The implementation remains MIT and STL-only.
+
+Synthetic tests cover source order, solid/void and unknown types, empty
+regions, recorded compound-parent references, aggregate limits, invalid
+owners/roles/targets, cycles, cross-shell shared faces/edges/vertices, nested
+errors and result ownership. An independent raw-field walk of the same 130
+selected private streams checks 267 regions (94 solid, 173 void), including
+ten with multiple shells, and all 286 nested shell boundaries against the
+previous shell results. No region traversal errors remain in that selection;
+it contains no shell-less regions, which are covered synthetically. Private
+inputs and comparison programs remain outside the repository.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS

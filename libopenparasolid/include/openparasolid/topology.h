@@ -150,6 +150,43 @@ struct ShellTraversalOptions {
     const Model& model, NodeId shell,
     const ShellTraversalOptions& options = {});
 
+enum class RegionKind { kSolid, kVoid };
+struct RegionBoundary {
+  NodeId region;
+  /// Source REGION.body; may reference a compound parent for child regions.
+  /// Does not resolve or infer an effective child-body owner.
+  NodeId body;
+  RegionKind kind = RegionKind::kVoid;
+  /// REGION.shell / SHELL.next order, without outer/inner classification.
+  std::vector<ShellBoundary> shells;
+};
+struct RegionTraversalOptions {
+  uint64_t max_shells = 10000;
+  /// Aggregate counts over the whole region. Face uses count both sides;
+  /// loop/fin data count once per stored face boundary within a shell.
+  uint64_t max_face_uses = 10000;
+  uint64_t max_loops = 10000;
+  uint64_t max_fins = 100000;
+  uint64_t max_wire_edges = 100000;
+};
+
+/// Reads a REGION's null-terminated shell list and nested boundaries. Requires
+/// known solid ('S') or void ('V') source type and a non-null BODY reference.
+/// Unknown/unavailable type returns kUnsupportedFormat; raw model metadata is
+/// retained. A null shell head is allowed without inferring boundedness.
+/// Checks list cycles, shell-to-region ownership, nested connectivity and
+/// distinct-shell separation by face/edge/vertex IDs. Reuse within one shell
+/// retains existing rules, including two-sided faces. Limits are positive and
+/// aggregate over this query, including acorn shells and isolated loop fins.
+/// Errors follow other traversal APIs without returning partial results.
+/// Results own their data; the model is unchanged. Does not scan for unlisted
+/// entities, resolve child ownership or certify body-list membership,
+/// geometric disjointness, positive/outer shell identity, manifoldness,
+/// volume, exterior/finite region status or complete vertex/radial incidence.
+[[nodiscard]] Result<RegionBoundary> TraverseRegionBoundary(
+    const Model& model, NodeId region,
+    const RegionTraversalOptions& options = {});
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_TOPOLOGY_H_

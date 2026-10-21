@@ -34,6 +34,20 @@ TEST(ParasolidModelReport, RetainsTopologySenseAlongsideGeometrySense) {
   EXPECT_FALSE(cli::ModelReport(model.value(), {}, true).contains("nodes"));
 }
 
+TEST(ParasolidModelReport, RetainsRawRegionTypesWithoutInferringOtherNodes) {
+  test::ModelFixture f;
+  f.Add(19, 1, {test::ByteValue("type", 'V', FieldType::kCharacter)});
+  f.Add(19, 2, {test::ByteValue("type", '?', FieldType::kCharacter)});
+  f.Point(3);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto report = cli::ModelReport(model.value(), {}, false);
+  EXPECT_EQ(report["nodes"][0]["region_type"], uint64_t{'V'});
+  EXPECT_EQ(report["nodes"][1]["region_type"], uint64_t{'?'});
+  EXPECT_TRUE(report["nodes"][2]["region_type"].is_null());
+  EXPECT_FALSE(cli::ModelReport(model.value(), {}, true).contains("nodes"));
+}
+
 std::string Quote(const fs::path& path) {
   std::string result = "'";
   for (char c : path.string())
