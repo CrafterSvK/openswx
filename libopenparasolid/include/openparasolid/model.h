@@ -200,6 +200,8 @@ struct ModelNode {
   /// Raw scalar character REGION.type, including unknown bytes. Missing or
   /// incompatible fields remain absent; material/void status is not inferred.
   std::optional<uint8_t> region_type;
+  /// Raw scalar byte BODY.body_type. Unknown values are retained.
+  std::optional<uint8_t> body_type;
 };
 enum class ModelIssueCode {
   kMissingTarget,

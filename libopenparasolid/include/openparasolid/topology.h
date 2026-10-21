@@ -187,6 +187,43 @@ struct RegionTraversalOptions {
     const Model& model, NodeId region,
     const RegionTraversalOptions& options = {});
 
+enum class BodyKind { kSolid, kWire, kSheet, kGeneral };
+struct BodyBoundary {
+  NodeId body;
+  BodyKind kind = BodyKind::kGeneral;
+  /// BODY.region / REGION.next order, including nested shell boundaries.
+  /// For compound parents this is the combined chain of all child regions.
+  /// Child grouping and exterior-region classification are not inferred.
+  std::vector<RegionBoundary> regions;
+};
+struct BodyTraversalOptions {
+  uint64_t max_regions = 10000;
+  /// Aggregate counts over all stored region boundaries, including repeated
+  /// face boundaries shared between different regions.
+  uint64_t max_shells = 10000;
+  uint64_t max_face_uses = 10000;
+  uint64_t max_loops = 10000;
+  uint64_t max_fins = 100000;
+  uint64_t max_wire_edges = 100000;
+};
+
+/// Reads a standard or compound-parent BODY's null-terminated region chain.
+/// Requires a known scalar byte body_type (1, 2, 3 or 6). BODY.owner must be
+/// null or reference a WORLD; querying a child BODY returns kUnsupportedFormat
+/// because its region chain continues through its siblings. Query the parent
+/// instead. Validates region back-references and reciprocal previous/next
+/// links, cycles and nested boundaries. A null region head is accepted
+/// structurally (e.g. an empty compound), without asserting body validity.
+/// All limits must be positive and apply across the entire result. Nested
+/// failures retain code/offset and add body/region context. Results own their
+/// data; errors never return partial results and the model is unchanged.
+/// The obsolete BODY.shell and unrelated geometry/edge/vertex lists are not
+/// read. Does not resolve child grouping, scan for unlisted entities or prove
+/// exterior-region identity, full incidence, manifoldness, volume or geometric
+/// validity. Shared faces across regions are retained as separate boundaries.
+[[nodiscard]] Result<BodyBoundary> TraverseBodyBoundary(
+    const Model& model, NodeId body, const BodyTraversalOptions& options = {});
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_TOPOLOGY_H_

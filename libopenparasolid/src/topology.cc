@@ -30,7 +30,9 @@ class TopologyReader {
                                   const ShellTraversalOptions& options,
                                   bool allow_zero_limits = false);
   Result<RegionBoundary> ReadRegion(NodeId id,
-                                    const RegionTraversalOptions& options);
+                                    const RegionTraversalOptions& options,
+                                    bool allow_zero_limits = false);
+  Result<BodyBoundary> ReadBody(NodeId id, const BodyTraversalOptions& options);
 
  private:
   bool Fail(const ModelNode& node, std::string_view field, const char* message,
@@ -487,9 +489,10 @@ bool TopologyReader::SeparateShell(
   return !shell.isolated_vertex || add(shell.isolated_vertex->vertex);
 }
 Result<RegionBoundary> TopologyReader::ReadRegion(
-    NodeId id, const RegionTraversalOptions& options) {
-  if (!options.max_shells || !options.max_face_uses || !options.max_loops ||
-      !options.max_fins || !options.max_wire_edges)
+    NodeId id, const RegionTraversalOptions& options, bool allow_zero_limits) {
+  if (!allow_zero_limits &&
+      (!options.max_shells || !options.max_face_uses || !options.max_loops ||
+       !options.max_fins || !options.max_wire_edges))
     return Result<RegionBoundary>::Err(
         {ErrorCode::kInvalidOptions, 0,
          "Region traversal requires positive limits"});
@@ -555,6 +558,103 @@ Result<RegionBoundary> TopologyReader::ReadRegion(
   }
   return Result<RegionBoundary>::Ok(std::move(result));
 }
+Result<BodyBoundary> TopologyReader::ReadBody(
+    NodeId id, const BodyTraversalOptions& options) {
+  if (!options.max_regions || !options.max_shells || !options.max_face_uses ||
+      !options.max_loops || !options.max_fins || !options.max_wire_edges)
+    return Result<BodyBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Body traversal requires positive limits"});
+  const auto* body = Node(id, 12);
+  if (!body) return Result<BodyBoundary>::Err(*error_);
+  BodyBoundary result;
+  result.body = id;
+  switch (body->body_type.value_or(0)) {
+    case 1:
+      result.kind = BodyKind::kSolid;
+      break;
+    case 2:
+      result.kind = BodyKind::kWire;
+      break;
+    case 3:
+      result.kind = BodyKind::kSheet;
+      break;
+    case 6:
+      result.kind = BodyKind::kGeneral;
+      break;
+    default:
+      return Result<BodyBoundary>::Err({ErrorCode::kUnsupportedFormat,
+                                        body->source_offset,
+                                        "Body type is unavailable or unknown"});
+  }
+  // Select the concrete owner type before Reference validates cardinality,
+  // pointer status and target. Both WORLD and parent BODY are possible.
+  uint16_t owner_type = 101;
+  for (const auto& reference : body->references) {
+    if (reference.field != "owner") continue;
+    const auto* target = model_.FindNode(reference.target);
+    if (target && target->node_type == 12) owner_type = 12;
+  }
+  NodeId owner, current;
+  if (!Reference(*body, "owner", owner_type, true, owner))
+    return Result<BodyBoundary>::Err(*error_);
+  if (owner.value && owner_type == 12)
+    return Result<BodyBoundary>::Err(
+        {ErrorCode::kUnsupportedFormat, body->source_offset,
+         "Child body traversal requires querying the compound parent"});
+  if (!Reference(*body, "region", 19, true, current))
+    return Result<BodyBoundary>::Err(*error_);
+  RegionTraversalOptions remaining{options.max_shells, options.max_face_uses,
+                                   options.max_loops, options.max_fins,
+                                   options.max_wire_edges};
+  std::unordered_set<uint32_t> visited;
+  NodeId previous;
+  while (current.value) {
+    const auto& region = *model_.FindNode(current);
+    if (visited.contains(current.value)) {
+      Fail(region, "next", "Body region list contains a cycle");
+      return Result<BodyBoundary>::Err(*error_);
+    }
+    if (visited.size() >= options.max_regions)
+      return Result<BodyBoundary>::Err({ErrorCode::kResourceLimit,
+                                        region.source_offset,
+                                        "Body region limit exceeded"});
+    visited.insert(current.value);
+    NodeId parent, backward, next;
+    if (!Reference(region, "body", 12, false, parent) ||
+        !Reference(region, "previous", 19, true, backward) ||
+        !Reference(region, "next", 19, true, next))
+      return Result<BodyBoundary>::Err(*error_);
+    if (parent != id || backward != previous) {
+      Fail(region, "body/previous",
+           "Inconsistent body ownership or reciprocal region links");
+      return Result<BodyBoundary>::Err(*error_);
+    }
+    auto boundary = ReadRegion(current, remaining, true);
+    if (!boundary.ok()) {
+      auto error = boundary.error();
+      error.message = "Body " + std::to_string(id.value) + ", region " +
+                      std::to_string(current.value) + ": " + error.message;
+      return Result<BodyBoundary>::Err(std::move(error));
+    }
+    const auto& value = boundary.value();
+    remaining.max_shells -= value.shells.size();
+    for (const auto& shell : value.shells) {
+      remaining.max_face_uses -= shell.face_uses.size();
+      remaining.max_wire_edges -= shell.wire_edges.size();
+      for (const auto& face : shell.faces) {
+        remaining.max_loops -= face.loops.size();
+        for (const auto& loop : face.loops)
+          remaining.max_fins -= loop.isolated_vertex ? 1 : loop.fins.size();
+      }
+    }
+    result.regions.push_back(std::move(boundary).value());
+    previous = current;
+    current = next;
+  }
+  return Result<BodyBoundary>::Ok(std::move(result));
+}
+
 }  // namespace
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
@@ -573,6 +673,11 @@ Result<ShellBoundary> TraverseShellBoundary(
 Result<RegionBoundary> TraverseRegionBoundary(
     const Model& model, NodeId region, const RegionTraversalOptions& options) {
   return TopologyReader(model).ReadRegion(region, options);
+}
+
+Result<BodyBoundary> TraverseBodyBoundary(const Model& model, NodeId body,
+                                          const BodyTraversalOptions& options) {
+  return TopologyReader(model).ReadBody(body, options);
 }
 
 }  // namespace openparasolid

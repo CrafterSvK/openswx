@@ -53,6 +53,23 @@ TEST(ParasolidModel, DistinguishesMissingWrongAndUnreviewedClasses) {
   EXPECT_EQ(m.nodes()[0].references[2].status,
             ModelReferenceStatus::kUnverifiedClass);
 }
+TEST(ParasolidModel, BodyOwnerUnionAcceptsWorldAndBodyButRejectsOtherTypes) {
+  ModelFixture f;
+  f.Add(12, 1,
+        {Pointer("world", 2, 1040), Pointer("parent", 3, 1040),
+         Pointer("wrong", 4, 1040), Pointer("future", 5, 1040)});
+  f.Add(101, 2, {});
+  f.Add(12, 3, {});
+  f.Add(13, 4, {});
+  f.Add(250, 5, {});
+  const auto result = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(result.ok());
+  const auto& refs = result.value().nodes()[0].references;
+  EXPECT_EQ(refs[0].status, ModelReferenceStatus::kResolved);
+  EXPECT_EQ(refs[1].status, ModelReferenceStatus::kResolved);
+  EXPECT_EQ(refs[2].status, ModelReferenceStatus::kWrongClass);
+  EXPECT_EQ(refs[3].status, ModelReferenceStatus::kUnverifiedClass);
+}
 TEST(ParasolidModel, DoesNotGuessMembershipForFutureTargetTypes) {
   ModelFixture f;
   f.Add(74, 1, {Pointer("future_curve", 2, 1008)});

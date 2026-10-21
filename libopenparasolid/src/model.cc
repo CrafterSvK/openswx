@@ -72,23 +72,23 @@ const char* GeometryName(const GeometryPayload& geometry) noexcept {
 }
 namespace internal {
 namespace {
-std::optional<uint8_t> TopologyCharacter(const DecodedNode& node,
-                                         const TypeDefinition& schema,
-                                         std::string_view role) {
-  std::optional<uint8_t> character;
+std::optional<uint8_t> TopologyByte(const DecodedNode& node,
+                                    const TypeDefinition& schema,
+                                    std::string_view role, FieldType type) {
+  std::optional<uint8_t> value;
   bool found = false;
   for (std::size_t i = 0; i < schema.fields.size(); ++i) {
     if (schema.fields[i].name != role) continue;
     if (found) return std::nullopt;
     found = true;
     const auto& field = node.fields[i];
-    if (schema.fields[i].type != FieldType::kCharacter || field.elements != 1 ||
+    if (schema.fields[i].type != type || field.elements != 1 ||
         field.values.size() != 1)
       continue;
     const auto* raw = std::get_if<uint64_t>(&field.values[0]);
-    if (raw && *raw <= UINT8_MAX) character = static_cast<uint8_t>(*raw);
+    if (raw && *raw <= UINT8_MAX) value = static_cast<uint8_t>(*raw);
   }
-  return character;
+  return value;
 }
 bool Contains(std::initializer_list<uint16_t> values, uint16_t value) {
   return std::find(values.begin(), values.end(), value) != values.end();
@@ -151,6 +151,8 @@ std::optional<bool> ClassMatches(uint16_t expected, uint16_t actual) {
       return actual == 184;
     case 1037:
       return Contains({84, 98}, actual);
+    case 1040:
+      return Contains({12, 101}, actual);
     default:
       return std::nullopt;
   }
@@ -485,17 +487,21 @@ std::optional<ParseError> ModelAssembler::ValidateAndIndex() {
     const auto position = model_.nodes_.size();
     if (!model_.positions_.emplace(node.index, position).second)
       return Invalid(node.offset, "Duplicate model node index");
-    model_.nodes_.push_back({NodeId{node.index},
-                             node.node_type,
-                             node.offset,
-                             {},
-                             {},
-                             node.node_type == 14 || node.node_type == 17
-                                 ? TopologyCharacter(node, schema, "sense")
-                                 : std::nullopt,
-                             node.node_type == 19
-                                 ? TopologyCharacter(node, schema, "type")
-                                 : std::nullopt});
+    model_.nodes_.push_back(
+        {NodeId{node.index},
+         node.node_type,
+         node.offset,
+         {},
+         {},
+         node.node_type == 14 || node.node_type == 17
+             ? TopologyByte(node, schema, "sense", FieldType::kCharacter)
+             : std::nullopt,
+         node.node_type == 19
+             ? TopologyByte(node, schema, "type", FieldType::kCharacter)
+             : std::nullopt,
+         node.node_type == 12
+             ? TopologyByte(node, schema, "body_type", FieldType::kByte)
+             : std::nullopt});
   }
   return std::nullopt;
 }

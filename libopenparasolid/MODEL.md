@@ -42,16 +42,18 @@ geometry index. FACE and FIN nodes additionally retain a scalar character
 `topology_sense`, including unknown bytes, or absence when the field is
 unavailable/incompatible. REGION nodes similarly retain the scalar character
 `region_type` without interpreting unknown values. Full inspector model JSON
-includes numeric-or-null `region_type` on each node. It is not a copy of every
-raw field. Keep
-`SchemaParseReport` when attribute values, procedural-form parameters or other
-raw fields are also needed. `TraverseLoopBoundary`, `TraverseFaceBoundary`,
-`TraverseShellBoundary` and `TraverseRegionBoundary` in
+includes numeric-or-null `region_type` on each node. BODY nodes additionally
+retain scalar byte `body_type`, also exposed as numeric-or-null in full JSON.
+The model is not a copy of every raw field. Keep `SchemaParseReport` when
+attribute values, procedural-form parameters or other raw fields are also
+needed. `TraverseLoopBoundary`, `TraverseFaceBoundary`,
+`TraverseShellBoundary`, `TraverseRegionBoundary` and `TraverseBodyBoundary` in
 `openparasolid/topology.h` add bounded, owned boundary views above this graph;
 see [loop traversal](README.md#ordered-loop-boundaries),
 [face traversal](README.md#face-boundaries),
-[shell traversal](README.md#shell-boundaries) and
-[region traversal](README.md#region-boundaries).
+[shell traversal](README.md#shell-boundaries),
+[region traversal](README.md#region-boundaries) and
+[body traversal](README.md#body-boundaries).
 They validate selected connectivity and list ownership without changing the
 model or claiming complete body/geometric validation or a proof of manifoldness.
 
@@ -76,7 +78,8 @@ external or omitted targets are not invented.
 
 Concrete classes below 1000 require the corresponding node type. Reviewed union
 rules cover geometry, curves, surfaces, their documented owners, attribute/
-feature links, field values, shell/body, field names and analytic-form links.
+feature links, field values, shell/body, body owners, field names and
+analytic-form links. `BODY_OWNER` (1040) accepts WORLD or BODY targets.
 Pointer-list `void*` entries accept any existing node. List-block, list-owner
 and attribute-owner checks also have explicitly reviewed positive subsets;
 other combinations remain unverified. Future target types are not rejected

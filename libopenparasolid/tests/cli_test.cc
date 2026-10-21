@@ -48,6 +48,20 @@ TEST(ParasolidModelReport, RetainsRawRegionTypesWithoutInferringOtherNodes) {
   EXPECT_FALSE(cli::ModelReport(model.value(), {}, true).contains("nodes"));
 }
 
+TEST(ParasolidModelReport, RetainsRawBodyTypesWithoutClassifyingOtherNodes) {
+  test::ModelFixture f;
+  f.Add(12, 1, {test::ByteValue("body_type", 6)});
+  f.Add(12, 2, {test::ByteValue("body_type", 99)});
+  f.Point(3);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto report = cli::ModelReport(model.value(), {}, false);
+  EXPECT_EQ(report["nodes"][0]["body_type"], 6);
+  EXPECT_EQ(report["nodes"][1]["body_type"], 99);
+  EXPECT_TRUE(report["nodes"][2]["body_type"].is_null());
+  EXPECT_FALSE(cli::ModelReport(model.value(), {}, true).contains("nodes"));
+}
+
 std::string Quote(const fs::path& path) {
   std::string result = "'";
   for (char c : path.string())

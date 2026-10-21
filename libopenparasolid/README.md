@@ -235,6 +235,61 @@ previous shell results. No region traversal errors remain in that selection;
 it contains no shell-less regions, which are covered synthetically. Private
 inputs and comparison programs remain outside the repository.
 
+## Body boundaries
+
+`TraverseBodyBoundary(model, body_id, options)` in
+`openparasolid/topology.h` reads a standard or compound-parent body's
+`BODY.region` / `REGION.next` chain into an owned `BodyBoundary`. Results
+contain the body ID, `BodyKind` (solid, wire, sheet or general), and nested
+region/shell/face/loop boundaries in source order. Body types come from scalar
+byte values 1, 2, 3 and 6; unavailable, incompatible or unknown types return
+`kUnsupportedFormat`. `ModelNode.body_type` and full inspector model JSON's
+numeric-or-null `body_type` retain raw values, including unknown bytes.
+
+The body owner must be null or a WORLD. Both concrete pointers and the
+reviewed `BODY_OWNER` union class 1040 are supported; that class permits WORLD
+or BODY targets. A BODY owner identifies a child body, whose region chain
+continues into siblings. Direct child queries therefore return
+`kUnsupportedFormat`; query the compound parent for its combined region
+chain. This API does not resolve child grouping or validate the child list.
+
+Every listed region must reference the queried body and its preceding region.
+The head's previous pointer must be null, next pointers must terminate without
+cycles, and nested region checks still apply. Faces may be shared across
+regions; their separate stored boundaries each count toward resource limits.
+A null region head is accepted structurally, as needed for empty compounds,
+without certifying body validity. The obsolete `BODY.shell` is ignored.
+
+All six `BodyTraversalOptions` limits must be positive and apply across the
+entire query: `max_regions`, `max_shells`, `max_face_uses` and `max_loops` each
+default to 10,000; `max_fins` and `max_wire_edges` each default to 100,000.
+Counting follows region traversal, with each stored region/shell boundary
+consuming its aggregate allowance. Empty content can follow exhaustion of its
+corresponding allowance. Exceeding a limit returns `kResourceLimit`; errors
+never return partial results. Nested failures preserve code and source offset
+and add body/region context. Results own their data and leave the model intact.
+
+This traverses the recorded region hierarchy without certifying complete
+incidence, connectedness, manifoldness, volume or geometric validity. It does
+not classify exterior regions (compound parents combine several child
+chains), validate body-type consistency against geometry, or inspect the
+body's geometry/edge/vertex lists. Unlisted entities, placements, units and
+tolerances remain outside this query. The rules follow the XT Format Reference
+(July 2022, pp. 27-29, 88-94 and 120). The library remains MIT and STL-only.
+
+Synthetic tests cover all four body kinds, empty bodies, compound-parent
+chains and rejected child queries, shared faces across regions, aggregate
+limits, cycles, ownership, malformed roles/targets, nested diagnostics and
+result ownership. Reference tests check both permitted `BODY_OWNER` targets,
+wrong classes and future unknown target types. An independent raw-field walk
+of the same 130 selected private streams checks all 163 bodies (85 solid,
+70 wire, eight sheet), 267 regions and 286 shells. All nested region
+boundaries match the previous results, including 16,548 face uses, 37 wire
+edges and 46 acorn shells. There are 86 bodies with multiple regions and no
+body traversal errors. Empty bodies, general bodies and compound/child
+behavior are covered synthetically; that private selection contains none.
+Private input files and comparison programs remain outside the repository.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS
