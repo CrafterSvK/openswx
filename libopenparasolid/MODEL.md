@@ -180,6 +180,11 @@ profile documented in README also works with `--geometry`.
 
 ## Validation
 
+The separate `EvaluateCurve` API in `openparasolid/evaluate.h` evaluates line,
+circle and ellipse payloads in their natural parameter direction. Its strict
+unit-frame and finite-result checks do not change model construction or the
+meaning of `typed_geometry_complete`. See README for its supported scope.
+
 Synthetic tests cover ownership, copying/moving, forward and cyclic references,
 null/missing/wrong/unreviewed classes, malformed reports, reordered fields,
 finite coefficients, lemon tori, shared spline arrays, rational coordinates,

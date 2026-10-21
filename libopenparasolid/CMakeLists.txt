@@ -20,7 +20,7 @@ file(MAKE_DIRECTORY "${OPENPARASOLID_GENERATED_INCLUDE_DIR}/openparasolid")
 configure_file(include/openparasolid/version.h.in
   "${OPENPARASOLID_GENERATED_INCLUDE_DIR}/openparasolid/version.h" @ONLY)
 
-add_library(openparasolid STATIC src/header.cc src/inspector.cc src/types.cc src/schema.cc src/delta_packets.cc src/base_catalog.cc src/geometry_catalog.cc src/spline_catalog.cc src/procedural_catalog.cc src/model.cc src/analytic_model.cc src/spline_model.cc)
+add_library(openparasolid STATIC src/header.cc src/inspector.cc src/types.cc src/schema.cc src/delta_packets.cc src/base_catalog.cc src/geometry_catalog.cc src/spline_catalog.cc src/procedural_catalog.cc src/model.cc src/evaluate.cc src/analytic_model.cc src/spline_model.cc)
 target_include_directories(openparasolid
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -44,7 +44,7 @@ if(BUILD_TESTING)
   if(NOT TARGET GTest::gtest_main)
     find_package(GTest REQUIRED)
   endif()
-  add_executable(libopenparasolid_tests tests/model_test.cc tests/model_spline_test.cc tests/header_test.cc tests/inspector_test.cc tests/schema_test.cc tests/delta_test.cc tests/delta_packets_test.cc tests/delta_boundary_test.cc tests/delta_status_test.cc tests/embedded_intersection_test.cc tests/attribute_definition_test.cc tests/geometry_test.cc tests/spline_test.cc tests/procedural_test.cc)
+  add_executable(libopenparasolid_tests tests/evaluate_test.cc tests/model_test.cc tests/model_spline_test.cc tests/header_test.cc tests/inspector_test.cc tests/schema_test.cc tests/delta_test.cc tests/delta_packets_test.cc tests/delta_boundary_test.cc tests/delta_status_test.cc tests/embedded_intersection_test.cc tests/attribute_definition_test.cc tests/geometry_test.cc tests/spline_test.cc tests/procedural_test.cc)
   target_link_libraries(libopenparasolid_tests PRIVATE openparasolid GTest::gtest_main)
   if(OPENPARASOLID_BUILD_TOOLS AND UNIX)
     target_sources(libopenparasolid_tests PRIVATE tests/cli_test.cc tests/inspect_options_test.cc)

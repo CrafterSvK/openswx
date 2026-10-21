@@ -14,6 +14,39 @@ Geometry mode and existing options also support `OPENPARASOLID_*` environment
 settings, with command-line precedence. Delta application and B-Rep validation
 remain separate work.
 
+## Analytic curve evaluation
+
+`openparasolid/evaluate.h` evaluates an untrimmed line, circle or ellipse,
+returning its position and natural first derivative in source coordinates:
+
+```cpp
+openparasolid::LineGeometry line{{1, 2, 3}, {0, 0, 1}};
+auto evaluated = openparasolid::EvaluateCurve(line, 4.0);
+if (evaluated.ok()) {
+  // Position (1, 2, 7), derivative (0, 0, 1).
+  const auto& sample = evaluated.value();
+}
+```
+
+For model data, pass `geometry.payload` to `EvaluateCurve`. The parameter is
+signed and unbounded; circle and ellipse parameters are angles in radians.
+The returned derivative is `dP/dt`, without normalization or curve-sense
+reversal. This follows the natural parameter direction; edge orientation and
+trimming belong to topology. Units and source coefficients are preserved.
+
+The evaluator requires finite inputs, positive radii, unit directions and
+orthogonal conic frames (absolute tolerance `1e-10`). It rejects malformed data
+instead of normalizing it. These checks are stricter than the model builder's
+initial nonzero/nonparallel checks. Nonfinite parameters, nonfinite results
+and unsupported payloads return explicit `Result` errors. Evaluation errors
+use offset zero because a payload does not contain a source byte offset.
+
+The formulas and frame conventions follow the XT Format Reference (July 2022,
+pp. 35–38); natural derivatives and curve sense follow section 5.2.8 (p. 82).
+NURBS and surface evaluation, parameter-domain validation, topology traversal,
+delta application and STEP export remain separate work. The inspector's JSON
+and command-line options are unchanged.
+
 ## Build and run
 
 The top-level build includes the library and `parasolid_inspect`:
@@ -145,7 +178,7 @@ body_offset + candidate_prefix_bytes + uninterpreted_bytes == byte_size
 
 The JSON report includes header metadata, candidate and reference counts,
 scan-limit status, per-candidate fields and unknown regions. It is an inspection
-report, not a geometry interchange format. Text X_T input, geometric evaluation,
+report, not a geometry interchange format. Text X_T input, general geometric evaluation,
 delta application and STEP output remain future work.
 
 ## Sequential schema and node decoding
