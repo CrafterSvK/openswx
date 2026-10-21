@@ -116,11 +116,24 @@ struct TrimmedCurveGeometry {
   double parameter_1 = 0;
   double parameter_2 = 0;
 };
+struct SpunSurfaceGeometry {
+  NodeId profile;
+  Vector3 base;
+  Vector3 axis;
+  std::optional<Vector3> start;
+  std::optional<Vector3> end;
+  std::optional<double> start_parameter;
+  std::optional<double> end_parameter;
+  std::optional<Vector3> x_axis;
+  /// Internal source metadata, not an evaluation scale factor.
+  std::optional<double> scale;
+};
 using GeometryPayload =
     std::variant<PointGeometry, LineGeometry, CircleGeometry, EllipseGeometry,
                  PlaneGeometry, CylinderGeometry, ConeGeometry, SphereGeometry,
                  TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry,
-                 SurfaceCurveGeometry, TrimmedCurveGeometry>;
+                 SurfaceCurveGeometry, TrimmedCurveGeometry,
+                 SpunSurfaceGeometry>;
 struct GeometryObject {
   NodeId source;
   /// Raw sense byte, including '?'; points have no sense field.

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 
+#include "evaluate_internal.h"
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid {
@@ -114,8 +115,9 @@ Result<const GeometryObject*> ResolveTrimmed(const Model& model,
   return Result<const GeometryObject*>::Ok(geometry);
 }
 
-Result<CurveEvaluation> Compose(const GeometryPayload& parameter_curve,
-                                const GeometryPayload& surface, double t) {
+Result<CurveEvaluation> Compose(const Model& model,
+                                const GeometryPayload& parameter_curve,
+                                NodeId surface, double t) {
   const auto* nurbs = std::get_if<NurbsCurveGeometry>(&parameter_curve);
   if (!nurbs ||
       nurbs->controls.dimension != (nurbs->controls.rational ? 3 : 2)) {
@@ -125,8 +127,8 @@ Result<CurveEvaluation> Compose(const GeometryPayload& parameter_curve,
   }
   const auto uv = EvaluateCurve(parameter_curve, t);
   if (!uv.ok()) return Result<CurveEvaluation>::Err(uv.error());
-  const auto sampled =
-      EvaluateSurface(surface, uv.value().position.x, uv.value().position.y);
+  const auto sampled = EvaluateSurface(model, surface, uv.value().position.x,
+                                       uv.value().position.y);
   if (!sampled.ok()) return Result<CurveEvaluation>::Err(sampled.error());
   const auto& du = sampled.value().u_derivative;
   const auto& dv = sampled.value().v_derivative;
@@ -175,8 +177,45 @@ Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
   }
   const auto uv = Geometry(model, sp->parameter_curve);
   if (!uv.ok()) return Result<CurveEvaluation>::Err(uv.error());
-  const auto surface = Geometry(model, sp->surface);
-  if (!surface.ok()) return Result<CurveEvaluation>::Err(surface.error());
-  return Compose(uv.value()->payload, surface.value()->payload, parameter);
+  return Compose(model, uv.value()->payload, sp->surface, parameter);
+}
+
+Result<SurfaceEvaluation> EvaluateSurface(const Model& model, NodeId surface,
+                                          double u, double v) {
+  if (!std::isfinite(u) || !std::isfinite(v)) {
+    return Result<SurfaceEvaluation>::Err(
+        {ErrorCode::kInvalidOptions, 0, "Surface parameters must be finite"});
+  }
+  const auto geometry = Geometry(model, surface);
+  if (!geometry.ok()) return Result<SurfaceEvaluation>::Err(geometry.error());
+  const auto* spun =
+      std::get_if<SpunSurfaceGeometry>(&geometry.value()->payload);
+  if (!spun) return EvaluateSurface(geometry.value()->payload, u, v);
+  if ((spun->start_parameter && u < *spun->start_parameter) ||
+      (spun->end_parameter && u > *spun->end_parameter)) {
+    return Result<SurfaceEvaluation>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Spun surface parameter is outside its profile bounds"});
+  }
+  const auto* node = model.FindNode(spun->profile);
+  if (!node || (node->node_type != 30 && node->node_type != 31 &&
+                node->node_type != 32 && node->node_type != 134)) {
+    return Result<SurfaceEvaluation>::Err(
+        {ErrorCode::kInvalidRecord, 0,
+         "Spun surface requires an analytic or B-curve profile"});
+  }
+  const auto profile = Geometry(model, spun->profile);
+  if (!profile.ok()) return Result<SurfaceEvaluation>::Err(profile.error());
+  const auto* nurbs =
+      std::get_if<NurbsCurveGeometry>(&profile.value()->payload);
+  if (nurbs &&
+      nurbs->controls.dimension != (nurbs->controls.rational ? 4 : 3)) {
+    return Result<SurfaceEvaluation>::Err(
+        {ErrorCode::kInvalidRecord, 0,
+         "Spun surface profile must be three-dimensional"});
+  }
+  const auto sampled = EvaluateCurve(profile.value()->payload, u);
+  if (!sampled.ok()) return Result<SurfaceEvaluation>::Err(sampled.error());
+  return internal::EvaluateSpunProfile(*spun, sampled.value(), v);
 }
 }  // namespace openparasolid

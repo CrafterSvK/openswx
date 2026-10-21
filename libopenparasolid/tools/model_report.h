@@ -56,6 +56,18 @@ inline json GeometryJson(const GeometryObject& geometry) {
           out["point_2"] = VectorJson(p.point_2);
           out["parameter_1"] = p.parameter_1;
           out["parameter_2"] = p.parameter_2;
+        } else if constexpr (std::is_same_v<T, SpunSurfaceGeometry>) {
+          out["profile"] = p.profile.value;
+          out["base"] = VectorJson(p.base);
+          out["axis"] = VectorJson(p.axis);
+          out["start"] = p.start ? VectorJson(*p.start) : json(nullptr);
+          out["end"] = p.end ? VectorJson(*p.end) : json(nullptr);
+          out["x_axis"] = p.x_axis ? VectorJson(*p.x_axis) : json(nullptr);
+          out["start_parameter"] =
+              p.start_parameter ? json(*p.start_parameter) : json(nullptr);
+          out["end_parameter"] =
+              p.end_parameter ? json(*p.end_parameter) : json(nullptr);
+          out["scale"] = p.scale ? json(*p.scale) : json(nullptr);
         } else {
           if constexpr (requires { p.origin; })
             out["origin"] = VectorJson(p.origin);

@@ -86,6 +86,8 @@ The first typed alternatives are:
 - Surface curve (`SP_CURVE`), retaining surface and 2D parameter-curve IDs.
 - Trimmed curve (`TRIMMED_CURVE`), retaining its basis ID, source endpoints and
   original basis parameters.
+- Spun surface (`SPUN_SURF`), retaining its profile ID, axis/base and nullable
+  parameter bounds and auxiliary metadata.
 
 Fields are located by resolved schema name and codec, not fixed field offsets.
 Inserted fields and reordered definitions therefore do not shift geometry roles.
@@ -112,8 +114,8 @@ padded or resampled.
 
 Semantic problems retain the graph and other successfully built geometry while
 adding `invalid_geometry` issues. No partial typed object is published. Known
-geometry candidates without a typed adapter (intersection curves, procedural
-surfaces, foreign geometry, mesh and polyline) add
+geometry candidates without a typed adapter (intersection curves, other
+procedural surfaces, foreign geometry, mesh and polyline) add
 `unsupported_geometry` issues. Auxiliary raw nodes remain in the graph.
 `typed_geometry_complete()` covers the recognized geometry candidates; it is
 not a statement about arbitrary extension-node semantics or geometric validity.
@@ -132,6 +134,15 @@ ordering against the known basis sense and every nested numeric trim interval.
 Endpoint point/parameter agreement, periodic span legality and tolerant vertex
 correspondence are not certified. The model evaluator uses the original basis
 parameter and natural derivative, rather than introducing a new parameter scale.
+
+`SpunSurfaceGeometry` construction retains nullable start/end vectors,
+parameters, x-axis metadata and internal scale. Partially unset vectors,
+nonfinite data, reversed bounds and null profile IDs are invalid definitions.
+Its model-based surface evaluator resolves only analytic or 3D NURBS profiles,
+checks the unit spin axis, and preserves original parameters and natural
+partials. Auxiliary metadata does not transform or scale the generator.
+Forward references remain IDs rather than cached pointers. Profile validity
+and evaluability are stronger checks than typed-definition completeness.
 
 No curve/surface evaluation, derivatives, trimming, tessellation, topology
 reconstruction, delta application or STEP export is performed here.

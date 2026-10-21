@@ -207,6 +207,11 @@ Result<SurfaceEvaluation> EvaluateSurface(const GeometryPayload& geometry,
     return Torus(*torus, u, v);
   if (const auto* surface = std::get_if<NurbsSurfaceGeometry>(&geometry))
     return internal::EvaluateNurbsSurface(*surface, u, v);
+  if (std::holds_alternative<SpunSurfaceGeometry>(geometry)) {
+    return Result<SurfaceEvaluation>::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Spun surfaces require model context"});
+  }
   return Result<SurfaceEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,
        "Surface evaluation is not implemented for this geometry payload"});

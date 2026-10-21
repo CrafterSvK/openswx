@@ -67,6 +67,18 @@ struct SurfaceEvaluation {
 [[nodiscard]] Result<SurfaceEvaluation> EvaluateSurface(
     const GeometryPayload& geometry, double u, double v);
 
+/// Resolves a surface by ID, including SPUN_SURF's analytic or 3D NURBS
+/// profile. u is the original profile parameter, v an unbounded angle in
+/// radians about the stored unit axis. Optional start/end parameters bound u;
+/// the profile's own domain and resource checks also apply. Natural partials
+/// are returned without sense reversal or normalization. Auxiliary start/end
+/// points, x_axis and internal scale are retained, not applied or certified.
+/// Missing/wrong profiles are invalid records; unsupported dependencies remain
+/// explicit errors. No recursive profile graphs are evaluated.
+[[nodiscard]] Result<SurfaceEvaluation> EvaluateSurface(const Model& model,
+                                                        NodeId surface,
+                                                        double u, double v);
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_EVALUATE_H_

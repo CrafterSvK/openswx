@@ -3,6 +3,7 @@
 #include "openparasolid/model.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <initializer_list>
 #include <iterator>
@@ -60,10 +61,10 @@ const char* ToString(ModelIssueCode code) noexcept {
 }
 const char* GeometryName(const GeometryPayload& geometry) noexcept {
   constexpr const char* names[]{
-      "point",        "line",        "circle",        "ellipse",
-      "plane",        "cylinder",    "cone",          "sphere",
-      "torus",        "nurbs_curve", "nurbs_surface", "surface_curve",
-      "trimmed_curve"};
+      "point",         "line",        "circle",        "ellipse",
+      "plane",         "cylinder",    "cone",          "sphere",
+      "torus",         "nurbs_curve", "nurbs_surface", "surface_curve",
+      "trimmed_curve", "spun_surface"};
   static_assert(std::size(names) == std::variant_size_v<GeometryPayload>);
   return geometry.valueless_by_exception() ? "unknown"
                                            : names[geometry.index()];
@@ -207,6 +208,65 @@ Result<BuiltGeometry> BuildTrimmedCurve(const DecodedNode& node,
                 "Trimmed curve requires a basis, distinct parameters and "
                 "positive sense"));
   return Result<BuiltGeometry>::Ok({GeometryPayload{curve}, 9});
+}
+bool NullableNumber(ModelFields& fields, const char* name,
+                    std::optional<double>& result) {
+  const auto* field = fields.Find(name, FieldType::kDouble);
+  if (!field || field->elements != 1 || field->values.size() != 1) return false;
+  if (std::holds_alternative<std::monostate>(field->values[0])) {
+    result.reset();
+    return true;
+  }
+  const auto* value = std::get_if<double>(&field->values[0]);
+  if (!value || !std::isfinite(*value)) return false;
+  result = *value;
+  return true;
+}
+bool NullableVector(ModelFields& fields, const char* name,
+                    std::optional<Vector3>& result) {
+  const auto* field = fields.Find(name, FieldType::kVector);
+  if (!field || field->elements != 1 || field->values.size() != 3) return false;
+  if (std::all_of(field->values.begin(), field->values.end(),
+                  [](const auto& v) {
+                    return std::holds_alternative<std::monostate>(v);
+                  })) {
+    result.reset();
+    return true;
+  }
+  std::array<double, 3> values{};
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    const auto* value = std::get_if<double>(&field->values[i]);
+    if (!value || !std::isfinite(*value)) return false;
+    values[i] = *value;
+  }
+  result = Vector3{values[0], values[1], values[2]};
+  return true;
+}
+Result<BuiltGeometry> BuildSpunSurface(const DecodedNode& node,
+                                       ModelFields& fields) {
+  SpunSurfaceGeometry surface;
+  if (!fields.Reference("profile", surface.profile) ||
+      !fields.Vector("base", surface.base) ||
+      !fields.Vector("axis", surface.axis))
+    return Result<BuiltGeometry>::Err(fields.Error());
+  if (surface.profile.value == 0 ||
+      (surface.axis.x == 0 && surface.axis.y == 0 && surface.axis.z == 0))
+    return Result<BuiltGeometry>::Err(
+        Invalid(node.offset, "Invalid spun surface profile or axis"));
+  if (!NullableVector(fields, "start", surface.start) ||
+      !NullableVector(fields, "end", surface.end) ||
+      !NullableVector(fields, "x_axis", surface.x_axis) ||
+      !NullableNumber(fields, "start_param", surface.start_parameter) ||
+      !NullableNumber(fields, "end_param", surface.end_parameter) ||
+      !NullableNumber(fields, "scale", surface.scale))
+    return Result<BuiltGeometry>::Err(
+        Invalid(node.offset, "Invalid nullable spun surface metadata"));
+  if (surface.start_parameter && surface.end_parameter &&
+      *surface.start_parameter > *surface.end_parameter)
+    return Result<BuiltGeometry>::Err(
+        Invalid(node.offset, "Spun surface parameter bounds are reversed"));
+  // Bound the maximum scalar slots, including nullable metadata.
+  return Result<BuiltGeometry>::Ok({GeometryPayload{surface}, 19});
 }
 }  // namespace
 bool IsGeometryType(uint16_t type) {
@@ -468,7 +528,8 @@ std::optional<ParseError> ModelAssembler::BuildGeometry() {
     ModelFields fields(node, report_.schemas[node.schema_index].definition);
     const GeometryContext context{report_, model_.positions_,
                                   options_.max_values - copied_values};
-    auto built = node.node_type == 133   ? BuildTrimmedCurve(node, fields)
+    auto built = node.node_type == 68    ? BuildSpunSurface(node, fields)
+                 : node.node_type == 133 ? BuildTrimmedCurve(node, fields)
                  : node.node_type == 137 ? BuildSurfaceCurve(node, fields)
                  : node.node_type == 124 || node.node_type == 134
                      ? BuildSpline(node, fields, context)

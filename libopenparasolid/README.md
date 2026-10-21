@@ -293,6 +293,61 @@ the correction also preserves signed half-angles. All 9,138 earlier SP-curve
 samples were rechecked with the corrected cone convention. Comparison inputs
 and tools remain outside the repository.
 
+## Surfaces of revolution
+
+`SPUN_SURF` now has a typed `SpunSurfaceGeometry`, reported by the inspector
+as `kind: "spun_surface"`. It retains the profile ID, base point, spin axis,
+nullable start/end points and profile parameters, nullable `x_axis`, and
+internal `scale`. Entirely unset auxiliary vectors remain null; partially
+unset vectors, nonfinite metadata, null profiles, zero axes and reversed
+parameter bounds are rejected during model construction.
+
+Use `EvaluateSurface(model, surface_id, u, v)` to resolve the profile and return
+the point and both natural partials. This overload also accepts previously
+supported standalone surfaces. A standalone spun payload requires model
+context. For profile `C(u)`, axis point `B`, unit axis `A` and right-handed
+rotation `R_A(v)`, evaluation is:
+
+```text
+P(u,v) = B + R_A(v) * (C(u) - B)
+dP/du  = R_A(v) * C'(u)
+dP/dv  = A cross (P(u,v) - B)
+```
+
+The profile must be a line, circle, ellipse or 3D NURBS curve; 2D profiles,
+trimmed curves, SP-curves, intersections and foreign curves are not accepted
+as generators. This keeps dependency evaluation finite without recursive
+profile graphs. Missing/wrong profile roles return `kInvalidRecord`; missing
+typed payloads remain explicit unsupported-format errors. No approximation
+fallback is used. The model-based SP-curve evaluator uses this surface overload,
+so SP-curves and their trims can now lie on supported spun surfaces.
+
+The spin axis must have unit length within `1e-10`; it is not normalized.
+The original profile parameter `u` must satisfy both its curve domain and any
+inclusive `start_parameter`/`end_parameter` bounds. Null bounds add no limit on
+that side. Angle `v` is in radians and may be any finite value. Profile resource
+limits remain in force. Source senses, units and placement transforms are not
+applied. Singular points on the axis remain evaluable without a unit normal.
+
+The auxiliary start/end positions, profile-plane `x_axis` and internal scale
+are retained without moving, rotating or scaling the generator. Endpoint
+correspondence, auxiliary frame validity, self-intersections, regularity and
+face trimming are not certified. A spun definition charges 19 scalar slots
+against the model's copied-value budget, including nullable metadata. The
+implementation follows the XT Format Reference (July 2022, pp. 68–70), adds
+no runtime dependencies or CLI settings, and remains MIT code.
+
+Synthetic tests cover translated/oblique axes, rational and nonrational
+profiles, both partials, nullable metadata, bounds, singular points, overflow,
+copy/move behavior, profile role errors and composition through SP/trim curves.
+An independent SciPy Rotation/BSpline comparison checks 1,350 samples on all
+150 spun surfaces in 30 selected private streams without evaluation errors.
+On the earlier 2,050-trim comparison set, successful evaluations increase from
+9,703 to 10,050; unavailable-basis sample errors decrease from 480 to 120, with
+80 explicit NURBS domain errors remaining. Evaluated trim endpoints still
+agree with stored points within `1.5e-10` in source units. Private inputs and
+comparison tools remain outside the repository.
+
 ## Build and run
 
 The top-level build includes the library and `parasolid_inspect`:
