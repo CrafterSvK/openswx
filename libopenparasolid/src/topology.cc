@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -25,6 +26,8 @@ class TopologyReader {
   explicit TopologyReader(const Model& model) : model_(model) {}
   Result<LoopBoundary> ReadLoop(NodeId id, const LoopTraversalOptions& options);
   Result<FaceBoundary> ReadFace(NodeId id, const FaceTraversalOptions& options);
+  Result<ShellBoundary> ReadShell(NodeId id,
+                                  const ShellTraversalOptions& options);
 
  private:
   bool Fail(const ModelNode& node, std::string_view field, const char* message,
@@ -34,6 +37,16 @@ class TopologyReader {
                  bool nullable, NodeId& target);
   bool Sense(const ModelNode& node, TopologySense& sense);
   bool EdgeUse(const ModelNode& fin, NodeId edge, NodeId other, FinUse& use);
+  struct ShellBudget {
+    uint64_t loops;
+    uint64_t fins;
+    std::unordered_map<uint32_t, std::size_t> faces;
+  };
+  bool FaceUses(NodeId first, ShellFaceSide side, ShellBoundary& result,
+                ShellBudget& budget, const ShellTraversalOptions& options);
+  bool WireEdges(NodeId first, ShellBoundary& result, uint64_t limit);
+  bool Dummy(const ModelNode& fin);
+  bool VertexNext(const ModelNode& fin);
   const Model& model_;
   std::optional<ParseError> error_;
 };
@@ -267,6 +280,183 @@ Result<FaceBoundary> TopologyReader::ReadFace(
   }
   return Result<FaceBoundary>::Ok(std::move(result));
 }
+bool TopologyReader::FaceUses(NodeId current, ShellFaceSide side,
+                              ShellBoundary& result, ShellBudget& budget,
+                              const ShellTraversalOptions& options) {
+  const bool front = side == ShellFaceSide::kFront;
+  const char* owner_field = front ? "front_shell" : "shell";
+  const char* previous_field = front ? "previous_front" : "previous";
+  const char* next_field = front ? "next_front" : "next";
+  std::unordered_set<uint32_t> visited;
+  NodeId previous;
+  while (current.value) {
+    const auto& face = *model_.FindNode(current);
+    if (visited.contains(current.value))
+      return Fail(face, next_field, "Shell face chain contains a cycle");
+    if (result.face_uses.size() >= options.max_face_uses)
+      return Fail(face, next_field, "Shell face-use limit exceeded",
+                  ErrorCode::kResourceLimit);
+    visited.insert(current.value);
+    NodeId owner, backward, next;
+    if (!Reference(face, owner_field, 13, false, owner) ||
+        !Reference(face, previous_field, 14, true, backward) ||
+        !Reference(face, next_field, 14, true, next))
+      return false;
+    if (owner != result.shell || backward != previous)
+      return Fail(face, owner_field,
+                  "Inconsistent shell ownership or reciprocal face links");
+    auto cached = budget.faces.find(current.value);
+    std::size_t index = result.faces.size();
+    if (cached != budget.faces.end())
+      index = cached->second;
+    else {
+      NodeId head;
+      if (!Reference(face, "loop", 15, true, head)) return false;
+      if (head.value && (budget.loops == 0 || budget.fins == 0))
+        return Fail(face, "loop", "Shell aggregate loop or fin limit exceeded",
+                    ErrorCode::kResourceLimit);
+      // A face with no loops consumes no remaining loop/fin budget. ReadFace
+      // still requires positive options even when that budget is exhausted.
+      auto boundary = ReadFace(current, {std::max(budget.loops, uint64_t{1}),
+                                         std::max(budget.fins, uint64_t{1})});
+      if (!boundary.ok()) {
+        auto error = boundary.error();
+        error.message = "Shell " + std::to_string(result.shell.value) +
+                        ", face " + std::to_string(current.value) + ": " +
+                        error.message;
+        error_ = std::move(error);
+        return false;
+      }
+      budget.loops -= boundary.value().loops.size();
+      for (const auto& loop : boundary.value().loops)
+        budget.fins -= loop.isolated_vertex ? 1 : loop.fins.size();
+      budget.faces.emplace(current.value, index);
+      result.faces.push_back(std::move(boundary).value());
+    }
+    result.face_uses.push_back({index, side});
+    previous = current;
+    current = next;
+  }
+  return true;
+}
+bool TopologyReader::Dummy(const ModelNode& fin) {
+  constexpr std::pair<const char*, uint16_t> roles[]{
+      {"loop", 15}, {"forward", 17}, {"backward", 17}, {"curve", 1008}};
+  for (const auto& [role, type] : roles) {
+    NodeId target;
+    if (!Reference(fin, role, type, true, target)) return false;
+    if (target.value)
+      return Fail(fin, role, "Wire-edge anchor fin is not a dummy fin");
+  }
+  // Wire anchors can retain vertex-chain links even though their loop-chain
+  // roles are null. Check the local vertex link rather than discarding it.
+  return VertexNext(fin);
+}
+bool TopologyReader::VertexNext(const ModelNode& fin) {
+  NodeId next, vertex, next_vertex, edge_id, primary_id, secondary_id;
+  if (!Reference(fin, "next_at_vx", 17, true, next)) return false;
+  if (!next.value) return true;
+  const auto& target = *model_.FindNode(next);
+  if (!Reference(fin, "vertex", 18, false, vertex) ||
+      !Reference(target, "vertex", 18, false, next_vertex) ||
+      !Reference(target, "edge", 16, false, edge_id))
+    return false;
+  const auto& edge = *model_.FindNode(edge_id);
+  if (!Reference(edge, "halfedge", 17, false, primary_id)) return false;
+  const auto& primary = *model_.FindNode(primary_id);
+  if (!Reference(primary, "other", 17, false, secondary_id)) return false;
+  if (next == fin.id || vertex != next_vertex ||
+      (next != primary_id && next != secondary_id))
+    return Fail(fin, "next_at_vx",
+                "Vertex-chain link is not another anchor at the same vertex");
+  return true;
+}
+bool TopologyReader::WireEdges(NodeId current, ShellBoundary& result,
+                               uint64_t limit) {
+  std::unordered_set<uint32_t> visited;
+  NodeId previous;
+  while (current.value) {
+    const auto& edge = *model_.FindNode(current);
+    if (visited.contains(current.value))
+      return Fail(edge, "next", "Shell wire-edge chain contains a cycle");
+    if (result.wire_edges.size() >= limit)
+      return Fail(edge, "next", "Shell wire-edge limit exceeded",
+                  ErrorCode::kResourceLimit);
+    visited.insert(current.value);
+    NodeId owner, backward, next, primary_id, secondary_id, close;
+    if (!Reference(edge, "owner", 13, false, owner) ||
+        !Reference(edge, "previous", 16, true, backward) ||
+        !Reference(edge, "next", 16, true, next) ||
+        !Reference(edge, "halfedge", 17, false, primary_id))
+      return false;
+    if (owner != result.shell || backward != previous)
+      return Fail(edge, "owner/previous",
+                  "Inconsistent shell ownership or reciprocal edge links");
+    const auto& primary = *model_.FindNode(primary_id);
+    if (!Reference(primary, "other", 17, false, secondary_id)) return false;
+    const auto& secondary = *model_.FindNode(secondary_id);
+    FinUse use;
+    if (!EdgeUse(primary, current, secondary_id, use) || !Dummy(primary) ||
+        !Dummy(secondary) || !Reference(secondary, "other", 17, false, close))
+      return false;
+    if (close != primary_id)
+      return Fail(secondary, "other",
+                  "Wire edge does not have a two-dummy-fin ring");
+    result.wire_edges.push_back(
+        {current, use.start_vertex, use.end_vertex, use.edge_curve});
+    previous = current;
+    current = next;
+  }
+  return true;
+}
+Result<ShellBoundary> TopologyReader::ReadShell(
+    NodeId id, const ShellTraversalOptions& options) {
+  if (!options.max_face_uses || !options.max_loops || !options.max_fins ||
+      !options.max_wire_edges)
+    return Result<ShellBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Shell traversal requires positive limits"});
+  const auto* shell = Node(id, 13);
+  if (!shell) return Result<ShellBoundary>::Err(*error_);
+  ShellBoundary result;
+  result.shell = id;
+  NodeId back, front, edges, vertex;
+  if (!Reference(*shell, "region", 19, false, result.region) ||
+      !Reference(*shell, "face", 14, true, back) ||
+      !Reference(*shell, "front_face", 14, true, front) ||
+      !Reference(*shell, "edge", 16, true, edges) ||
+      !Reference(*shell, "vertex", 18, true, vertex))
+    return Result<ShellBoundary>::Err(*error_);
+  if (vertex.value) {
+    if (back.value || front.value || edges.value) {
+      Fail(*shell, "vertex", "Acorn shell also lists faces or edges");
+      return Result<ShellBoundary>::Err(*error_);
+    }
+    const auto& node = *model_.FindNode(vertex);
+    NodeId owner, fin, point;
+    if (!Reference(node, "owner", 13, false, owner) ||
+        !Reference(node, "halfedge", 17, true, fin) ||
+        !Reference(node, "point", 29, false, point))
+      return Result<ShellBoundary>::Err(*error_);
+    if (owner != id || fin.value) {
+      Fail(node, "owner/halfedge",
+           "Invalid acorn vertex ownership or fin chain");
+      return Result<ShellBoundary>::Err(*error_);
+    }
+    result.isolated_vertex = IsolatedShellVertex{vertex, point};
+  } else {
+    if (!back.value && !front.value && !edges.value) {
+      Fail(*shell, "face/front_face/edge", "Shell has no listed entities");
+      return Result<ShellBoundary>::Err(*error_);
+    }
+    ShellBudget budget{options.max_loops, options.max_fins, {}};
+    if (!FaceUses(back, ShellFaceSide::kBack, result, budget, options) ||
+        !FaceUses(front, ShellFaceSide::kFront, result, budget, options) ||
+        !WireEdges(edges, result, options.max_wire_edges))
+      return Result<ShellBoundary>::Err(*error_);
+  }
+  return Result<ShellBoundary>::Ok(std::move(result));
+}
 }  // namespace
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
@@ -275,6 +465,11 @@ Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
 Result<FaceBoundary> TraverseFaceBoundary(const Model& model, NodeId face,
                                           const FaceTraversalOptions& options) {
   return TopologyReader(model).ReadFace(face, options);
+}
+
+Result<ShellBoundary> TraverseShellBoundary(
+    const Model& model, NodeId shell, const ShellTraversalOptions& options) {
+  return TopologyReader(model).ReadShell(shell, options);
 }
 
 }  // namespace openparasolid

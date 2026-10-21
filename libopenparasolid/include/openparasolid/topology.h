@@ -3,6 +3,7 @@
 #ifndef OPENPARASOLID_TOPOLOGY_H_
 #define OPENPARASOLID_TOPOLOGY_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <vector>
@@ -91,6 +92,63 @@ struct FaceTraversalOptions {
 /// topology or geometry. No outer/hole classification or tolerance is inferred.
 [[nodiscard]] Result<FaceBoundary> TraverseFaceBoundary(
     const Model& model, NodeId face, const FaceTraversalOptions& options = {});
+
+enum class ShellFaceSide { kBack, kFront };
+struct ShellFaceUse {
+  /// Index into ShellBoundary.faces, stable across copies and moves.
+  std::size_t boundary = 0;
+  /// Relative to the face normal, not the underlying surface's raw sense.
+  ShellFaceSide side = ShellFaceSide::kBack;
+};
+struct WireEdgeUse {
+  NodeId edge;
+  /// Natural edge direction, without inferring the edge-to-curve sense.
+  /// Both vertices may be null for a ring edge.
+  NodeId start_vertex;
+  NodeId end_vertex;
+  NodeId curve;
+};
+struct IsolatedShellVertex {
+  NodeId vertex;
+  NodeId point;
+};
+struct ShellBoundary {
+  NodeId shell;
+  NodeId region;
+  /// One boundary per distinct listed face, in first-encounter order.
+  std::vector<FaceBoundary> faces;
+  /// Back-face chain first, then front-face chain; source order within each.
+  /// A face may occur once on each side, sharing one boundary above.
+  std::vector<ShellFaceUse> face_uses;
+  std::vector<WireEdgeUse> wire_edges;
+  /// Present only for an acorn shell with no faces or wire edges.
+  std::optional<IsolatedShellVertex> isolated_vertex;
+};
+struct ShellTraversalOptions {
+  uint64_t max_face_uses = 10000;
+  /// Aggregate limits across distinct face boundaries, not per side/use.
+  uint64_t max_loops = 10000;
+  uint64_t max_fins = 100000;
+  uint64_t max_wire_edges = 100000;
+};
+
+/// Reads both null-terminated face-use chains and the wire-edge chain of a
+/// SHELL, or its isolated vertex. Verifies selected ownership, reciprocal list
+/// links, cycles and nested face/loop connectivity. A wire edge requires its
+/// positive/negative anchor fins to be the two dummy fins of a closed radial
+/// ring. Non-null wire-anchor vertex links are checked locally. Acorn
+/// vertices must belong to the shell and have no fin-chain head.
+/// All limits are positive and aggregate over this query; isolated loop fins
+/// count toward max_fins, while wire anchors are bounded by max_wire_edges.
+/// Errors follow the other traversal APIs and never return partial results.
+/// Results own their data; the model is unchanged. The obsolete SHELL.body
+/// field is ignored. No complete vertex chains, region-list membership,
+/// connectedness, manifoldness,
+/// enclosed volume or geometric/tolerance validity is certified. Unlisted
+/// entities, outer/hole classification and face-normal flips are not inferred.
+[[nodiscard]] Result<ShellBoundary> TraverseShellBoundary(
+    const Model& model, NodeId shell,
+    const ShellTraversalOptions& options = {});
 
 }  // namespace openparasolid
 

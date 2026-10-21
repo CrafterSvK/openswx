@@ -120,6 +120,73 @@ loops. There are 934 faces with multiple loops, with maxima of 20 loops and
 122 fins per face; no traversal errors occur. Empty face lists are covered
 synthetically. Private inputs and comparison tools remain outside the repo.
 
+## Shell boundaries
+
+`TraverseShellBoundary(model, shell_id, options)` in
+`openparasolid/topology.h` returns an owned `ShellBoundary`: the shell and
+required region IDs, distinct face boundaries, their side-specific uses,
+listed wire edges, or the vertex/point IDs of an isolated (acorn) shell.
+The obsolete `SHELL.body` field is ignored; region/body chains are not traversed.
+
+Back-face uses follow `SHELL.face` and `FACE.next/previous`, with `FACE.shell`
+pointing back to the queried shell. Front-face uses independently follow
+`SHELL.front_face` and `FACE.next_front/previous_front`, with matching
+`FACE.front_shell`. Both lists are null-terminated, acyclic and checked for
+reciprocal links. The result lists back uses first, then front uses, retaining
+each source chain's order. Side is relative to the face normal: a front use
+places the region on the side toward which that normal points. It does not
+silently change the source surface/face senses or reverse any loop.
+
+The same face may appear once on each side of one shell. `face_uses` stores
+`ShellFaceUse{boundary, side}` values, whose `boundary` indexes `faces`. Each
+distinct `FaceBoundary` is read and stored once per shell, in first-encounter
+order. Index relationships remain valid across copies and moves; returned
+data outlives the source model.
+
+`SHELL.edge` supplies a separate null-terminated wire-edge chain. Each edge
+must belong to this shell, have reciprocal previous/next links, and retain its
+natural endpoints and nullable curve reference. Its positive primary and
+negative secondary fins form a closed two-fin ring with null loop, forward,
+backward and curve roles. Non-null `next_at_vx` links can remain on wire
+anchors: each locally checked target must be another primary/secondary edge
+anchor at the same non-null vertex. This handles both shared wire vertices
+and closed edges whose two endpoint IDs agree. Full vertex-chain traversal
+and cycle/completeness certification remain separate work.
+
+An acorn shell has a vertex and no face uses or wire edges. Its vertex must
+belong to that shell, have no fin-chain head and retain a non-null point
+reference. Geometry may remain untyped. A shell without any listed entity,
+conflicting acorn contents, wrong ownership, invalid links or list cycles
+returns `kInvalidRecord`; unavailable/unverified roles remain unsupported.
+Nested face/loop failures retain their code and source offset and add shell
+context. Errors never return a partial shell.
+
+All four `ShellTraversalOptions` limits must be positive:
+`max_face_uses = 10000`, `max_loops = 10000`, `max_fins = 100000`, and
+`max_wire_edges = 100000`. Uses count both sides. Loop and fin budgets are
+shared across distinct face boundaries, counting isolated loop fins once;
+a second side of a cached face consumes no additional loop/fin budget. Empty
+faces remain valid after these budgets are exhausted. Wire anchors are
+bounded separately by the wire-edge limit. Excess returns `kResourceLimit`.
+
+These local checks do not prove shell connectedness, full vertex/radial
+incidence, manifoldness, closed volume, region-list membership or valid body
+geometry. Unlisted entities, placements, units and geometric tolerances are
+not inferred or repaired. The rules follow the XT Format Reference (July
+2022, pp. 27-29 and 93-97), checked against actual writer vertex-chain fields.
+The implementation remains MIT and STL-only, with no new CLI settings.
+
+Synthetic tests cover shared front/back boundaries, empty and front-only
+faces, wire-only and acorn shells, aggregate limits, same-vertex wire ends,
+local vertex links, malformed owners/lists/anchors, nested errors and owned
+indices. In the previous 90 private streams, independent raw-field checks
+verify all 216 shells and 16,548 face uses (8,274 on each side). Their 15,670
+stored face boundaries match the prior face results exactly; 878 faces share
+one boundary between both sides of a shell. An additional 40 selected streams
+without faces verify all 70 shells, including 46 acorn shells, 37 wire edges
+and 16 non-null wire vertex links. No traversal errors remain. Private inputs
+and comparison programs remain outside the repository.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS
