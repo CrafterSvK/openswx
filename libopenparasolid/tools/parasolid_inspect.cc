@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
 
-#include <charconv>
+#include <cstdlib>
 #include <filesystem>
 #include <iostream>
 #include <map>
@@ -9,7 +9,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
+#include "inspect_options.h"
+#include "model_report.h"
 #include "openparasolid/parser.h"
 #include "openparasolid/version.h"
 #include "schema_report.h"
@@ -120,84 +123,51 @@ json Report(const openparasolid::StreamInspection &inspection,
 }
 
 void Usage(std::ostream &output) {
-  output << "Usage: parasolid_inspect [--summary] [--max-records N] "
-            "[--nodes] [--schema-catalog FILE.json] [--max-fields N] "
-            "[--max-values N] [--max-delta-entries N] <file.x_b|file.bin>\n"
-            "Schema limits require --nodes or --schema-catalog.\n";
+  output
+      << "Usage: parasolid_inspect [--summary] [--max-records N] "
+         "[--nodes] [--geometry] [--schema-catalog FILE.json] [--max-fields N] "
+         "[--max-values N] [--max-delta-entries N] <file.x_b|file.bin>\n"
+         "Schema limits require --nodes, --geometry or --schema-catalog.\n"
+         "Environment: OPENPARASOLID_<OPTION>, uppercase with underscores.\n"
+         "CLI values override environment; boolean flags accept =false.\n";
 }
 
 }  // namespace
 
 int main(int argc, char *argv[]) {
-  openparasolid::InspectOptions options;
-  std::optional<std::filesystem::path> input;
-  bool summary = false;
-  bool nodes = false;
-  openparasolid::SchemaLimits limits;
-  bool schema_limits = false;
-  std::optional<std::filesystem::path> catalog_path;
-  for (int i = 1; i < argc; ++i) {
-    const std::string_view arg = argv[i];
-    if (arg == "--help" || arg == "-h") {
-      Usage(std::cout);
-      return 0;
-    }
-    if (arg == "--version") {
-      std::cout << OPENPARASOLID_VERSION_STRING << '\n';
-      return 0;
-    }
-    if (arg == "--summary")
-      summary = true;
-    else if (arg == "--nodes")
-      nodes = true;
-    else if (arg == "--schema-catalog") {
-      if (++i >= argc) {
-        Usage(std::cerr);
-        return 1;
-      }
-      catalog_path = argv[i];
-      nodes = true;
-    } else if (arg == "--max-records" || arg == "--max-fields" ||
-               arg == "--max-values" || arg == "--max-delta-entries") {
-      if (++i >= argc) {
-        Usage(std::cerr);
-        return 1;
-      }
-      const std::string_view number = argv[i];
-      uint64_t *target = &options.max_records;
-      if (arg != "--max-records") {
-        schema_limits = true;
-        target = arg == "--max-fields"   ? &limits.max_total_fields
-                 : arg == "--max-values" ? &limits.max_values
-                                         : &limits.max_delta_entries;
-      }
-      const auto parsed = std::from_chars(
-          number.data(), number.data() + number.size(), *target);
-      if (number.empty() || parsed.ec != std::errc{} ||
-          parsed.ptr != number.data() + number.size() || *target == 0) {
-        Usage(std::cerr);
-        return 1;
-      }
-    } else if (arg.starts_with('-') || input) {
-      Usage(std::cerr);
-      return 1;
-    } else
-      input = std::filesystem::path(arg);
-  }
-  if (!input) {
+  std::vector<std::string_view> arguments;
+  for (int i = 1; i < argc; ++i) arguments.emplace_back(argv[i]);
+  const auto configured = openparasolid::cli::ParseInspectSettings(
+      arguments, [](std::string_view name) -> std::optional<std::string> {
+        const auto key = std::string(name);
+        const char *value = std::getenv(key.c_str());
+        return value ? std::optional<std::string>(value) : std::nullopt;
+      });
+  if (!configured.ok()) {
+    std::cerr << "Error: " << configured.error().message << '\n';
     Usage(std::cerr);
     return 1;
   }
-  if (schema_limits && !nodes) {
-    std::cerr << "Error: schema limits require --nodes or --schema-catalog\n";
-    return 1;
+  const auto &settings = configured.value();
+  if (settings.action == openparasolid::cli::InspectAction::kHelp) {
+    Usage(std::cout);
+    return 0;
   }
+  if (settings.action == openparasolid::cli::InspectAction::kVersion) {
+    std::cout << OPENPARASOLID_VERSION_STRING << '\n';
+    return 0;
+  }
+  const auto &options = settings.inspect;
+  const auto &limits = settings.limits;
+  const auto &input = settings.input;
+  const auto &catalog_path = settings.catalog;
+  const bool summary = settings.summary;
+  const bool nodes = settings.nodes;
   if (nodes) {
     try {
       std::optional<openparasolid::SchemaCatalog> catalog;
       if (catalog_path)
         catalog = openparasolid::cli::LoadCatalog(*catalog_path);
-      limits.max_nodes = options.max_records;
       const auto parsed = openparasolid::SchemaParser::ParseFile(
           *input, catalog ? &*catalog : nullptr, limits);
       if (!parsed.ok()) {
@@ -207,8 +177,8 @@ int main(int argc, char *argv[]) {
                   << '\n';
         return 1;
       }
-      auto report =
-          openparasolid::cli::SchemaReport(parsed.value(), *input, summary);
+      auto report = openparasolid::cli::SchemaReport(
+          parsed.value(), *input, summary || settings.geometry);
       report["limits"] = {{"max_input_bytes", limits.max_input_bytes},
                           {"max_nodes", limits.max_nodes},
                           {"max_types", limits.max_types},
@@ -217,8 +187,33 @@ int main(int argc, char *argv[]) {
                           {"max_values", limits.max_values},
                           {"max_delta_packets", limits.max_delta_packets},
                           {"max_delta_entries", limits.max_delta_entries}};
+      int status = parsed.value().complete ? 0 : 2;
+      if (settings.geometry) {
+        report["interpretation"] = "geometry_model";
+        openparasolid::ModelOptions model_options;
+        model_options.max_nodes = limits.max_nodes;
+        model_options.max_fields = limits.max_total_fields;
+        model_options.max_references = limits.max_values;
+        model_options.max_values = limits.max_values;
+        const auto model =
+            openparasolid::ModelBuilder::Build(parsed.value(), model_options);
+        if (!model.ok()) {
+          report["model"] = nullptr;
+          report["model_error"] = {
+              {"code", openparasolid::ToString(model.error().code)},
+              {"offset", model.error().offset},
+              {"message", model.error().message}};
+          status = 2;
+        } else {
+          report["model"] = openparasolid::cli::ModelReport(
+              model.value(), model_options, summary);
+          if (!model.value().references_verified() ||
+              !model.value().typed_geometry_complete())
+            status = 2;
+        }
+      }
       std::cout << report.dump(2) << '\n';
-      return parsed.value().complete ? 0 : 2;
+      return status;
     } catch (const std::exception &error) {
       std::cerr << "Error: " << error.what() << '\n';
       return 1;

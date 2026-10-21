@@ -27,7 +27,11 @@ and analytic, spline and procedural geometry subset or an explicit matching
 catalog. Candidate
 scanning remains an inspection aid;
 complete topology, delta application and B-Rep construction are future steps.
-See [libopenparasolid](libopenparasolid/README.md) for the API and supported scope.
+`--geometry` builds an owned reference graph and typed analytic/NURBS objects
+for complete partition/transmit streams, with explicit unresolved-reference and
+unsupported-geometry diagnostics. See the
+[model builder](libopenparasolid/MODEL.md) and
+[library documentation](libopenparasolid/README.md) for the API and supported scope.
 
 ### libopenswx
 

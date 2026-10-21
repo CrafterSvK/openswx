@@ -7,6 +7,13 @@ The library depends only on the C++ standard library. The CLI uses
 nlohmann/json, and the tests use GoogleTest. SolidWorks containers and
 compression belong to `libopenswx`; this library reads the extracted bytes.
 
+The [model builder](MODEL.md) adds an owned reference graph and typed analytic/
+NURBS data for complete partition and transmit streams. Use
+`parasolid_inspect --geometry --summary part.x_b` to inspect its findings.
+Geometry mode and existing options also support `OPENPARASOLID_*` environment
+settings, with command-line precedence. Delta application and B-Rep validation
+remain separate work.
+
 ## Build and run
 
 The top-level build includes the library and `parasolid_inspect`:

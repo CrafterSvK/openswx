@@ -322,5 +322,85 @@ TEST_F(ParasolidInspectCliTest,
   }
 }
 
+TEST_F(ParasolidInspectCliTest, GeometryModeBuildsOwnedPointAndSummary) {
+  auto bytes = test::Header();
+  test::U16(bytes, 29);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 7);
+  test::U32(bytes, 1);
+  for (int i = 0; i < 4; ++i) test::CompactIndex(bytes, 0);
+  for (double v : {1.25, -2.5, 3.75}) test::F64(bytes, v);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run("--geometry"), 0);
+  auto r = Report();
+  EXPECT_EQ(r["interpretation"], "geometry_model");
+  EXPECT_EQ(r["complete"], true);
+  EXPECT_EQ(r["model"]["references_verified"], true);
+  EXPECT_EQ(r["model"]["geometry"][0]["position"],
+            json::array({1.25, -2.5, 3.75}));
+  EXPECT_EQ(r["model"]["geometry"][0]["source"], 7);
+  EXPECT_EQ(r["model"]["nodes"][0]["geometry"], 0);
+  EXPECT_FALSE(r.contains("nodes"));
+  ASSERT_EQ(Run("--geometry --summary"), 0);
+  r = Report();
+  EXPECT_EQ(r["model"]["geometry_count"], 1);
+  EXPECT_FALSE(r["model"].contains("nodes"));
+  EXPECT_FALSE(r["model"].contains("geometry"));
+  EXPECT_FALSE(r["model"].contains("issues"));
+}
+TEST_F(ParasolidInspectCliTest,
+       GeometryModeRejectsDeltasAndPreservesPartialParse) {
+  auto bytes = test::DeltaPrefixBytes();
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  auto write = [&] {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  };
+  write();
+  ASSERT_EQ(Run("--geometry --summary"), 2);
+  EXPECT_EQ(Report()["complete"], true);
+  EXPECT_TRUE(Report()["model"].is_null());
+  EXPECT_EQ(Report()["model_error"]["code"], "unsupported_format");
+  bytes = test::Header();
+  test::U16(bytes, 29);
+  bytes.push_back(255);
+  write();
+  ASSERT_EQ(Run("--geometry"), 2);
+  EXPECT_EQ(Report()["complete"], false);
+  EXPECT_TRUE(Report()["model"].is_null());
+}
+TEST_F(ParasolidInspectCliTest,
+       GeometryModeReportsSemanticIssuesWithLimitedStatus) {
+  auto bytes = test::Header();
+  test::U16(bytes, 29);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 7);
+  test::U32(bytes, 1);
+  test::CompactIndex(bytes, 100);  // Missing attribute target.
+  for (int i = 0; i < 3; ++i) test::CompactIndex(bytes, 0);
+  for (double v : {1., 2., 3.}) test::F64(bytes, v);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run("--geometry"), 2);
+  const auto r = Report();
+  EXPECT_EQ(r["complete"], true);
+  EXPECT_EQ(r["model"]["geometry_count"], 1);
+  EXPECT_EQ(r["model"]["missing_reference_count"], 1);
+  EXPECT_EQ(r["model"]["issues"][0]["code"], "missing_target");
+}
+
 }  // namespace
 }  // namespace openparasolid
