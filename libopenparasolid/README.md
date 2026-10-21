@@ -414,9 +414,9 @@ not certify numerical conditioning, global regularity or topology.
 The API propagates the complete surface evaluator's domain, dependency,
 resource and representability checks, including those on the point and both
 partials. It introduces no CLI settings or dependencies and remains MIT and
-STL-only. Oriented normals provide a building block for later intersection
-chart parameterisation; neither chart reconstruction nor a surface-intersection
-solver is included in this iteration.
+STL-only. Oriented normals provide a building block for intersection chart
+parameterisation. The separate chart API below requires supplied tangents;
+automatic surface inversion and a surface-intersection solver remain pending.
 
 Tests cover source orientation, rotated frames, rational/nonrational patches,
 procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,
@@ -426,6 +426,58 @@ normal samples across 90 selected private streams, with maximum component
 difference below `9e-13`. Six further samples return explicit errors because
 their generator has no typed payload. Private inputs and comparison tools
 remain outside the repository.
+
+## Intersection chart parameters
+
+`ParameterizeIntersectionChart(chart, tangents)` reconstructs point parameters
+and chord projection scales from the transmitted chart and caller-supplied
+natural tangent directions. One finite nonzero tangent is required at every
+point, oriented in chart order; magnitudes need not be one. For an intersection
+the direction is normally the cross product of the two oriented surface
+normals, in stored surface order. The function preserves the source chart,
+base parameter and initial scale. For chords of length `C[i]` it implements
+the XT Format Reference (July 2022, pp. 46–47) recurrence:
+
+```text
+f[0]   = base_scale
+t[0]   = base_parameter
+f[i]   = f[i-1] * cos(b[i]) / cos(a[i])
+t[i+1] = t[i] + C[i] * f[i]
+```
+
+Here `a[i]` is the angle from the tangent to the next chord, and `b[i]` the
+angle to the preceding chord in its forward direction. The result contains
+one parameter per point and one scale per chord. The tangent ratio gives
+matching first derivatives for the adjacent chord projection rules, provided
+the supplied tangents describe the actual curve. Consecutive duplicate points
+and nonpositive tangent projections are rejected; a closed chart may repeat
+its first position at the end without wrapping its parameters.
+
+At least two points, finite coordinates/base parameter and a positive finite
+base scale are required. Each input position/tangent array is bounded to
+1,000,000 coordinate scalars (333,333 points). Count mismatch is an invalid
+option, oversized inputs exceed the resource limit, and invalid geometry or
+unrepresentable results are invalid records. The recurrence uses wide
+intermediates, with range checks and strictly increasing published `double`
+parameters; even positive increments that round to the preceding parameter
+are rejected. Tangent normalization is scaled to handle extreme magnitudes.
+Runtime is linear, with only the two bounded output arrays retained.
+
+This API does not recover surface UV coordinates or tangents from positions,
+certify curve membership or chart error estimates, extend to terminators,
+or solve/evaluate the exact intersection between chart points. `EvaluateCurve`
+continues to report the missing intersection solver explicitly. No CLI
+settings, environment variables or dependencies are added; code remains MIT
+and STL-only.
+
+Tests cover C1 projection scales, closed and uneven charts, composition with
+oriented normals, malformed inputs, resource bounds, signed zero, subnormal
+chords and numeric range failures. A separate 80-digit Decimal calculation
+checks 3,550 parameters and 3,354 scales across 100 synthetic charts and 96
+selected private charts with externally supplied analytic tangents. Maximum
+absolute difference is below `5e-16`. This validates the parameter recurrence,
+not automatic tangent reconstruction or a complete intersection evaluator.
+Private inputs and comparison tools remain outside the repository.
 
 ## Intersection curve definitions
 
@@ -453,11 +505,11 @@ type-204 UV arrays remain in the raw graph. No UV tuple layout is inferred.
 Chart and limit hvecs transmit positions only in these non-delta streams;
 tangents, surface parameters and individual chart parameters are not invented.
 
-This iteration provides definitions for a future surface-intersection solver.
+Model construction provides definitions for a future surface-intersection solver.
 `EvaluateCurve` still returns an explicit unsupported-format error for an
 intersection curve, including through a trim. The chart is a chordal guide,
-not the exact curve. Reconstructing its parameterisation requires oriented
-surface normals; interior evaluation requires solving the documented local
+not the exact curve. The separate parameterisation API requires supplied
+oriented tangents; interior evaluation requires solving the documented local
 three-surface intersection. Terminator handling, branch consistency, chart
 accuracy and endpoint agreement are not certified by the typed adapter.
 

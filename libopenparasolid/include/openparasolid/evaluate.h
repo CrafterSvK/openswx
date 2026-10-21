@@ -3,6 +3,9 @@
 #ifndef OPENPARASOLID_EVALUATE_H_
 #define OPENPARASOLID_EVALUATE_H_
 
+#include <span>
+#include <vector>
+
 #include "openparasolid/model.h"
 
 namespace openparasolid {
@@ -90,6 +93,28 @@ struct SurfaceEvaluation {
 [[nodiscard]] Result<Vector3> EvaluateSurfaceNormal(const Model& model,
                                                    NodeId surface,
                                                    double u, double v);
+
+struct IntersectionChartParameters {
+  /// One strictly increasing parameter per chart position.
+  std::vector<double> parameters;
+  /// One positive projection scale per chord, with no final unused scale.
+  std::vector<double> chord_scales;
+};
+
+/// Reconstructs chart parameters using the XT chord/tangent recurrence.
+/// Supply one finite nonzero tangent per chart position, oriented in chart
+/// order (normally N0 x N1 using the oriented surface normals). Tangent
+/// magnitudes need not be one. Positions and tangents are not modified.
+/// Every adjacent chord must be nonzero and project positively onto both end
+/// tangents. The base scale must be finite and positive. Parameters and scales
+/// must remain representable, with strictly increasing double parameters.
+/// At least two positions are required; at most 1,000,000 coordinate scalars
+/// per input array are accepted. Count mismatch returns kInvalidOptions,
+/// oversized charts kResourceLimit, invalid data/results kInvalidRecord.
+/// Does not find surface parameters/tangents, check curve membership or error
+/// estimates, extend to terminators, or evaluate between chart positions.
+[[nodiscard]] Result<IntersectionChartParameters> ParameterizeIntersectionChart(
+    const IntersectionChart& chart, std::span<const Vector3> tangents);
 
 }  // namespace openparasolid
 
