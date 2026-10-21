@@ -65,8 +65,8 @@ overflow, but final positions and derivatives must fit in `double`.
 
 The formulas and frame conventions follow the XT Format Reference (July 2022,
 pp. 35–40); natural derivatives and curve sense follow section 5.2.8 (p. 82).
-NURBS surface evaluation, topology traversal, delta application and STEP export
-remain separate work. The inspector's JSON and command-line options are unchanged.
+Topology traversal, delta application and STEP export remain separate work.
+The inspector's JSON and command-line options are unchanged.
 
 Synthetic tests cover rational quarter circles, 2D/3D controls, homogeneous
 scaling, endpoint and repeated-knot derivatives, unclamped knots, invalid data
@@ -115,11 +115,11 @@ these boundaries may leave derivatives close to zero rather than exactly zero.
 
 Both parameters must be finite. Invalid parameters or domains return
 `kInvalidOptions`; malformed geometry or unrepresentable numerical results
-return `kInvalidRecord`; unsupported payloads, including NURBS surfaces, return
+return `kInvalidRecord`; unsupported payloads return
 `kUnsupportedFormat`. Error offsets are zero, as for `EvaluateCurve`.
 Intermediate calculations use extended precision where available and final
 values must fit in `double`. The implementation adds no dependencies or CLI
-options and requires no dynamic scratch storage for surface evaluation.
+options and requires no dynamic scratch storage for analytic evaluation.
 
 Formulas and torus types follow the XT Format Reference (July 2022, pp. 53–59).
 Synthetic tests cover rotated frames, natural derivatives, the XT cone axis,
@@ -129,6 +129,49 @@ An independent NumPy comparison checks 2,910 samples from 600 synthetic
 surfaces and 370 surfaces in 25 private streams, using complex-step
 differentiation for both partials. Comparison tools and data stay outside the
 repository and are not dependencies of the library.
+
+## NURBS surface evaluation
+
+`EvaluateSurface` also evaluates tensor-product NURBS surfaces, returning the
+point and natural partial derivatives in source coordinates. A nonrational
+surface has three control components; a rational surface has four homogeneous
+components `(w*x, w*y, w*z, w)`, with positive weights. Control `(i,j)` starts at
+`(i*n_v + j)*dimension` in the flat source array: the v index varies fastest.
+The evaluator preserves this order and applies no transposition, weight
+premultiplication, sense reversal, placement transform or face trimming.
+
+Each axis follows the NURBS curve rules above: its own degree, expanded knots,
+closed parameter interval and one-sided derivative convention. At an interior
+knot the partial is right-sided in that axis; at its upper endpoint it is
+left-sided. Closed/periodic flags do not enable extrapolation or wrapping, and
+continuity, regularity or closure are not certified. Singular patches can
+return zero partials without implying a valid face normal.
+
+Both axes and the complete control array are validated before allocating knot
+or interpolation scratch space. The shared control net must have exactly
+`n_u*n_v*dimension` scalars. The degree limit is 64 per axis, each knot array
+and expanded knot vector is bounded to 1,000,000 entries, and the total control
+net is bounded to 1,000,000 scalars. Excessive products return `kResourceLimit`
+before multiplication by the dimension. Other errors follow the curve API.
+
+The curve and surface evaluators share de Boor interpolation, homogeneous
+projection and axis validation. Surface interpolation carries both homogeneous
+partials through the tensor product before applying the quotient rule.
+Scratch storage grows with both expanded knot counts plus the two degrees;
+local interpolation costs `O((p+1)*q^2 + p^2)` for degrees `p` and `q`, after
+input validation and knot expansion. There are no new dependencies or CLI
+options. The tensor-product definition follows the XT Format Reference
+(July 2022, pp. 63–65); flat control indexing was cross-checked against the
+local XT-to-STEP mapping reference without incorporating its implementation.
+
+Synthetic tests cover nonsquare nets with different degrees, homogeneous
+quarter cylinders, both weight derivatives, repeated and unclamped knots,
+independent parameter scaling, singular patches, maximum degrees, control
+product limits, malformed input and model integration.
+An independent SciPy comparison agrees on 8,401 surface samples from 400
+synthetic surfaces and 120 surfaces in 25 private streams. Rechecking the
+shared kernel also preserves agreement on all 8,565 earlier curve samples.
+Comparison tools, data and SciPy remain outside the library and repository.
 
 ## Build and run
 

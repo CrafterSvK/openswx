@@ -35,15 +35,19 @@ struct SurfaceEvaluation {
   Vector3 v_derivative;
 };
 
-/// Evaluates a PLANE, CYLINDER, CONE, SPHERE or TORUS in source coordinates.
-/// Angular parameters are radians. Frames must be orthonormal within 1e-10.
-/// Sphere latitude v lies in [-pi/2, pi/2]. Cones require a positive acute
-/// half-angle and r + v*tan(angle) >= 0 (XT axis convention: axial term -v*A).
-/// Apple/lemon tori use the principal branch |v| <= acos(-major/minor);
-/// ring tori have no v restriction. No periodic branch wrapping is performed.
-/// Singular boundary points are allowed: partial derivatives may be zero.
-/// Surface/face sense, face trimming, placement transforms and units are not
-/// applied. Errors follow EvaluateCurve; NURBS surfaces remain unsupported.
+/// Evaluates a PLANE, CYLINDER, CONE, SPHERE, TORUS or NURBS surface in source
+/// coordinates. Angular parameters are radians. Frames must be orthonormal
+/// within 1e-10. Sphere latitude v lies in [-pi/2, pi/2]. Cones require a
+/// positive acute half-angle and r + v*tan(angle) >= 0 (XT axis convention:
+/// axial term -v*A). Apple/lemon tori use the principal branch |v| <=
+/// acos(-major/minor); ring tori have no v restriction. No periodic branch
+/// wrapping is performed. Singular boundary points are allowed: partial
+/// derivatives may be zero. Surface/face sense, face trimming, placement
+/// transforms and units are not applied. NURBS controls have dimension 3
+/// (nonrational) or 4 (homogeneous), with v varying fastest: control(u,v) is at
+/// u*n_v + v. Each knot axis follows EvaluateCurve's domain, derivative-side
+/// and resource rules; the shared control net is limited to 1,000,000 scalars.
+/// Errors follow EvaluateCurve.
 [[nodiscard]] Result<SurfaceEvaluation> EvaluateSurface(
     const GeometryPayload& geometry, double u, double v);
 

@@ -6,9 +6,11 @@
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid::internal {
-// The public dispatcher validates that parameter is finite.
+// The public dispatchers validate that all parameters are finite.
 [[nodiscard]] Result<CurveEvaluation> EvaluateNurbsCurve(
     const NurbsCurveGeometry& curve, double parameter);
+[[nodiscard]] Result<SurfaceEvaluation> EvaluateNurbsSurface(
+    const NurbsSurfaceGeometry& surface, double u, double v);
 }  // namespace openparasolid::internal
 
 #endif  // OPENPARASOLID_SRC_EVALUATE_INTERNAL_H_

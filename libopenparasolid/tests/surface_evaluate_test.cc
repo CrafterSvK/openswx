@@ -224,9 +224,9 @@ TEST(ParasolidSurfaceEvaluate, ChecksDoubleRangeBeforeReturningResults) {
 }
 
 TEST(ParasolidSurfaceEvaluate, RejectsUnsupportedPayloadsExplicitly) {
-  const GeometryPayload unsupported[] = {
-      PointGeometry{},   LineGeometry{},       CircleGeometry{},
-      EllipseGeometry{}, NurbsCurveGeometry{}, NurbsSurfaceGeometry{}};
+  const GeometryPayload unsupported[] = {PointGeometry{}, LineGeometry{},
+                                         CircleGeometry{}, EllipseGeometry{},
+                                         NurbsCurveGeometry{}};
   for (const auto& geometry : unsupported) {
     const auto result = EvaluateSurface(geometry, 0, 0);
     ASSERT_FALSE(result.ok());

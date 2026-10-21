@@ -6,6 +6,7 @@
 #include <limits>
 #include <numbers>
 
+#include "evaluate_internal.h"
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid {
@@ -201,6 +202,8 @@ Result<SurfaceEvaluation> EvaluateSurface(const GeometryPayload& geometry,
     return Sphere(*sphere, u, v);
   if (const auto* torus = std::get_if<TorusGeometry>(&geometry))
     return Torus(*torus, u, v);
+  if (const auto* surface = std::get_if<NurbsSurfaceGeometry>(&geometry))
+    return internal::EvaluateNurbsSurface(*surface, u, v);
   return Result<SurfaceEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,
        "Surface evaluation is not implemented for this geometry payload"});
