@@ -77,6 +77,49 @@ dummy anchors and 5,622 uses retaining a fin curve. All match; 50,380 FACE/FIN
 sense bytes also agree with the raw fields. Private inputs and comparison
 programs remain outside the repository.
 
+## Face boundaries
+
+`TraverseFaceBoundary(model, face_id, options)` in `openparasolid/topology.h`
+returns an owned `FaceBoundary` with the source face ID, nullable surface ID,
+raw/absent face sense and all boundaries listed by that face. It follows
+`FACE.loop` and the singly linked, null-terminated `LOOP.next` chain in source
+order. A null loop head is valid, including for faces without trimming loops;
+it does not trigger an inferred boundary or a geometry check.
+
+Every listed loop must point back to the queried face. Each boundary is read
+with the same connectivity checks and orientation rules as
+`TraverseLoopBoundary`, including ring edges and isolated vertex loops. Face
+list cycles, incompatible ownership and broken references are explicit errors.
+Missing/unverified roles remain unsupported rather than being inferred from
+other nodes. Errors inside a loop retain their code and source offset, adding
+face/loop context. No partial face boundary is returned on error.
+
+`FaceTraversalOptions.max_loops` defaults to 10,000 and `max_fins` to 100,000.
+Both must be positive, including for empty faces. The fin budget is shared
+across the entire face, not reset for each loop; every isolated vertex loop
+consumes one fin. Exceeding either bound returns `kResourceLimit`. Output and
+visited sets grow only with the traversed list and bounded loop results;
+there is no recursive face/shell/body walk or geometry evaluation.
+
+The result preserves list order without classifying outer boundaries and
+holes. It does not prove that loops are mutually disjoint or enclose a valid
+surface patch, scan the model for unlisted loops claiming the same face, or
+validate face-to-shell membership, radial rings, manifoldness or geometric
+tolerances. Face normals, edge-to-curve parameters, placement and units are
+unchanged. There are no new CLI settings, dependencies or license changes;
+the implementation remains MIT and STL-only.
+
+Synthetic tests cover mixed and reordered boundary kinds, empty faces,
+nullable/untyped surfaces, unavailable senses, exact aggregate limits,
+self/multi-loop cycles, wrong owners, missing/unverified/ambiguous references,
+nested error context, unlisted loops and ownership across copies/moves.
+An independent raw-field walk checks all 8,274 faces in the same 90 private
+streams: every listed boundary matches the prior loop results exactly,
+covering all 9,620 loops, 41,916 oriented edge uses and 76 isolated vertex
+loops. There are 934 faces with multiple loops, with maxima of 20 loops and
+122 fins per face; no traversal errors occur. Empty face lists are covered
+synthetically. Private inputs and comparison tools remain outside the repo.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS

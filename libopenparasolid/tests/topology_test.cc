@@ -99,6 +99,225 @@ void ChangeDefinition(ModelFixture& f, uint32_t id, const char* field,
   }
   ADD_FAILURE() << "Missing test field definition";
 }
+ModelFixture FaceFixture() {
+  auto triangle = Triangle();
+  ModelFixture f;
+  for (const auto& node : triangle.report.nodes) {
+    const auto& definitions =
+        triangle.report.schemas[node.schema_index].definition.fields;
+    std::vector<ModelField> fields;
+    for (std::size_t i = 0; i < node.fields.size(); ++i)
+      fields.push_back({definitions[i], node.fields[i].values});
+    if (node.index == 1) fields.push_back(Pointer("next", 11, 15));
+    if (node.index == 2) fields.push_back(Pointer("loop", 1, 15));
+    f.Add(node.node_type, node.index, std::move(fields));
+  }
+  f.Add(15, 11,
+        {Pointer("halfedge", 12, 17), Pointer("face", 2, 14),
+         Pointer("next", 13, 15)});
+  Fin(f, 12, 11, 12, 12, 103, 0, 0, '?');
+  f.Add(18, 103, {});
+  f.Add(15, 13,
+        {Pointer("halfedge", 14, 17), Pointer("face", 2, 14),
+         Pointer("next", 0, 15)});
+  Fin(f, 14, 13, 14, 14, 0, 15, 16, '-');
+  Fin(f, 15, 0, 0, 0, 0, 14, 16, '+');
+  Edge(f, 16, 15);
+  return f;
+}
+TEST(ParasolidFaceTopology, RetainsAllBoundaryKindsInSourceListOrder) {
+  auto f = FaceFixture();
+  // Make the isolated loop the head, followed by the triangle, then the ring.
+  Set(f, 2, "loop", 11);
+  Set(f, 11, "next", 1);
+  Set(f, 1, "next", 13);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = TraverseFaceBoundary(model.value(), NodeId{2}, {3, 5});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& face = result.value();
+  EXPECT_EQ(face.face, NodeId{2});
+  EXPECT_EQ(face.surface, NodeId{0});
+  EXPECT_EQ(face.face_sense, '-');
+  ASSERT_EQ(face.loops.size(), 3);
+  EXPECT_EQ(face.loops[0].loop, NodeId{11});
+  EXPECT_EQ(face.loops[1].loop, NodeId{1});
+  EXPECT_EQ(face.loops[2].loop, NodeId{13});
+  ASSERT_TRUE(face.loops[0].isolated_vertex);
+  EXPECT_EQ(face.loops[0].isolated_vertex->vertex, NodeId{103});
+  ASSERT_EQ(face.loops[1].fins.size(), 3);
+  ASSERT_EQ(face.loops[2].fins.size(), 1);
+  EXPECT_EQ(face.loops[2].fins[0].sense, TopologySense::kReverse);
+  for (const auto& boundary : face.loops) {
+    const auto separate = TraverseLoopBoundary(model.value(), boundary.loop);
+    ASSERT_TRUE(separate.ok());
+    EXPECT_EQ(boundary.face, face.face);
+    EXPECT_EQ(boundary.surface, face.surface);
+    EXPECT_EQ(boundary.face_sense, face.face_sense);
+    ASSERT_EQ(boundary.fins.size(), separate.value().fins.size());
+    for (std::size_t i = 0; i < boundary.fins.size(); ++i) {
+      EXPECT_EQ(boundary.fins[i].fin, separate.value().fins[i].fin);
+      EXPECT_EQ(boundary.fins[i].start_vertex,
+                separate.value().fins[i].start_vertex);
+      EXPECT_EQ(boundary.fins[i].end_vertex,
+                separate.value().fins[i].end_vertex);
+    }
+  }
+}
+TEST(ParasolidFaceTopology, NullLoopHeadIsValidWithoutGeometryOrKnownSense) {
+  for (bool surface : {false, true}) {
+    ModelFixture f;
+    f.Add(14, 1,
+          {Pointer("loop", 0, 15), Pointer("surface", surface ? 2 : 0, 1006),
+           ByteValue("sense", '?', FieldType::kCharacter)});
+    if (surface) f.Add(124, 2, {});
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = TraverseFaceBoundary(model.value(), NodeId{1}, {1, 1});
+    ASSERT_TRUE(result.ok());
+    EXPECT_TRUE(result.value().loops.empty());
+    EXPECT_EQ(result.value().surface, NodeId{surface ? 2u : 0u});
+    EXPECT_EQ(result.value().face_sense, '?');
+  }
+}
+TEST(ParasolidFaceTopology, MissingFaceSenseRemainsAbsent) {
+  auto f = FaceFixture();
+  Rename(f, 2, "sense", "unavailable");
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = TraverseFaceBoundary(model.value(), NodeId{2});
+  ASSERT_TRUE(result.ok());
+  EXPECT_FALSE(result.value().face_sense);
+  for (const auto& boundary : result.value().loops)
+    EXPECT_FALSE(boundary.face_sense);
+}
+TEST(ParasolidFaceTopology,
+     FinLimitIsSharedAcrossAllLoopsIncludingIsolatedFins) {
+  const auto f = FaceFixture();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (const FaceTraversalOptions options :
+       {FaceTraversalOptions{2, 5}, FaceTraversalOptions{3, 2},
+        FaceTraversalOptions{3, 3}, FaceTraversalOptions{3, 4}}) {
+    const auto result = TraverseFaceBoundary(model.value(), NodeId{2}, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  }
+  EXPECT_TRUE(TraverseFaceBoundary(model.value(), NodeId{2}, {3, 5}).ok());
+  for (const FaceTraversalOptions options :
+       {FaceTraversalOptions{0, 5}, FaceTraversalOptions{3, 0}}) {
+    const auto result =
+        TraverseFaceBoundary(model.value(), NodeId{999}, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+}
+TEST(ParasolidFaceTopology, CyclesAreErrorsEvenAtTheExactVisitLimits) {
+  for (bool self : {false, true}) {
+    auto f = FaceFixture();
+    if (self)
+      Set(f, 1, "next", 1);
+    else
+      Set(f, 13, "next", 1);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = TraverseFaceBoundary(
+        model.value(), NodeId{2},
+        self ? FaceTraversalOptions{1, 3} : FaceTraversalOptions{3, 5});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(result.error().message.find("cycle"), std::string::npos);
+  }
+}
+TEST(ParasolidFaceTopology, ListOwnershipAndReferenceFailuresAreExplicit) {
+  for (int bad = 0; bad < 7; ++bad) {
+    auto f = FaceFixture();
+    if (bad == 0) Set(f, 2, "loop", 999);
+    if (bad == 1) Set(f, 11, "next", 999);
+    if (bad == 2) Set(f, 11, "next", 20);
+    if (bad == 3) {
+      Set(f, 11, "face", 3);
+      f.Add(14, 3, {Pointer("loop", 0, 15), Pointer("surface", 0, 1006)});
+    }
+    if (bad == 4) Set(f, 2, "surface", 100);
+    if (bad == 5) {
+      Field(f, 13, "next").values.push_back(uint64_t{0});
+      ChangeDefinition(f, 13, "next", FieldType::kPointer, 2);
+    }
+    if (bad == 6) Set(f, 11, "face", 0);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = TraverseFaceBoundary(model.value(), NodeId{2});
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord) << bad;
+  }
+}
+TEST(ParasolidFaceTopology, UnavailableOrUnverifiedListRolesRemainUnsupported) {
+  for (int bad = 0; bad < 4; ++bad) {
+    auto f = FaceFixture();
+    if (bad == 0) Rename(f, 2, "loop", "unavailable");
+    if (bad == 1) Rename(f, 13, "next", "unavailable");
+    if (bad == 2) Rename(f, 2, "surface", "unavailable");
+    if (bad == 3) {
+      for (auto& node : f.report.nodes) {
+        if (node.index != 2) continue;
+        for (auto& definition :
+             f.report.schemas[node.schema_index].definition.fields)
+          if (definition.name == "loop") definition.pointer_class = 60000;
+      }
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = TraverseFaceBoundary(model.value(), NodeId{2});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
+TEST(ParasolidFaceTopology, NestedLoopErrorsRetainTheirSourceAndFaceContext) {
+  auto f = FaceFixture();
+  Set(f, 21, "backward", 22);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto child = TraverseLoopBoundary(model.value(), NodeId{1});
+  const auto result = TraverseFaceBoundary(model.value(), NodeId{2});
+  ASSERT_FALSE(child.ok());
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, child.error().code);
+  EXPECT_EQ(result.error().offset, child.error().offset);
+  EXPECT_NE(result.error().message.find("Face 2, loop 1"), std::string::npos);
+  EXPECT_NE(result.error().message.find(child.error().message),
+            std::string::npos);
+}
+TEST(ParasolidFaceTopology, DoesNotScanForUnlistedLoopsOrUnrelatedIssues) {
+  auto f = FaceFixture();
+  f.Add(15, 999, {Pointer("face", 2, 14), Pointer("halfedge", 777, 17)});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  EXPECT_FALSE(model.value().references_verified());
+  const auto result = TraverseFaceBoundary(model.value(), NodeId{2});
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().loops.size(), 3);
+}
+TEST(ParasolidFaceTopology, OwnsReturnedLoopsAcrossModelDestructionAndMoves) {
+  auto read = [] {
+    const auto f = FaceFixture();
+    const auto model = ModelBuilder::Build(f.report);
+    if (!model.ok()) return Result<FaceBoundary>::Err(model.error());
+    return TraverseFaceBoundary(model.value(), NodeId{2});
+  };
+  auto result = read();
+  ASSERT_TRUE(result.ok());
+  auto copy = result.value();
+  auto moved = std::move(copy);
+  ASSERT_EQ(moved.loops.size(), 3);
+  EXPECT_EQ(moved.loops[0].fins[0].end_vertex, NodeId{101});
+  EXPECT_EQ(moved.loops[1].isolated_vertex->vertex, NodeId{103});
+  const auto f = FaceFixture();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  EXPECT_FALSE(TraverseFaceBoundary(model.value(), NodeId{1}).ok());
+  EXPECT_FALSE(TraverseFaceBoundary(model.value(), NodeId{999}).ok());
+}
 TEST(ParasolidTopology, TriangleUsesLoopOrderAndBothEdgeDirections) {
   auto fixture = Triangle();
   // A rotated head is retained, not sorted by IDs or fin sense.

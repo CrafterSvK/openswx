@@ -42,11 +42,12 @@ geometry index. FACE and FIN nodes additionally retain a scalar character
 `topology_sense`, including unknown bytes, or absence when the field is
 unavailable/incompatible. It is not a copy of every raw field. Keep
 `SchemaParseReport` when attribute values, procedural-form parameters or other
-raw fields are also needed. `TraverseLoopBoundary` in `openparasolid/topology.h` adds a bounded
-ordered loop view above this graph; see
-[README](README.md#ordered-loop-boundaries).
-It validates selected loop/edge connectivity without changing the model or
-claiming complete body/shell validation.
+raw fields are also needed. `TraverseLoopBoundary` and `TraverseFaceBoundary`
+in `openparasolid/topology.h` add bounded, owned loop and face boundary views
+above this graph; see [loop traversal](README.md#ordered-loop-boundaries) and
+[face traversal](README.md#face-boundaries). They validate selected connectivity
+and listed-loop ownership without changing the model or claiming complete
+body/shell or geometric validation.
 
 ## Reference graph
 

@@ -20,11 +20,11 @@ bool Matches(uint16_t expected, uint16_t actual) {
   const auto& kinds = expected == 1008 ? curves : surfaces;
   return std::find(kinds.begin(), kinds.end(), actual) != kinds.end();
 }
-class LoopReader {
+class TopologyReader {
  public:
-  LoopReader(const Model& model, const LoopTraversalOptions& options)
-      : model_(model), options_(options) {}
-  Result<LoopBoundary> Read(NodeId id);
+  explicit TopologyReader(const Model& model) : model_(model) {}
+  Result<LoopBoundary> ReadLoop(NodeId id, const LoopTraversalOptions& options);
+  Result<FaceBoundary> ReadFace(NodeId id, const FaceTraversalOptions& options);
 
  private:
   bool Fail(const ModelNode& node, std::string_view field, const char* message,
@@ -35,18 +35,17 @@ class LoopReader {
   bool Sense(const ModelNode& node, TopologySense& sense);
   bool EdgeUse(const ModelNode& fin, NodeId edge, NodeId other, FinUse& use);
   const Model& model_;
-  const LoopTraversalOptions& options_;
   std::optional<ParseError> error_;
 };
-bool LoopReader::Fail(const ModelNode& node, std::string_view field,
-                      const char* message, ErrorCode code) {
+bool TopologyReader::Fail(const ModelNode& node, std::string_view field,
+                          const char* message, ErrorCode code) {
   if (!error_)
     error_ = ParseError{code, node.source_offset,
                         "Topology node " + std::to_string(node.id.value) +
                             " field " + std::string(field) + ": " + message};
   return false;
 }
-const ModelNode* LoopReader::Node(NodeId id, uint16_t type) {
+const ModelNode* TopologyReader::Node(NodeId id, uint16_t type) {
   const auto* node = model_.FindNode(id);
   if (!node) {
     error_ =
@@ -60,8 +59,8 @@ const ModelNode* LoopReader::Node(NodeId id, uint16_t type) {
   }
   return node;
 }
-bool LoopReader::Reference(const ModelNode& node, std::string_view name,
-                           uint16_t type, bool nullable, NodeId& target) {
+bool TopologyReader::Reference(const ModelNode& node, std::string_view name,
+                               uint16_t type, bool nullable, NodeId& target) {
   const ModelReference* found = nullptr;
   for (const auto& reference : node.references) {
     if (reference.field != name) continue;
@@ -83,7 +82,7 @@ bool LoopReader::Reference(const ModelNode& node, std::string_view name,
     return nullable || Fail(node, name, "Required reference is null");
   return Node(target, type) != nullptr;
 }
-bool LoopReader::Sense(const ModelNode& node, TopologySense& sense) {
+bool TopologyReader::Sense(const ModelNode& node, TopologySense& sense) {
   if (!node.topology_sense ||
       (*node.topology_sense != '+' && *node.topology_sense != '-'))
     return Fail(node, "sense", "Fin sense is unavailable or unknown",
@@ -92,8 +91,8 @@ bool LoopReader::Sense(const ModelNode& node, TopologySense& sense) {
                                       : TopologySense::kReverse;
   return true;
 }
-bool LoopReader::EdgeUse(const ModelNode& fin, NodeId edge_id, NodeId other,
-                         FinUse& use) {
+bool TopologyReader::EdgeUse(const ModelNode& fin, NodeId edge_id, NodeId other,
+                             FinUse& use) {
   const auto& edge = *model_.FindNode(edge_id);
   NodeId primary_id, secondary_id, primary_edge, secondary_edge, other_edge;
   NodeId end, start, vertex;
@@ -133,8 +132,9 @@ bool LoopReader::EdgeUse(const ModelNode& fin, NodeId edge_id, NodeId other,
                 "Forward vertex disagrees with oriented edge endpoints");
   return true;
 }
-Result<LoopBoundary> LoopReader::Read(NodeId id) {
-  if (options_.max_fins == 0)
+Result<LoopBoundary> TopologyReader::ReadLoop(
+    NodeId id, const LoopTraversalOptions& options) {
+  if (options.max_fins == 0)
     return Result<LoopBoundary>::Err(
         {ErrorCode::kInvalidOptions, 0,
          "Loop traversal requires a positive fin limit"});
@@ -155,7 +155,7 @@ Result<LoopBoundary> LoopReader::Read(NodeId id) {
   NodeId current = first, previous, first_backward;
   do {
     const auto& fin = *model_.FindNode(current);
-    if (visited.size() >= options_.max_fins)
+    if (visited.size() >= options.max_fins)
       return Result<LoopBoundary>::Err({ErrorCode::kResourceLimit,
                                         fin.source_offset,
                                         "Loop traversal fin limit exceeded"});
@@ -217,9 +217,64 @@ Result<LoopBoundary> LoopReader::Read(NodeId id) {
   }
   return Result<LoopBoundary>::Ok(std::move(result));
 }
+Result<FaceBoundary> TopologyReader::ReadFace(
+    NodeId id, const FaceTraversalOptions& options) {
+  if (options.max_loops == 0 || options.max_fins == 0)
+    return Result<FaceBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Face traversal requires positive loop and fin limits"});
+  const auto* face = Node(id, 14);
+  if (!face) return Result<FaceBoundary>::Err(*error_);
+  FaceBoundary result;
+  result.face = id;
+  result.face_sense = face->topology_sense;
+  NodeId current;
+  if (!Reference(*face, "surface", 1006, true, result.surface) ||
+      !Reference(*face, "loop", 15, true, current))
+    return Result<FaceBoundary>::Err(*error_);
+  std::unordered_set<uint32_t> visited;
+  uint64_t remaining_fins = options.max_fins;
+  while (current.value) {
+    const auto& loop = *model_.FindNode(current);
+    if (visited.contains(current.value)) {
+      Fail(loop, "next", "Face loop list contains a cycle");
+      return Result<FaceBoundary>::Err(*error_);
+    }
+    if (visited.size() >= options.max_loops || remaining_fins == 0)
+      return Result<FaceBoundary>::Err(
+          {ErrorCode::kResourceLimit, loop.source_offset,
+           "Face traversal loop or aggregate fin limit exceeded"});
+    visited.insert(current.value);
+    NodeId owner, next;
+    if (!Reference(loop, "face", 14, false, owner) ||
+        !Reference(loop, "next", 15, true, next))
+      return Result<FaceBoundary>::Err(*error_);
+    if (owner != id) {
+      Fail(loop, "face", "Listed loop belongs to another face");
+      return Result<FaceBoundary>::Err(*error_);
+    }
+    auto boundary = ReadLoop(current, {remaining_fins});
+    if (!boundary.ok()) {
+      auto error = boundary.error();
+      error.message = "Face " + std::to_string(id.value) + ", loop " +
+                      std::to_string(current.value) + ": " + error.message;
+      return Result<FaceBoundary>::Err(std::move(error));
+    }
+    const auto& value = boundary.value();
+    remaining_fins -= value.isolated_vertex ? 1 : value.fins.size();
+    result.loops.push_back(std::move(boundary).value());
+    current = next;
+  }
+  return Result<FaceBoundary>::Ok(std::move(result));
+}
 }  // namespace
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
-  return LoopReader(model, options).Read(loop);
+  return TopologyReader(model).ReadLoop(loop, options);
 }
+Result<FaceBoundary> TraverseFaceBoundary(const Model& model, NodeId face,
+                                          const FaceTraversalOptions& options) {
+  return TopologyReader(model).ReadFace(face, options);
+}
+
 }  // namespace openparasolid

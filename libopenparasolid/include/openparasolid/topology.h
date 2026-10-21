@@ -62,6 +62,36 @@ struct LoopTraversalOptions {
 /// normal orientation, placement or unit conversions are inferred.
 [[nodiscard]] Result<LoopBoundary> TraverseLoopBoundary(
     const Model& model, NodeId loop, const LoopTraversalOptions& options = {});
+
+struct FaceBoundary {
+  NodeId face;
+  NodeId surface;
+  std::optional<uint8_t> face_sense;
+  /// Source FACE.loop / LOOP.next order; empty for a face with a null loop
+  /// head. This order does not classify outer boundaries and holes.
+  std::vector<LoopBoundary> loops;
+};
+struct FaceTraversalOptions {
+  /// Positive bound on the number of listed loops in this face.
+  uint64_t max_loops = 10000;
+  /// Positive aggregate bound on loop fins across the entire face, counting
+  /// one for every isolated vertex loop. Not a separate allowance per loop.
+  uint64_t max_fins = 100000;
+};
+
+/// Reads a FACE's null-terminated loop list and all listed boundaries. Retains
+/// the nullable surface and raw/absent face sense. A face may have no loops.
+/// Verifies list acyclicity, loop-to-face ownership and every loop's local
+/// connectivity through the same rules as TraverseLoopBoundary. Resource
+/// limits apply to the whole face; errors never return a partial boundary.
+/// Results own their data; the source model is unchanged.
+/// Both limits must be positive; error codes follow TraverseLoopBoundary.
+/// Does not scan the whole model for unlisted loops claiming this face, certify
+/// disjointness/containment of loops, orient normals or validate shell/body
+/// topology or geometry. No outer/hole classification or tolerance is inferred.
+[[nodiscard]] Result<FaceBoundary> TraverseFaceBoundary(
+    const Model& model, NodeId face, const FaceTraversalOptions& options = {});
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_TOPOLOGY_H_
