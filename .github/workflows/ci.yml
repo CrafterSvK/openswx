@@ -69,6 +69,7 @@ jobs:
             curl \
             git \
             libasio-dev \
+            libclang-rt-dev \
             libssl-dev \
             libpugixml-dev \
             libsqlite3-dev \
