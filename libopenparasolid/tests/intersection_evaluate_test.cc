@@ -118,6 +118,11 @@ TEST(ParasolidIntersectionEvaluate,
   const auto result =
       EvaluateIntersectionCurve(model.value(), NodeId{1}, t, {1e-12, 1e-12});
   ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto details = EvaluateIntersectionCurveWithDiagnostics(
+      model.value(), NodeId{1}, t, {1e-12, 1e-12, 0, 1, .99});
+  ASSERT_TRUE(details.ok()) << details.error().message;
+  EXPECT_EQ(details.value().diagnostics.surface_normal_sine, 1);
+  EXPECT_NEAR(details.value().diagnostics.tangent_chord_projection, 1, 1e-14);
   const double w = std::sqrt(.5);
   EXPECT_NEAR(result.value().position.x, w, 1e-12);
   EXPECT_NEAR(result.value().position.y, w, 1e-12);
@@ -125,6 +130,166 @@ TEST(ParasolidIntersectionEvaluate,
   EXPECT_NEAR(result.value().first_derivative.x, w / 3, 1e-12);
   EXPECT_NEAR(result.value().first_derivative.y, -w / 3, 1e-12);
   EXPECT_NEAR(result.value().first_derivative.z, 0, 1e-12);
+}
+TEST(ParasolidIntersectionEvaluate,
+     DiagnosticsMatchCircleGeometryAndLegacySample) {
+  const double height = .6, radius = .8;
+  ModelFixture f;
+  Definition(f, CirclePoints({0, .8}, radius, height));
+  Plane(f, height);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-13);
+  ASSERT_TRUE(chart.ok());
+  const auto& times = chart.value().parameterization.parameters;
+  for (double fraction : {0., .2, .5, .8, 1.}) {
+    const double t = std::lerp(times.front(), times.back(), fraction);
+    const auto result = EvaluateIntersectionCurveWithDiagnostics(
+        model.value(), NodeId{1}, t, {1e-13, 1e-13});
+    const auto legacy =
+        EvaluateIntersectionCurve(model.value(), NodeId{1}, t, {1e-13, 1e-13});
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    ASSERT_TRUE(legacy.ok());
+    const auto& diagnostic = result.value().diagnostics;
+    const double angle = .4 + std::asin((2 * fraction - 1) * std::sin(.4));
+    EXPECT_NEAR(diagnostic.surface_normal_sine, radius, 1e-12);
+    EXPECT_NEAR(diagnostic.tangent_chord_projection, std::cos(angle - .4),
+                1e-12);
+    EXPECT_EQ(result.value().curve.position.x, legacy.value().position.x);
+    EXPECT_EQ(result.value().curve.first_derivative.y,
+              legacy.value().first_derivative.y);
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     NormalSineDetectsNearParallelAndAntiparallelSupports) {
+  for (double sine : {1e-8, 1e-150}) {
+    for (double sign : {-1., 1.}) {
+      ModelFixture f;
+      Definition(f, {{1, 0, 0}, {0, 0, 0}});
+      Plane(f);
+      f.Add(50, 51,
+            {Numbers("origin", {0., 0., 0.}, FieldType::kVector),
+             Numbers("normal", {0., sine, sign * std::sqrt(1 - sine * sine)},
+                     FieldType::kVector),
+             Numbers("x_axis", {1., 0., 0.}, FieldType::kVector),
+             ByteValue("sense", '+', FieldType::kCharacter)});
+      const auto model = ModelBuilder::Build(f.report);
+      ASSERT_TRUE(model.ok());
+      IntersectionEvaluationOptions options{0, 1e-13};
+      options.minimum_normal_sine = sine / 2;
+      options.minimum_chord_projection = 1;
+      for (double t : {-2., -.5, 1.}) {
+        const auto result = EvaluateIntersectionCurveWithDiagnostics(
+            model.value(), NodeId{1}, t, options);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_NEAR(result.value().diagnostics.surface_normal_sine, sine,
+                    sine * 1e-14);
+        EXPECT_EQ(result.value().diagnostics.tangent_chord_projection, 1);
+        EXPECT_NEAR(result.value().curve.first_derivative.x, -1. / 3, 1e-15);
+        auto strict = options;
+        strict.minimum_normal_sine = sine * 2;
+        const auto rejected =
+            EvaluateIntersectionCurve(model.value(), NodeId{1}, t, strict);
+        ASSERT_FALSE(rejected.ok());
+        EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidRecord);
+        EXPECT_NE(rejected.error().message.find("normal sine"),
+                  std::string::npos);
+      }
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate, ReportedMeasuresDefineInclusiveMinimums) {
+  ModelFixture f;
+  Definition(f, CirclePoints({0, .8}, .8, .6));
+  Plane(f, .6);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  IntersectionEvaluationOptions options{1e-13, 1e-13};
+  const double t = -1.9;
+  const auto result = EvaluateIntersectionCurveWithDiagnostics(
+      model.value(), NodeId{1}, t, options);
+  ASSERT_TRUE(result.ok());
+  options.minimum_normal_sine = result.value().diagnostics.surface_normal_sine;
+  options.minimum_chord_projection =
+      result.value().diagnostics.tangent_chord_projection;
+  EXPECT_TRUE(
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, t, options).ok());
+  auto strict = options;
+  strict.minimum_normal_sine = std::nextafter(options.minimum_normal_sine, 1.);
+  EXPECT_FALSE(
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, t, strict).ok());
+  strict = options;
+  strict.minimum_chord_projection =
+      std::nextafter(options.minimum_chord_projection, 1.);
+  EXPECT_FALSE(
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, t, strict).ok());
+}
+TEST(ParasolidIntersectionEvaluate,
+     ChordMinimumAppliesAtQueryAndSnappedEndpoints) {
+  ModelFixture f;
+  Definition(f, CirclePoints({0, .8}));
+  Plane(f);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-13);
+  ASSERT_TRUE(chart.ok());
+  const auto& times = chart.value().parameterization.parameters;
+  IntersectionEvaluationOptions options{1e-13, 1e-13, 1e-8};
+  options.minimum_normal_sine = 1;
+  options.minimum_chord_projection = .99;
+  EXPECT_TRUE(EvaluateIntersectionCurve(
+                  model.value(), NodeId{1},
+                  std::midpoint(times.front(), times.back()), options)
+                  .ok());
+  for (double t : {times.front(), times.back(), times.front() - 1e-9,
+                   times.back() + 1e-9}) {
+    const auto rejected = EvaluateIntersectionCurveWithDiagnostics(
+        model.value(), NodeId{1}, t, options);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(rejected.error().message.find("chord projection"),
+              std::string::npos);
+    auto loose = options;
+    loose.minimum_chord_projection = .9;
+    const auto accepted = EvaluateIntersectionCurveWithDiagnostics(
+        model.value(), NodeId{1}, t, loose);
+    ASSERT_TRUE(accepted.ok());
+    EXPECT_NEAR(accepted.value().diagnostics.tangent_chord_projection,
+                std::cos(.4), 1e-14);
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     RegularityOptionsValidateBeforeModelLookup) {
+  ModelFixture f;
+  f.Spline();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (double bad : {-1., 1.01, std::numeric_limits<double>::infinity(),
+                     std::numeric_limits<double>::quiet_NaN()}) {
+    for (bool normal : {false, true}) {
+      IntersectionEvaluationOptions options{0, 1e-13};
+      (normal ? options.minimum_normal_sine
+              : options.minimum_chord_projection) = bad;
+      const auto ordinary =
+          EvaluateCurve(model.value(), NodeId{1}, .5, options);
+      const auto absent =
+          EvaluateIntersectionCurve(model.value(), NodeId{99}, 0, options);
+      const auto details = EvaluateIntersectionCurveWithDiagnostics(
+          model.value(), NodeId{99}, 0, options);
+      ASSERT_FALSE(ordinary.ok());
+      ASSERT_FALSE(absent.ok());
+      ASSERT_FALSE(details.ok());
+      EXPECT_EQ(ordinary.error().code, ErrorCode::kInvalidOptions);
+      EXPECT_EQ(absent.error().code, ErrorCode::kInvalidOptions);
+      EXPECT_EQ(details.error().code, ErrorCode::kInvalidOptions);
+    }
+  }
+  // Valid quality minimums have no effect on ordinary curves.
+  IntersectionEvaluationOptions options{0, 1e-13, 0, 1, 1};
+  EXPECT_TRUE(EvaluateCurve(model.value(), NodeId{1}, .5, options).ok());
 }
 TEST(ParasolidIntersectionEvaluate,
      SolvesCircleAndNaturalDerivativeUsingChordPlane) {
@@ -349,6 +514,29 @@ void Trim(ModelFixture& f, uint32_t id, uint32_t basis, double first,
          Numbers("point_2", {0., 0., 0.}, FieldType::kVector),
          Numbers("parm_1", {first}), Numbers("parm_2", {second}),
          ByteValue("sense", '+', FieldType::kCharacter)});
+}
+TEST(ParasolidIntersectionEvaluate, TrimmedDispatcherRetainsRegularityChecks) {
+  ModelFixture f;
+  Trim(f, 11, 10, -1.99, -1.4);
+  Trim(f, 10, 1, 0, -2);
+  Definition(f, CirclePoints({0, .8}, .8, .6));
+  Plane(f, .6);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  IntersectionEvaluationOptions options{1e-13, 1e-13};
+  options.minimum_normal_sine = .9;
+  auto rejected = EvaluateCurve(model.value(), NodeId{11}, -1.9, options);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(rejected.error().message.find("normal sine"), std::string::npos);
+  options.minimum_normal_sine = .7;
+  EXPECT_TRUE(EvaluateCurve(model.value(), NodeId{11}, -1.9, options).ok());
+  options.minimum_chord_projection = .99;
+  rejected = EvaluateCurve(model.value(), NodeId{11}, -1.9, options);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_NE(rejected.error().message.find("chord projection"),
+            std::string::npos);
 }
 TEST(ParasolidIntersectionEvaluate,
      CurveDispatcherHandlesNestedTrimmedIntersections) {

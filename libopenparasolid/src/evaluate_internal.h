@@ -9,6 +9,8 @@
 #include "openparasolid/evaluate.h"
 
 namespace openparasolid::internal {
+[[nodiscard]] std::optional<ParseError> ValidateIntersectionOptions(
+    const IntersectionEvaluationOptions& options);
 // Bounds are u-low, u-high, v-low, v-high; validates before extracting knots.
 [[nodiscard]] Result<std::array<double, 4>> NurbsSurfaceDomain(
     const NurbsSurfaceGeometry& surface);

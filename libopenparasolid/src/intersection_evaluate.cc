@@ -6,6 +6,7 @@
 #include <limits>
 #include <numbers>
 #include <optional>
+#include <utility>
 
 #include "evaluate_internal.h"
 
@@ -110,28 +111,83 @@ double Interpolate(double a, double b, double fraction, bool periodic) {
   if (periodic) b = a + std::remainder(b - a, 2 * std::numbers::pi);
   return std::lerp(a, b, fraction);
 }
-Result<CurveEvaluation> Finish(Vector3 position, Vector3 tangent,
-                               const Vector& chord_normal,
-                               long double chord_length, long double span) {
+Result<IntersectionCurveDiagnostics> MeasureRegularity(
+    const std::array<Vector3, 2>& normals, Vector3 tangent,
+    const Vector& chord_normal, const IntersectionEvaluationOptions& options) {
+  const auto a = Components(normals[0]);
+  const auto b = Components(normals[1]);
+  const Vector cross{a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+                     a[0] * b[1] - a[1] * b[0]};
+  const long double sine = std::clamp(
+      std::hypot(cross[0], cross[1], cross[2]) /
+          (std::hypot(a[0], a[1], a[2]) * std::hypot(b[0], b[1], b[2])),
+      0.L, 1.L);
   const auto t = Components(tangent);
   const long double projection = Dot(t, chord_normal);
   if (!std::isfinite(projection) || projection <= 0)
-    return Result<CurveEvaluation>::Err(
+    return Result<IntersectionCurveDiagnostics>::Err(
         Invalid("Intersection tangent does not follow the selected chord"));
+  // Normalize only the reported angular measure. Preserve the actual accepted
+  // tangent/chord projection in the original derivative formula.
+  const long double measure = std::clamp(
+      projection /
+          (std::hypot(t[0], t[1], t[2]) *
+           std::hypot(chord_normal[0], chord_normal[1], chord_normal[2])),
+      0.L, 1.L);
+  const IntersectionCurveDiagnostics diagnostics{static_cast<double>(sine),
+                                                 static_cast<double>(measure)};
+  if (!std::isfinite(sine) || !std::isfinite(measure) ||
+      diagnostics.surface_normal_sine <= 0 ||
+      diagnostics.tangent_chord_projection <= 0)
+    return Result<IntersectionCurveDiagnostics>::Err(
+        Invalid("Intersection regularity measures are not representable"));
+  if (diagnostics.surface_normal_sine < options.minimum_normal_sine)
+    return Result<IntersectionCurveDiagnostics>::Err(Invalid(
+        "Intersection surface normal sine is below the requested minimum"));
+  if (diagnostics.tangent_chord_projection < options.minimum_chord_projection)
+    return Result<IntersectionCurveDiagnostics>::Err(
+        Invalid("Intersection tangent chord projection is below the requested "
+                "minimum"));
+  return Result<IntersectionCurveDiagnostics>::Ok(diagnostics);
+}
+Result<IntersectionCurveEvaluation> Finish(
+    const Model& model, const IntersectionCurveGeometry& intersection,
+    const Parameters& uv, Vector3 position, const Vector& chord_normal,
+    long double chord_length, long double span,
+    const IntersectionEvaluationOptions& options) {
+  std::array<Vector3, 2> normals{};
+  for (std::size_t side = 0; side < normals.size(); ++side) {
+    const auto normal = EvaluateSurfaceNormal(
+        model, intersection.surfaces[side], uv[2 * side], uv[2 * side + 1]);
+    if (!normal.ok())
+      return Result<IntersectionCurveEvaluation>::Err(normal.error());
+    normals[side] = normal.value();
+  }
+  const auto tangent =
+      internal::UnitCrossProduct(normals[0], normals[1], false);
+  if (!tangent.ok())
+    return Result<IntersectionCurveEvaluation>::Err(tangent.error());
+  const auto diagnostics =
+      MeasureRegularity(normals, tangent.value(), chord_normal, options);
+  if (!diagnostics.ok())
+    return Result<IntersectionCurveEvaluation>::Err(diagnostics.error());
+  const auto t = Components(tangent.value());
+  const long double projection = Dot(t, chord_normal);
   const long double factor = chord_length / (span * projection);
   if (!std::isfinite(factor) || factor <= 0)
-    return Result<CurveEvaluation>::Err(
+    return Result<IntersectionCurveEvaluation>::Err(
         Invalid("Intersection derivative scale is not representable"));
   std::array<double, 3> derivative{};
   for (std::size_t i = 0; i < 3; ++i) {
     const long double value = t[i] * factor;
     if (!Representable(value))
-      return Result<CurveEvaluation>::Err(
+      return Result<IntersectionCurveEvaluation>::Err(
           Invalid("Intersection derivative is not representable"));
     derivative[i] = static_cast<double>(value);
   }
-  return Result<CurveEvaluation>::Ok(
-      {position, {derivative[0], derivative[1], derivative[2]}});
+  return Result<IntersectionCurveEvaluation>::Ok(
+      {{position, {derivative[0], derivative[1], derivative[2]}},
+       diagnostics.value()});
 }
 Result<State> Solve(const std::array<const GeometryPayload*, 2>& surfaces,
                     Parameters& uv, const Plane& plane, double tolerance) {
@@ -178,21 +234,19 @@ Result<State> Solve(const std::array<const GeometryPayload*, 2>& surfaces,
 }
 }  // namespace
 
-Result<CurveEvaluation> EvaluateIntersectionCurve(
+Result<IntersectionCurveEvaluation> EvaluateIntersectionCurveWithDiagnostics(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options) {
-  if (!std::isfinite(parameter) || !std::isfinite(options.chart_tolerance) ||
-      options.chart_tolerance < 0 || !std::isfinite(options.solve_tolerance) ||
-      options.solve_tolerance <= 0 ||
-      !std::isfinite(options.chart_parameter_tolerance) ||
-      options.chart_parameter_tolerance < 0)
-    return Result<CurveEvaluation>::Err(
+  if (!std::isfinite(parameter))
+    return Result<IntersectionCurveEvaluation>::Err(
         {ErrorCode::kInvalidOptions, 0,
-         "Intersection evaluation requires a finite parameter and valid "
-         "chart, solve and parameter tolerances"});
+         "Intersection parameter must be finite"});
+  if (auto error = internal::ValidateIntersectionOptions(options))
+    return Result<IntersectionCurveEvaluation>::Err(std::move(*error));
   const auto prepared =
       EvaluateIntersectionChart(model, curve, options.chart_tolerance);
-  if (!prepared.ok()) return Result<CurveEvaluation>::Err(prepared.error());
+  if (!prepared.ok())
+    return Result<IntersectionCurveEvaluation>::Err(prepared.error());
   const auto& parameters = prepared.value().parameterization.parameters;
   if (parameter < parameters.front() || parameter > parameters.back()) {
     const double endpoint = parameter < parameters.front() ? parameters.front()
@@ -200,7 +254,7 @@ Result<CurveEvaluation> EvaluateIntersectionCurve(
     const long double gap =
         std::abs(static_cast<long double>(parameter) - endpoint);
     if (gap > options.chart_parameter_tolerance)
-      return Result<CurveEvaluation>::Err(
+      return Result<IntersectionCurveEvaluation>::Err(
           {ErrorCode::kInvalidOptions, 0,
            "Intersection parameter is outside its chart"});
     parameter = endpoint;
@@ -223,12 +277,18 @@ Result<CurveEvaluation> EvaluateIntersectionCurve(
       static_cast<long double>(parameters[index + 1]) - parameters[index];
   if (!std::isfinite(length) || !std::isfinite(span) || length <= 0 ||
       span <= 0)
-    return Result<CurveEvaluation>::Err(
+    return Result<IntersectionCurveEvaluation>::Err(
         Invalid("Intersection chord or parameter span is not representable"));
   if (parameter == parameters[index] || parameter == parameters[index + 1]) {
     const auto knot = parameter == parameters[index] ? index : index + 1;
-    return Finish(points[knot], prepared.value().tangents[knot], normal, length,
-                  span);
+    Parameters uv{};
+    for (std::size_t side = 0; side < 2; ++side) {
+      const auto& pair = prepared.value().surface_parameters[knot][side];
+      uv[2 * side] = pair.u;
+      uv[2 * side + 1] = pair.v;
+    }
+    return Finish(model, intersection, uv, points[knot], normal, length, span,
+                  options);
   }
   const double fraction = static_cast<double>(
       (static_cast<long double>(parameter) - parameters[index]) / span);
@@ -250,19 +310,36 @@ Result<CurveEvaluation> EvaluateIntersectionCurve(
         a.v, b.v, fraction, torus && torus->major_radius > torus->minor_radius);
   }
   const auto solved = Solve(surfaces, uv, plane, options.solve_tolerance);
-  if (!solved.ok()) return Result<CurveEvaluation>::Err(solved.error());
-  std::array<Vector3, 2> normals{};
-  for (std::size_t side = 0; side < 2; ++side) {
-    const auto sampled_normal = EvaluateSurfaceNormal(
-        model, intersection.surfaces[side], uv[2 * side], uv[2 * side + 1]);
-    if (!sampled_normal.ok())
-      return Result<CurveEvaluation>::Err(sampled_normal.error());
-    normals[side] = sampled_normal.value();
-  }
-  const auto tangent =
-      internal::UnitCrossProduct(normals[0], normals[1], false);
-  if (!tangent.ok()) return Result<CurveEvaluation>::Err(tangent.error());
-  return Finish(solved.value().surfaces[0].position, tangent.value(), normal,
-                length, span);
+  if (!solved.ok())
+    return Result<IntersectionCurveEvaluation>::Err(solved.error());
+  return Finish(model, intersection, uv, solved.value().surfaces[0].position,
+                normal, length, span, options);
 }
+
+Result<CurveEvaluation> EvaluateIntersectionCurve(
+    const Model& model, NodeId curve, double parameter,
+    const IntersectionEvaluationOptions& options) {
+  auto result = EvaluateIntersectionCurveWithDiagnostics(model, curve,
+                                                         parameter, options);
+  if (!result.ok()) return Result<CurveEvaluation>::Err(result.error());
+  return Result<CurveEvaluation>::Ok(result.value().curve);
+}
+
+std::optional<ParseError> internal::ValidateIntersectionOptions(
+    const IntersectionEvaluationOptions& options) {
+  if (!std::isfinite(options.chart_tolerance) || options.chart_tolerance < 0 ||
+      !std::isfinite(options.solve_tolerance) || options.solve_tolerance <= 0 ||
+      !std::isfinite(options.chart_parameter_tolerance) ||
+      options.chart_parameter_tolerance < 0 ||
+      !std::isfinite(options.minimum_normal_sine) ||
+      options.minimum_normal_sine < 0 || options.minimum_normal_sine > 1 ||
+      !std::isfinite(options.minimum_chord_projection) ||
+      options.minimum_chord_projection < 0 ||
+      options.minimum_chord_projection > 1)
+    return ParseError{ErrorCode::kInvalidOptions, 0,
+                      "Intersection evaluation requires valid tolerances and "
+                      "regularity minimums"};
+  return std::nullopt;
+}
+
 }  // namespace openparasolid

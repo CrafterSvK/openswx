@@ -698,6 +698,65 @@ fallback is used. The rational NURBS/plane regression separately checks
 closed-form interior points and derivatives, including a knot interval wider
 than `2*pi` to prevent accidental angular wrapping.
 
+## Intersection regularity diagnostics
+
+`EvaluateIntersectionCurveWithDiagnostics(model, curve_id, parameter, options)`
+returns an `IntersectionCurveEvaluation` containing the same `curve` position
+and natural derivative as `EvaluateIntersectionCurve`, plus two local
+geometric measures:
+
+- `diagnostics.surface_normal_sine` is the sine of the angle between the two
+  supporting unit surface normals. Near zero indicates nearly parallel or
+  antiparallel normals, where the intersection direction becomes sensitive.
+- `diagnostics.tangent_chord_projection` is the dot product of the unit tangent
+  and selected unit chart chord. Near zero amplifies `dP/dt` through the
+  reciprocal projection in the XT parameterisation.
+
+Both values are normalized, finite and in `(0,1]`. Normal senses do not affect
+the sine. The projection retains the stored surface order and selected chord;
+a reversed/nonpositive direction remains an error. Calculations use wide
+intermediates, normalize the reported angular measures and clamp rounding
+overshoot to one. The derivative retains its original projection formula.
+
+`IntersectionEvaluationOptions` appends `minimum_normal_sine` and
+`minimum_chord_projection`. Each must be finite and in `[0,1]`, with zero
+preserving the existing singularity/direction checks. Both the diagnostic
+and existing curve APIs return `kInvalidRecord` when a reported measure is
+strictly below its requested minimum. Equality is accepted; there is no
+implicit angular tolerance. These settings are explicit caller policy, not
+new defaults or inferred error tolerances.
+
+Checks apply at the queried UV values, including exact chart knots and
+snapped outer endpoints. A stored knot still returns its stored position;
+its normals and diagnostics use the recovered surface parameters. Through
+`EvaluateCurve(..., options)`, the same checks also apply under nested trims.
+Valid minimums have no effect on ordinary curves, while invalid options are
+rejected for every geometry kind before lookup. Residual/parameter tolerances,
+strict trim bounds, Newton iteration limits and resource limits are unchanged.
+
+Passing the minimums does not certify derivative accuracy, global regularity,
+branch identity, BRep topology or a bound on the full UV Jacobian condition.
+A caller can inspect or reject sensitive local samples without relaxing any
+geometric tolerance or converting the curve into a tessellation. The library
+remains MIT and STL-only, with no new CLI settings or dependencies.
+
+Tests compare diagnostics against closed-form circle sections and lines with
+normal sines down to `1e-150`, including nearly antiparallel supports. They
+cover inclusive minimums, unit upper bounds, exact/snapped endpoints, NURBS
+supports, nested trim dispatch and invalid options.
+
+A 90-stream regression checks 8,571 interior queries over 659 prepared charts.
+With default minimums, all 8,554 successful positions and derivatives are
+bit-identical to the previous iteration, and all 17 errors are unchanged.
+An independent NumPy comparison of normalized returned derivatives with
+selected chords agrees with the reported projection within `4.45e-16`.
+As an example caller policy, minimum normal sine `0.001` and chord projection
+`0.1` reject 232 of those successful samples, including all 58 derivative
+comparison outliers identified in the preceding iteration; 8,322 remain
+accepted. This selection does not establish general error bounds or prescribe
+production thresholds. Private inputs and comparison tools remain outside
+the repository.
+
 ## Trimmed intersections
 
 `EvaluateCurve(model, curve_id, parameter, options)` accepts the same

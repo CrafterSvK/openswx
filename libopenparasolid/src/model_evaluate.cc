@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <utility>
 
 #include "evaluate_internal.h"
 #include "openparasolid/evaluate.h"
@@ -218,14 +219,8 @@ Result<CurveEvaluation> EvaluateCurve(const Model& model, NodeId curve,
 Result<CurveEvaluation> EvaluateCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options) {
-  if (!std::isfinite(options.chart_tolerance) || options.chart_tolerance < 0 ||
-      !std::isfinite(options.solve_tolerance) || options.solve_tolerance <= 0 ||
-      !std::isfinite(options.chart_parameter_tolerance) ||
-      options.chart_parameter_tolerance < 0)
-    return Result<CurveEvaluation>::Err(
-        {ErrorCode::kInvalidOptions, 0,
-         "Curve evaluation requires valid chart, solve and parameter "
-         "tolerances"});
+  if (auto error = internal::ValidateIntersectionOptions(options))
+    return Result<CurveEvaluation>::Err(std::move(*error));
   return EvaluateModelCurve(model, curve, parameter, &options);
 }
 

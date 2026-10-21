@@ -196,6 +196,13 @@ struct IntersectionEvaluationOptions {
   /// snapping just outside outer chart endpoints; zero retains strict bounds.
   /// Does not relax trim intervals or move interior parameters/chart knots.
   double chart_parameter_tolerance = 0;
+  /// Minimum sine of the angle between the two unit surface normals at the
+  /// query. Finite in [0,1]; zero adds no minimum beyond existing singularity
+  /// checks. Reversing a surface sense does not change this measure.
+  double minimum_normal_sine = 0;
+  /// Minimum positive unit tangent/chord dot product at the query, finite in
+  /// [0,1]. Zero preserves the existing strict positive-direction check.
+  double minimum_chord_projection = 0;
 };
 
 /// Evaluates model curves with explicit options for supported intersections,
@@ -222,6 +229,8 @@ struct IntersectionEvaluationOptions {
 /// Interior solves use at most 32 Newton updates and 16
 /// damping trials per update; singular/stalled/nonconvergent solves are errors.
 /// Chart/inversion/normal resource and validity checks remain in force.
+/// Optional geometric regularity minimums apply at the query and reject
+/// samples below a minimum with kInvalidRecord.
 /// Outside-chart parameters beyond chart_parameter_tolerance are invalid
 /// options. Within that explicit parameter tolerance, an outside query returns
 /// the nearest outer chart endpoint and its natural derivative (not the zero
@@ -230,6 +239,31 @@ struct IntersectionEvaluationOptions {
 /// inversion of other surface kinds is provided. EvaluateCurve without options
 /// retains its unsupported result for intersections.
 [[nodiscard]] Result<CurveEvaluation> EvaluateIntersectionCurve(
+    const Model& model, NodeId curve, double parameter,
+    const IntersectionEvaluationOptions& options);
+
+struct IntersectionCurveDiagnostics {
+  /// Sine of the angle between the unit normals, in (0,1]. Near zero means
+  /// the supporting surfaces are nearly tangent.
+  double surface_normal_sine = 0;
+  /// Unit tangent dotted with the selected unit chord, in (0,1]. Near zero
+  /// amplifies the chart's natural derivative scale.
+  double tangent_chord_projection = 0;
+};
+struct IntersectionCurveEvaluation {
+  CurveEvaluation curve;
+  IntersectionCurveDiagnostics diagnostics;
+};
+
+/// Returns the same curve sample as EvaluateIntersectionCurve, plus local
+/// geometric regularity measures. Both APIs apply the options' optional
+/// minimums at the query, including exact/snapped chart endpoints, returning
+/// kInvalidRecord below a minimum. Measures use recovered/solved UV values;
+/// at chart knots the returned position remains the stored chart point.
+/// Neither the measures nor passing the minimums certify position/derivative
+/// accuracy, chart-wide regularity, a Jacobian condition bound or topology.
+[[nodiscard]] Result<IntersectionCurveEvaluation>
+EvaluateIntersectionCurveWithDiagnostics(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);
 
