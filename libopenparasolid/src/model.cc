@@ -71,6 +71,24 @@ const char* GeometryName(const GeometryPayload& geometry) noexcept {
 }
 namespace internal {
 namespace {
+std::optional<uint8_t> TopologySenseByte(const DecodedNode& node,
+                                         const TypeDefinition& schema) {
+  if (node.node_type != 14 && node.node_type != 17) return std::nullopt;
+  std::optional<uint8_t> sense;
+  bool found = false;
+  for (std::size_t i = 0; i < schema.fields.size(); ++i) {
+    if (schema.fields[i].name != "sense") continue;
+    if (found) return std::nullopt;
+    found = true;
+    const auto& field = node.fields[i];
+    if (schema.fields[i].type != FieldType::kCharacter || field.elements != 1 ||
+        field.values.size() != 1)
+      continue;
+    const auto* raw = std::get_if<uint64_t>(&field.values[0]);
+    if (raw && *raw <= UINT8_MAX) sense = static_cast<uint8_t>(*raw);
+  }
+  return sense;
+}
 bool Contains(std::initializer_list<uint16_t> values, uint16_t value) {
   return std::find(values.begin(), values.end(), value) != values.end();
 }
@@ -466,8 +484,12 @@ std::optional<ParseError> ModelAssembler::ValidateAndIndex() {
     const auto position = model_.nodes_.size();
     if (!model_.positions_.emplace(node.index, position).second)
       return Invalid(node.offset, "Duplicate model node index");
-    model_.nodes_.push_back(
-        {NodeId{node.index}, node.node_type, node.offset, {}, {}});
+    model_.nodes_.push_back({NodeId{node.index},
+                             node.node_type,
+                             node.offset,
+                             {},
+                             {},
+                             TopologySenseByte(node, schema)});
   }
   return std::nullopt;
 }

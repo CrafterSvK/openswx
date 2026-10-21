@@ -10,12 +10,29 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "../tools/model_report.h"
+#include "model_test_helpers.h"
 #include "test_helpers.h"
 
 namespace openparasolid {
 namespace {
 namespace fs = std::filesystem;
 using nlohmann::json;
+
+TEST(ParasolidModelReport, RetainsTopologySenseAlongsideGeometrySense) {
+  test::ModelFixture f;
+  f.Add(14, 1, {test::ByteValue("sense", '?', FieldType::kCharacter)});
+  f.Add(17, 2, {test::ByteValue("sense", '-', FieldType::kCharacter)});
+  f.Point(3);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto report = cli::ModelReport(model.value(), {}, false);
+  EXPECT_EQ(report["nodes"][0]["topology_sense"], uint64_t{'?'});
+  EXPECT_EQ(report["nodes"][1]["topology_sense"], uint64_t{'-'});
+  EXPECT_TRUE(report["nodes"][2]["topology_sense"].is_null());
+  EXPECT_TRUE(report["geometry"][0]["sense"].is_null());
+  EXPECT_FALSE(cli::ModelReport(model.value(), {}, true).contains("nodes"));
+}
 
 std::string Quote(const fs::path& path) {
   std::string result = "'";

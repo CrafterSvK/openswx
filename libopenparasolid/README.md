@@ -14,6 +14,69 @@ Geometry mode and existing options also support `OPENPARASOLID_*` environment
 settings, with command-line precedence. Delta application and B-Rep validation
 remain separate work.
 
+## Ordered loop boundaries
+
+`openparasolid/topology.h` introduces
+`TraverseLoopBoundary(model, loop_id, options)` as a first BRep topology layer.
+It follows `LOOP.halfedge` and `FIN.forward` without sorting, rotating or
+reversing the source ring. The owned `LoopBoundary` result retains its loop,
+face and nullable surface IDs, the raw face sense, and ordered `FinUse` values:
+
+- FIN and EDGE IDs, with the FIN's forward/reverse sense relative to its edge.
+- Start/end vertex IDs oriented in loop order.
+- Separate nullable edge-curve and fin-curve references, without substitution.
+
+The forward vertex of a fin is `FIN.vertex`. Natural edge endpoints come from
+`EDGE.halfedge.vertex` (end) and `EDGE.halfedge.other.vertex` (start); these
+primary and secondary fins must respectively have positive and negative sense.
+Dummy fins can supply these anchors but are not appended to the loop result.
+An edge may occur once in each direction, including seam uses. Vertex-free
+ring edges have two null endpoints and must be the loop's only edge use.
+An isolated vertex loop instead returns `isolated_vertex` with its FIN and
+VERTEX IDs and no edge uses; that fin's sense has no significance.
+
+Traversal checks selected reference roles and target types, loop ownership,
+reciprocal forward/backward links, closure at the starting fin, primary and
+secondary edge ownership/senses, fin endpoint agreement, vertex continuity and
+repeated oriented edges. It never joins vertices by coordinate proximity.
+Missing roles or unknown FIN senses and unreviewed pointer classes return
+`kUnsupportedFormat`; malformed connectivity, missing/wrong targets or
+ambiguous pointer roles return `kInvalidRecord`. Errors identify the source
+node/field where available. Results own their data and do not modify the model.
+
+`LoopTraversalOptions.max_fins` defaults to 100,000 and must be positive.
+Exhaustion returns `kResourceLimit` without a partial boundary. The limit also
+counts an isolated vertex's fin. Output and visited/edge-use sets grow with
+visited fins; reference fields are scanned locally, with no recursive graph
+walk or geometry evaluation. Unrelated model issues do not block this local
+query. Source faces without a surface, untyped geometry and nullable
+curve references remain explicit in the result.
+
+`ModelNode.topology_sense` preserves scalar character `sense` fields on FACE
+and FIN nodes, including unknown bytes. Absent or incompatible fields stay
+absent; no default sense is invented. The full inspector model JSON adds the
+numeric-or-null `topology_sense` field to each node. Geometry senses and summary
+output are unchanged; no CLI options or dependencies are added.
+
+This establishes a locally connected loop, not a validated body or manifold
+BRep. Face-list membership, complete radial fin rings, vertex chains,
+shell/body closure, geometry membership and tolerance bounds remain unchecked.
+FIN-to-edge sense does not supply edge-to-curve sense or curve parameter bounds.
+Face normal orientation, outer/hole classification, placements and units are
+not inferred. The rules follow the XT Format Reference (July 2022, pp. 28-29
+and 94-96). The implementation remains MIT and STL-only.
+
+Synthetic tests cover rotated heads, both edge directions, dummy anchors,
+vertex-free rings, isolated vertices, seam reuse, non-primary fins, malformed
+links/roles/endpoints, unknown sense metadata, unverified pointer classes,
+resource limits and copy/move ownership. An independent Python walk of raw
+schema fields checks every one of 9,620 loops in the 90-stream selection:
+9,544 edge loops (including 1,565 vertex-free rings), 76 isolated vertex loops
+and 41,916 oriented edge uses. These include 20,926 reverse uses, 114 uses with
+dummy anchors and 5,622 uses retaining a fin curve. All match; 50,380 FACE/FIN
+sense bytes also agree with the raw fields. Private inputs and comparison
+programs remain outside the repository.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS
@@ -65,8 +128,8 @@ overflow, but final positions and derivatives must fit in `double`.
 
 The formulas and frame conventions follow the XT Format Reference (July 2022,
 pp. 35–40); natural derivatives and curve sense follow section 5.2.8 (p. 82).
-Topology traversal, delta application and STEP export remain separate work.
-The inspector's JSON and command-line options are unchanged.
+Ordered loop traversal is described below. Delta application and STEP export
+remain separate work; curve evaluation adds no CLI options.
 
 Synthetic tests cover rational quarter circles, 2D/3D controls, homogeneous
 scaling, endpoint and repeated-knot derivatives, unclamped knots, invalid data

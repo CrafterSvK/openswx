@@ -194,6 +194,9 @@ struct ModelNode {
   uint64_t source_offset = 0;
   std::vector<ModelReference> references;
   std::optional<std::size_t> geometry;
+  /// Raw FACE/FIN sense from a scalar character field. Missing or incompatible
+  /// fields remain absent; no sense is inferred.
+  std::optional<uint8_t> topology_sense;
 };
 enum class ModelIssueCode {
   kMissingTarget,

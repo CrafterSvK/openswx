@@ -165,6 +165,8 @@ inline json ModelReport(const Model& model, const ModelOptions& options,
               {"node_type", n.node_type},
               {"source_offset", n.source_offset},
               {"geometry", n.geometry ? json(*n.geometry) : json(nullptr)},
+              {"topology_sense",
+               n.topology_sense ? json(*n.topology_sense) : json(nullptr)},
               {"references", json::array()}};
     for (const auto& r : n.references)
       node["references"].push_back(
