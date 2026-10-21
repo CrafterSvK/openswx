@@ -33,6 +33,8 @@ class TopologyReader {
                                     const RegionTraversalOptions& options,
                                     bool allow_zero_limits = false);
   Result<BodyBoundary> ReadBody(NodeId id, const BodyTraversalOptions& options);
+  Result<CompoundBodyBoundary> ReadCompound(
+      NodeId id, const CompoundBodyTraversalOptions& options);
 
  private:
   bool Fail(const ModelNode& node, std::string_view field, const char* message,
@@ -41,6 +43,8 @@ class TopologyReader {
   bool Reference(const ModelNode& node, std::string_view name, uint16_t type,
                  bool nullable, NodeId& target);
   bool Sense(const ModelNode& node, TopologySense& sense);
+  bool Kind(const ModelNode& node, BodyKind& kind);
+  bool Children(CompoundBodyBoundary& result, uint64_t limit);
   bool EdgeUse(const ModelNode& fin, NodeId edge, NodeId other, FinUse& use);
   struct ShellBudget {
     uint64_t loops;
@@ -558,6 +562,26 @@ Result<RegionBoundary> TopologyReader::ReadRegion(
   }
   return Result<RegionBoundary>::Ok(std::move(result));
 }
+bool TopologyReader::Kind(const ModelNode& node, BodyKind& kind) {
+  switch (node.body_type.value_or(0)) {
+    case 1:
+      kind = BodyKind::kSolid;
+      break;
+    case 2:
+      kind = BodyKind::kWire;
+      break;
+    case 3:
+      kind = BodyKind::kSheet;
+      break;
+    case 6:
+      kind = BodyKind::kGeneral;
+      break;
+    default:
+      return Fail(node, "body_type", "Body type is unavailable or unknown",
+                  ErrorCode::kUnsupportedFormat);
+  }
+  return true;
+}
 Result<BodyBoundary> TopologyReader::ReadBody(
     NodeId id, const BodyTraversalOptions& options) {
   if (!options.max_regions || !options.max_shells || !options.max_face_uses ||
@@ -569,24 +593,7 @@ Result<BodyBoundary> TopologyReader::ReadBody(
   if (!body) return Result<BodyBoundary>::Err(*error_);
   BodyBoundary result;
   result.body = id;
-  switch (body->body_type.value_or(0)) {
-    case 1:
-      result.kind = BodyKind::kSolid;
-      break;
-    case 2:
-      result.kind = BodyKind::kWire;
-      break;
-    case 3:
-      result.kind = BodyKind::kSheet;
-      break;
-    case 6:
-      result.kind = BodyKind::kGeneral;
-      break;
-    default:
-      return Result<BodyBoundary>::Err({ErrorCode::kUnsupportedFormat,
-                                        body->source_offset,
-                                        "Body type is unavailable or unknown"});
-  }
+  if (!Kind(*body, result.kind)) return Result<BodyBoundary>::Err(*error_);
   // Select the concrete owner type before Reference validates cardinality,
   // pointer status and target. Both WORLD and parent BODY are possible.
   uint16_t owner_type = 101;
@@ -655,6 +662,91 @@ Result<BodyBoundary> TopologyReader::ReadBody(
   return Result<BodyBoundary>::Ok(std::move(result));
 }
 
+bool TopologyReader::Children(CompoundBodyBoundary& result, uint64_t limit) {
+  const auto& boundary = result.boundary;
+  const auto& parent = *model_.FindNode(boundary.body);
+  NodeId current, previous;
+  if (!Reference(parent, "child", 12, true, current)) return false;
+  std::unordered_set<uint32_t> visited;
+  std::size_t region_index = 0;
+  bool mixed_kinds = false;
+  while (current.value) {
+    const auto& child = *model_.FindNode(current);
+    if (current == parent.id || visited.contains(current.value))
+      return Fail(child, "next",
+                  "Compound child list contains a cycle or parent");
+    if (visited.size() >= limit)
+      return Fail(child, "next", "Compound child limit exceeded",
+                  ErrorCode::kResourceLimit);
+    visited.insert(current.value);
+    NodeId owner, backward, next, nested, head;
+    if (!Reference(child, "owner", 12, false, owner) ||
+        !Reference(child, "previous", 12, true, backward) ||
+        !Reference(child, "next", 12, true, next) ||
+        !Reference(child, "child", 12, true, nested) ||
+        !Reference(child, "region", 19, false, head))
+      return false;
+    if (owner != parent.id || backward != previous || nested.value)
+      return Fail(child, "owner/previous/child",
+                  "Inconsistent compound child ownership or links");
+    ChildBodyRange range;
+    range.body = current;
+    range.first_region = region_index;
+    if (!Kind(child, range.kind)) return false;
+    if (region_index == boundary.regions.size() ||
+        boundary.regions[region_index].region != head)
+      return Fail(child, "region",
+                  "Child region head does not match its ordered range");
+    while (region_index < boundary.regions.size()) {
+      const auto& region =
+          *model_.FindNode(boundary.regions[region_index].region);
+      NodeId region_owner;
+      if (!Reference(region, "owner", 12, false, region_owner)) return false;
+      if (region_owner != current) break;
+      ++region_index;
+    }
+    range.region_count = region_index - range.first_region;
+    if (!range.region_count)
+      return Fail(child, "region",
+                  "Child region head belongs to another child");
+    if (!result.children.empty() && range.kind != result.children.front().kind)
+      mixed_kinds = true;
+    result.children.push_back(range);
+    previous = current;
+    current = next;
+  }
+  if (region_index != boundary.regions.size())
+    return Fail(parent, "region",
+                "Regions remain outside the listed child ranges");
+  if (!result.children.empty()) {
+    const auto expected =
+        mixed_kinds ? BodyKind::kGeneral : result.children.front().kind;
+    if (boundary.kind != expected)
+      return Fail(parent, "body_type",
+                  "Compound kind does not match its child kinds");
+  }
+  return true;
+}
+Result<CompoundBodyBoundary> TopologyReader::ReadCompound(
+    NodeId id, const CompoundBodyTraversalOptions& options) {
+  if (!options.max_children)
+    return Result<CompoundBodyBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Compound traversal requires positive limits"});
+  auto boundary = ReadBody(id, options.body);
+  if (!boundary.ok())
+    return Result<CompoundBodyBoundary>::Err(boundary.error());
+  CompoundBodyBoundary result;
+  result.boundary = std::move(boundary).value();
+  if (!Children(result, options.max_children)) {
+    auto error = *error_;
+    error.message =
+        "Compound body " + std::to_string(id.value) + ": " + error.message;
+    return Result<CompoundBodyBoundary>::Err(std::move(error));
+  }
+  return Result<CompoundBodyBoundary>::Ok(std::move(result));
+}
+
 }  // namespace
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
@@ -678,6 +770,12 @@ Result<RegionBoundary> TraverseRegionBoundary(
 Result<BodyBoundary> TraverseBodyBoundary(const Model& model, NodeId body,
                                           const BodyTraversalOptions& options) {
   return TopologyReader(model).ReadBody(body, options);
+}
+
+Result<CompoundBodyBoundary> TraverseCompoundBodyBoundary(
+    const Model& model, NodeId body,
+    const CompoundBodyTraversalOptions& options) {
+  return TopologyReader(model).ReadCompound(body, options);
 }
 
 }  // namespace openparasolid

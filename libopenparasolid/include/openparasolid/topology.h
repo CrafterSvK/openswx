@@ -224,6 +224,43 @@ struct BodyTraversalOptions {
 [[nodiscard]] Result<BodyBoundary> TraverseBodyBoundary(
     const Model& model, NodeId body, const BodyTraversalOptions& options = {});
 
+struct ChildBodyRange {
+  NodeId body;
+  BodyKind kind = BodyKind::kGeneral;
+  /// Contiguous range in CompoundBodyBoundary.boundary.regions. Indices remain
+  /// valid across copies and moves; nested boundary data are stored only once.
+  std::size_t first_region = 0;
+  std::size_t region_count = 0;
+};
+struct CompoundBodyBoundary {
+  BodyBoundary boundary;
+  /// BODY.child / child BODY.next order, with reciprocal previous links.
+  std::vector<ChildBodyRange> children;
+};
+struct CompoundBodyTraversalOptions {
+  BodyTraversalOptions body;
+  uint64_t max_children = 10000;
+};
+
+/// Reads a compound parent's combined boundary and groups its regions by child.
+/// In addition to TraverseBodyBoundary checks, requires BODY.child and every
+/// child's owner/previous/next/child/region roles and REGION.owner. Missing or
+/// unreviewed roles return kUnsupportedFormat. Each child must belong to the
+/// parent, have no children, and own a nonempty contiguous range starting at
+/// its region head. Ranges cover the entire parent's region chain in child
+/// order. Parent kind must equal the common child kind, or general for mixed
+/// kinds. Empty compounds require null child and region heads.
+/// All limits are positive. Body limits apply to the whole nested boundary;
+/// max_children additionally bounds child metadata. Errors follow the other
+/// traversal APIs, preserving nested error codes/offsets without partial data.
+/// Results own their data and leave the model unchanged. Direct child queries
+/// still require the parent. Does not scan for unlisted children, certify
+/// geometric validity or classify exterior regions. An older schema lacking
+/// BODY.child or REGION.owner remains usable through TraverseBodyBoundary.
+[[nodiscard]] Result<CompoundBodyBoundary> TraverseCompoundBodyBoundary(
+    const Model& model, NodeId body,
+    const CompoundBodyTraversalOptions& options = {});
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_TOPOLOGY_H_

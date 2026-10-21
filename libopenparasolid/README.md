@@ -290,6 +290,55 @@ body traversal errors. Empty bodies, general bodies and compound/child
 behavior are covered synthetically; that private selection contains none.
 Private input files and comparison programs remain outside the repository.
 
+## Compound body children
+
+`TraverseCompoundBodyBoundary(model, parent_id, options)` in
+`openparasolid/topology.h` adds explicit child grouping above
+`TraverseBodyBoundary`. Its owned `CompoundBodyBoundary` stores the existing
+parent result in `boundary` and an ordered `children` vector. Each
+`ChildBodyRange` contains the child BODY ID, `BodyKind`, `first_region` and
+`region_count`, indexing `boundary.regions`. Nested region/shell/face/loop data
+are stored only once; indices remain valid across copies and moves.
+
+The query follows `BODY.child` and each child's `BODY.next/previous` links.
+Children must belong to the parent, have reciprocal list links and no nested
+children, and retain a known body type. Their `BODY.region` heads must match
+nonempty contiguous ranges in the parent's combined region chain.
+`REGION.owner` must identify the corresponding child. Ranges must cover all
+listed parent regions in child order. A common child kind must equal the
+parent kind; mixed child kinds require a general parent. Empty compounds
+require both the child and region heads to be null. These are structural
+checks, without certifying geometric body-type consistency.
+
+`CompoundBodyTraversalOptions.body` holds the existing six positive aggregate
+body limits. `max_children` additionally bounds child records and defaults to
+10,000; it must also be positive. Child cycles are rejected even at the exact
+child limit. Resource exhaustion returns `kResourceLimit`, malformed
+ownership/order/ranges return `kInvalidRecord`, and unavailable roles, unknown
+body types or unreviewed pointer classes return `kUnsupportedFormat`. Nested
+body failures retain their code, source offset and context. Child-grouping
+failures add compound-parent context. No failure returns partial results.
+
+This API requires the transmitted `BODY.child`, child
+owner/previous/next/child/region roles and `REGION.owner`. Older layouts missing
+`BODY.child` or `REGION.owner` can still use `TraverseBodyBoundary` to read the
+combined boundary without child grouping. Direct child queries remain
+unsupported: query the parent and use its indexed child range. The query does
+not scan for unlisted children, classify exterior regions, read child geometry
+lists or establish geometric validity, full incidence, volume or manifoldness.
+The rules follow the XT Format Reference (July 2022, pp. 88-94). The library
+remains MIT and STL-only, with no additional CLI settings or dependencies.
+
+Synthetic tests cover mixed and common child kinds, empty compounds, ordered
+ranges and ownership after copies/moves, aggregate body and child limits,
+cycles, malformed ownership/heads/ranges, missing and unreviewed metadata,
+unknown child types and nested diagnostics. The baseline body API remains
+usable independently of child-grouping metadata. A raw-schema scan of all
+434 multi-body streams in the existing model corpus found no non-null
+`BODY.child` head, so real nonempty-compound validation remains unavailable.
+The previous 130-stream body comparison is retained as regression coverage;
+private inputs and comparison programs remain outside the repository.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS

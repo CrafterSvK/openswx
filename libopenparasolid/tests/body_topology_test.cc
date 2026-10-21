@@ -105,6 +105,18 @@ ModelFixture Fixture() {
   f.Point(201);
   return f;
 }
+ModelFixture CompoundFixture() {
+  auto f = Fixture();
+  Body(f, 3, 10, 1, 1);
+  Body(f, 4, 12, 1, 2);
+  Set(f, 3, "next", 4);
+  Set(f, 4, "previous", 3);
+  Set(f, 1, "child", 3);
+  Set(f, 10, "owner", 3);
+  Set(f, 11, "owner", 3);
+  Set(f, 12, "owner", 4);
+  return f;
+}
 constexpr BodyTraversalOptions kExact{3, 4, 2, 2, 2, 2};
 TEST(ParasolidBodyTopology, OwnsRegionsAndSharedFacesWithAggregateBudgets) {
   const auto result = [] {
@@ -325,5 +337,186 @@ TEST(ParasolidBodyTopology, NestedErrorsKeepTheirCodeOffsetAndBodyContext) {
   EXPECT_NE(r.error().message.find("Body 1, region 10"), std::string::npos);
   EXPECT_NE(r.error().message.find(region.error().message), std::string::npos);
 }
+TEST(ParasolidCompoundTopology, OwnsOrderedChildRangesWithoutCopyingRegions) {
+  const auto result = [] {
+    const auto f = CompoundFixture();
+    const auto model = ModelBuilder::Build(f.report);
+    if (!model.ok()) return Result<CompoundBodyBoundary>::Err(model.error());
+    return TraverseCompoundBodyBoundary(model.value(), NodeId{1}, {kExact, 2});
+  }();
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  auto copy = result.value();
+  auto moved = std::move(copy);
+  EXPECT_EQ(moved.boundary.body, NodeId{1});
+  EXPECT_EQ(moved.boundary.kind, BodyKind::kGeneral);
+  ASSERT_EQ(moved.boundary.regions.size(), 3);
+  ASSERT_EQ(moved.children.size(), 2);
+  EXPECT_EQ(moved.children[0].body, NodeId{3});
+  EXPECT_EQ(moved.children[0].kind, BodyKind::kSolid);
+  EXPECT_EQ(moved.children[0].first_region, 0);
+  EXPECT_EQ(moved.children[0].region_count, 2);
+  EXPECT_EQ(moved.children[1].body, NodeId{4});
+  EXPECT_EQ(moved.children[1].kind, BodyKind::kWire);
+  EXPECT_EQ(moved.children[1].first_region, 2);
+  EXPECT_EQ(moved.children[1].region_count, 1);
+  EXPECT_EQ(moved.boundary.regions[moved.children[1].first_region].region,
+            NodeId{12});
+  EXPECT_EQ(moved.boundary.regions[1].shells[1].isolated_vertex->point,
+            NodeId{201});
+}
+TEST(ParasolidCompoundTopology, EmptyCompoundRequiresBothHeadsToBeNull) {
+  ModelFixture f;
+  Body(f, 1, 0);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = TraverseCompoundBodyBoundary(model.value(), NodeId{1});
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result.value().boundary.regions.empty());
+  EXPECT_TRUE(result.value().children.empty());
+  Body(f, 3, 0, 1);
+  Set(f, 1, "child", 3);
+  const auto invalid = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(invalid.ok());
+  const auto child = TraverseCompoundBodyBoundary(invalid.value(), NodeId{1});
+  ASSERT_FALSE(child.ok());
+  EXPECT_EQ(child.error().code, ErrorCode::kInvalidRecord);
+}
+TEST(ParasolidCompoundTopology, CommonAndMixedChildKindsDetermineParentKind) {
+  for (bool mixed : {false, true}) {
+    auto f = CompoundFixture();
+    if (!mixed) Set(f, 4, "body_type", 1);
+    Set(f, 1, "body_type", mixed ? 6 : 1);
+    auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    EXPECT_TRUE(TraverseCompoundBodyBoundary(model.value(), NodeId{1}).ok());
+    Set(f, 1, "body_type", mixed ? 1 : 6);
+    model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto bad = TraverseCompoundBodyBoundary(model.value(), NodeId{1});
+    ASSERT_FALSE(bad.ok());
+    EXPECT_EQ(bad.error().code, ErrorCode::kInvalidRecord);
+  }
+}
+TEST(ParasolidCompoundTopology,
+     ListAndOwnershipFailuresNeverReturnPartialData) {
+  for (int bad = 0; bad < 20; ++bad) {
+    auto f = CompoundFixture();
+    if (bad == 0) Set(f, 3, "next", 3);
+    if (bad == 1) Set(f, 4, "next", 3);
+    if (bad == 2) Set(f, 4, "previous", 0);
+    if (bad == 3) Set(f, 3, "previous", 4);
+    if (bad == 4) Set(f, 3, "owner", 4);
+    if (bad == 5) Set(f, 3, "child", 4);
+    if (bad == 6) Set(f, 3, "region", 11);
+    if (bad == 7) Set(f, 4, "region", 0);
+    if (bad == 8) Set(f, 4, "region", 11);
+    if (bad == 9) Set(f, 11, "owner", 4);
+    if (bad == 10) Set(f, 12, "owner", 3);
+    if (bad == 11) Set(f, 11, "owner", 0);
+    if (bad == 12) Set(f, 11, "owner", 999);
+    if (bad == 13) Set(f, 1, "child", 0);
+    if (bad == 14) Set(f, 1, "child", 100);
+    if (bad == 15) Set(f, 3, "next", 999);
+    if (bad == 16) Set(f, 3, "next", 100);
+    if (bad == 17) Set(f, 1, "child", 1);
+    if (bad == 18) Set(f, 10, "owner", 4);
+    if (bad == 19) Set(f, 3, "next", 0);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        TraverseCompoundBodyBoundary(model.value(), NodeId{1}, {kExact, 2});
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord) << bad;
+    if (bad == 0 || bad == 1 || bad == 17)
+      EXPECT_NE(result.error().message.find("cycle"), std::string::npos);
+  }
+}
+TEST(ParasolidCompoundTopology,
+     MissingUnverifiedAndUnknownChildDataStayUnsupported) {
+  for (int bad = 0; bad < 10; ++bad) {
+    auto f = CompoundFixture();
+    if (bad == 9)
+      Set(f, 3, "body_type", 99);
+    else {
+      const uint32_t id = bad == 0 ? 1 : bad == 7 ? 10 : 3;
+      const std::string role = bad == 0 || bad == 4   ? "child"
+                               : bad == 1 || bad == 7 ? "owner"
+                               : bad == 2             ? "previous"
+                               : bad == 3 || bad == 8 ? "next"
+                               : bad == 5             ? "region"
+                                                      : "body_type";
+      for (auto& node : f.report.nodes)
+        if (node.index == id)
+          for (auto& field :
+               f.report.schemas[node.schema_index].definition.fields)
+            if (field.name == role) {
+              if (bad == 8)
+                field.pointer_class = 60000;
+              else
+                field.name = "unavailable";
+            }
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    // The baseline boundary query does not require child grouping metadata.
+    EXPECT_TRUE(TraverseBodyBoundary(model.value(), NodeId{1}).ok());
+    const auto result = TraverseCompoundBodyBoundary(model.value(), NodeId{1});
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat) << bad;
+  }
+}
+TEST(ParasolidCompoundTopology, ChildAndNestedBodyLimitsRemainIndependent) {
+  const auto f = CompoundFixture();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto limited =
+      TraverseCompoundBodyBoundary(model.value(), NodeId{1}, {kExact, 1});
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  auto options = CompoundBodyTraversalOptions{kExact, 2};
+  --options.body.max_fins;
+  const auto nested =
+      TraverseCompoundBodyBoundary(model.value(), NodeId{1}, options);
+  ASSERT_FALSE(nested.ok());
+  EXPECT_EQ(nested.error().code, ErrorCode::kResourceLimit);
+  for (int bad = 0; bad < 7; ++bad) {
+    options = {kExact, 2};
+    if (bad == 0) options.max_children = 0;
+    if (bad == 1) options.body.max_regions = 0;
+    if (bad == 2) options.body.max_shells = 0;
+    if (bad == 3) options.body.max_face_uses = 0;
+    if (bad == 4) options.body.max_loops = 0;
+    if (bad == 5) options.body.max_fins = 0;
+    if (bad == 6) options.body.max_wire_edges = 0;
+    const auto invalid =
+        TraverseCompoundBodyBoundary(model.value(), NodeId{999}, options);
+    ASSERT_FALSE(invalid.ok());
+    EXPECT_EQ(invalid.error().code, ErrorCode::kInvalidOptions);
+  }
+}
+TEST(ParasolidCompoundTopology, NestedErrorsRetainBodyContextAndSource) {
+  auto f = CompoundFixture();
+  Set(f, 102, "loop", 0);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto body = TraverseBodyBoundary(model.value(), NodeId{1});
+  const auto result = TraverseCompoundBodyBoundary(model.value(), NodeId{1});
+  ASSERT_FALSE(body.ok());
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, body.error().code);
+  EXPECT_EQ(result.error().offset, body.error().offset);
+  EXPECT_EQ(result.error().message, body.error().message);
+}
+TEST(ParasolidCompoundTopology, UnlistedChildrenAreOutsideTheLocalQuery) {
+  auto f = CompoundFixture();
+  Body(f, 999, 0, 1);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  EXPECT_TRUE(TraverseCompoundBodyBoundary(model.value(), NodeId{1}).ok());
+  EXPECT_FALSE(TraverseCompoundBodyBoundary(model.value(), NodeId{3}).ok());
+  EXPECT_FALSE(TraverseCompoundBodyBoundary(model.value(), NodeId{10}).ok());
+  EXPECT_FALSE(TraverseCompoundBodyBoundary(model.value(), NodeId{888}).ok());
+}
+
 }  // namespace
 }  // namespace openparasolid
