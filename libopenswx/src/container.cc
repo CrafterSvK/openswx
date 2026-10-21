@@ -3,6 +3,8 @@
 
 #include "openswx/container.h"
 
+#include "openparasolid/parser.h"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -226,53 +228,27 @@ ScanParasolidBlocks(std::span<const uint8_t> decoded_stream,
 }
 
 bool ReadParasolidHeader(ParasolidPayload &result) {
-  const std::span<const uint8_t> data(result.payload.data);
-  if (data.size() < 6u)
+  const auto parsed =
+      openparasolid::ParasolidReader::ReadCommonHeader(result.payload.data);
+  if (!parsed.ok())
     return false;
-  const std::size_t length =
-      (static_cast<std::size_t>(data[4]) << 8u) | data[5];
-  if (length == 0u || length > data.size() - 6u)
-    return false;
-  const auto description_bytes = data.subspan(6u, length);
-  if (!std::all_of(description_bytes.begin(), description_bytes.end(),
-                   [](uint8_t c) { return c >= 0x20u && c <= 0x7eu; }))
-    return false;
-  std::string description(description_bytes.begin(), description_bytes.end());
-  if (!description.starts_with(": TRANSMIT FILE"))
-    return false;
-  const std::size_t description_end = 6u + length;
-  const std::size_t window_end =
-      description_end +
-      std::min<std::size_t>(64u, data.size() - description_end);
-  std::string schema;
-  // Padding is variable. A schema is bounded by its preceding u8 length,
-  // including when the first body byte is an ASCII token character.
-  for (std::size_t at = description_end; at < window_end; ++at) {
-    const std::size_t schema_length = data[at];
-    if (schema_length <= 4u || schema_length > window_end - at - 1u)
-      continue;
-    const auto token = data.subspan(at + 1u, schema_length);
-    if (token[0] != 'S' || token[1] != 'C' || token[2] != 'H' ||
-        token[3] != '_')
-      continue;
-    if (!std::all_of(token.begin(), token.end(), [](uint8_t c) {
-          return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                 (c >= '0' && c <= '9') || c == '_';
-        }))
-      continue;
-    schema.assign(token.begin(), token.end());
+  const auto &header = parsed.value();
+  result.description = header.description;
+  result.schema = header.schema;
+  switch (header.kind) {
+  case openparasolid::StreamKind::kTransmit:
+    result.kind = ParasolidPayloadKind::kTransmit;
+    break;
+  case openparasolid::StreamKind::kPartition:
+    result.kind = ParasolidPayloadKind::kPartition;
+    break;
+  case openparasolid::StreamKind::kDeltas:
+    result.kind = ParasolidPayloadKind::kDeltas;
+    break;
+  case openparasolid::StreamKind::kUnknown:
+    result.kind = ParasolidPayloadKind::kUnknown;
     break;
   }
-  if (schema.empty())
-    return false;
-  result.description = std::move(description);
-  result.schema = std::move(schema);
-  if (result.description.starts_with(": TRANSMIT FILE (partition)"))
-    result.kind = ParasolidPayloadKind::kPartition;
-  else if (result.description.starts_with(": TRANSMIT FILE (deltas)"))
-    result.kind = ParasolidPayloadKind::kDeltas;
-  else if (result.description.starts_with(": TRANSMIT FILE created"))
-    result.kind = ParasolidPayloadKind::kTransmit;
   return true;
 }
 

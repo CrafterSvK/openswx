@@ -6,18 +6,32 @@ A cross-platform toolkit for reading SolidWorks® files (`.SLDPRT`, `.SLDASM`, `
 
 ## Overview
 
-The repository contains three independent components:
+The repository contains four components:
 
 ```
 openswx/
+├── libopenparasolid/  C++20 library + binary Parasolid inspector
 ├── libopenswx/   Pure C++20 library — parses SolidWorks files
 ├── libopenbom/   Pure C++20 library — builds hierarchical BOMs (built on libopenswx)
 └── asmbox/       HTTP server + CLI tool — built on top of both libraries
 ```
 
+### libopenparasolid
+
+An independent MIT-licensed C++20 library for extracted binary Parasolid streams.
+It reads common/internal headers, schema metadata, fixed-layout record candidates,
+stream-local reference candidates and uninterpreted byte ranges. The
+`parasolid_inspect` CLI writes JSON. Its `--nodes` mode consumes sequential
+records using embedded schema edits and a reviewed administration, attribute, topology
+and analytic, spline and procedural geometry subset or an explicit matching
+catalog. Candidate
+scanning remains an inspection aid;
+complete topology, delta application and B-Rep construction are future steps.
+See [libopenparasolid](libopenparasolid/README.md) for the API and supported scope.
+
 ### libopenswx
 
-A zero-dependency C++20 static library that reads both SolidWorks file formats:
+A C++20 static library that reads modern SolidWorks files and identifies unsupported legacy containers:
 
 | Format | Versions | Detection |
 |--------|----------|-----------|
@@ -171,6 +185,29 @@ dependencies or applying deltas. Ghost partitions remain explicitly separate.
 The library exposes the same extraction and diagnostics through
 `ExtractParasolidStreams(const ContainerInspection&)` in `openswx/container.h`.
 
+Inspect an extracted binary Parasolid file:
+
+```bash
+./build/libopenparasolid/parasolid_inspect --summary /tmp/part-parasolid/partitions/payload-1-offset-4.x_b
+./build/libopenparasolid/parasolid_inspect /tmp/part-parasolid/partitions/payload-1-offset-4.x_b > /tmp/inspection.json
+./build/libopenparasolid/parasolid_inspect --nodes --summary /tmp/part-parasolid/partitions/payload-1-offset-4.x_b
+```
+
+The full report includes record candidates, reference status and uninterpreted
+ranges with offsets and byte previews. `--max-records N` bounds the scan. Exit 2
+indicates a limited or unsupported candidate scan; exit 0 does not establish
+complete topology or a valid saved model. `--nodes` instead reads sequential
+schema-defined nodes, reports exact ranges and stops at unknown base types.
+Supply `--schema-catalog FILE.json` for additional definitions; without one,
+a reviewed 13006 subset is built in. Delta reports include the validated
+partition/current-mark pair, bounded reference maps or historical-mark packets,
+and supported status-framed node occurrences with their pointer statuses.
+Repeated delta indices retain occurrence order. In node mode, `--max-records`,
+`--max-fields`, `--max-values` and `--max-delta-entries` set independent resource
+bounds; JSON reports the active limits. The built-in catalog includes helical
+curve and surface forms. Change application remains unsupported. See the
+[inspector documentation](libopenparasolid/README.md).
+
 Export the line and text entities stored in a drawing's XML tables stream:
 
 ```bash
@@ -239,7 +276,7 @@ docker run --rm \
 
 `swx_scan` reads `.SLDPRT`, `.SLDASM`, and `.SLDDRW` files locally, prints only aggregate compatibility statistics, and never uploads CAD content anywhere by itself.
 
-The same container patterns work with `podman`. The image runs as a non-root user, exposes port `8087`, stores persistent state in `/data`, and includes `asmbox`, `swx_dump`, and `swx_scan`.
+The same container patterns work with `podman`. The image runs as a non-root user, exposes port `8087`, stores persistent state in `/data`, and includes `asmbox`, `swx_dump`, `swx_scan`, and `parasolid_inspect`.
 
 ## Help Us Test openswx
 
@@ -261,7 +298,7 @@ If you want to help:
 | GCC or Clang | C++20 capable (GCC 12+) | Compiler |
 | zlib (`libz-dev`) | any | Raw-deflate decompression in libopenswx |
 | pugixml (`libpugixml-dev`) | 1.11+ | XML parsing in libopenswx |
-| nlohmann/json (`nlohmann-json3-dev`) | 3.x | JSON serialization in asmbox |
+| nlohmann/json (`nlohmann-json3-dev`) | 3.x | JSON serialization in tools and libopenbom |
 | OpenSSL (`libssl-dev`) | 3.x | Password hashing and session token support in asmbox |
 | SQLite3 (`libsqlite3-dev`) | 3.x | Result caching and BOM persistence in asmbox |
 | libzip (`libzip-dev`) | 1.x | ZIP upload handling in asmbox |
@@ -294,19 +331,19 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j$(nproc)
 ```
 
-This produces four binaries inside `build/asmbox/`:
+Build outputs include these tools (paths are relative to `build/`):
 
 | Binary | Description |
 |--------|-------------|
-| `asmbox` | HTTP server (default port 8087) |
-| `swx_dump` | CLI tool — prints JSON to stdout |
-| `swx_scan` | CLI tool — scans directories and writes anonymized aggregate reports |
-| `asmbox_tests` | Unit test suite |
+| `asmbox/asmbox` | HTTP server (default port 8087) |
+| `asmbox/swx_dump` | CLI tool — prints JSON to stdout |
+| `libopenparasolid/parasolid_inspect` | Inspects extracted binary Parasolid streams |
+| `asmbox/swx_scan` | CLI tool — scans directories and writes anonymized aggregate reports |
 
 Run the tests:
 
 ```bash
-./build/asmbox/asmbox_tests
+ctest --test-dir build --output-on-failure
 ```
 
 ---

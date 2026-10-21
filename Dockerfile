@@ -23,7 +23,7 @@ WORKDIR /src
 COPY . .
 
 RUN cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-RUN cmake --build build -j"$(nproc)" --target asmbox swx_dump swx_scan
+RUN cmake --build build -j"$(nproc)" --target asmbox swx_dump swx_scan parasolid_inspect
 
 FROM debian:trixie-slim AS runtime
 
@@ -48,6 +48,7 @@ WORKDIR /opt/openswx
 COPY --from=builder /src/build/asmbox/asmbox /usr/local/bin/asmbox
 COPY --from=builder /src/build/asmbox/swx_dump /usr/local/bin/swx_dump
 COPY --from=builder /src/build/asmbox/swx_scan /usr/local/bin/swx_scan
+COPY --from=builder /src/build/libopenparasolid/parasolid_inspect /usr/local/bin/parasolid_inspect
 COPY --from=builder /src/asmbox/templates /opt/openswx/templates
 
 RUN mkdir -p /data \

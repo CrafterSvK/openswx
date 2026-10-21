@@ -21,6 +21,10 @@ if(BUILD_TESTING AND NOT TARGET GTest::gtest_main)
   FetchContent_MakeAvailable(googletest)
 endif()
 
+# ── libopenparasolid — binary stream inspector ──────────────────────────────
+option(OPENPARASOLID_BUILD_TOOLS "Build the Parasolid inspector CLI" ON)
+add_subdirectory(libopenparasolid)
+
 # ── libopenswx — platform-independent SolidWorks file parser ─────────────────
 add_subdirectory(libopenswx)
 

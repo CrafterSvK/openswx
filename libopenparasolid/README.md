@@ -1,0 +1,625 @@
+# libopenparasolid
+
+A C++20 static library and command-line inspector for extracted binary
+Parasolid transmit streams. Licensed under [MIT](LICENSE).
+
+The library depends only on the C++ standard library. The CLI uses
+nlohmann/json, and the tests use GoogleTest. SolidWorks containers and
+compression belong to `libopenswx`; this library reads the extracted bytes.
+
+## Build and run
+
+The top-level build includes the library and `parasolid_inspect`:
+
+```bash
+cmake -S . -B build -DBUILD_TESTING=ON
+cmake --build build --parallel
+./build/asmbox/swx_dump --extract-parasolid /tmp/parasolid part.SLDPRT
+./build/libopenparasolid/parasolid_inspect --summary /tmp/parasolid/partitions/payload-1-offset-4.x_b
+```
+
+Inspect one extracted partition, delta or other binary transmit stream:
+
+```bash
+parasolid_inspect part.x_b > inspection.json
+parasolid_inspect --summary part.x_b
+parasolid_inspect --max-records 100000 changes.bin
+```
+
+`--summary` omits per-candidate and unknown-range arrays. The default candidate
+limit is 10,000; the maximum accepted limit is 1,000,000. CLI limits must be
+positive. Input files are bounded to 128 MiB by default.
+
+Exit status:
+
+- `0`: the supported candidate scan reached the end of the input.
+- `1`: input, header, options or resource-limit error; details go to stderr.
+- `2`: a report was written, but the candidate scan was limited or the schema
+  or user-field layout has no supported candidate layouts.
+
+Status 0 does not establish a complete Parasolid document or valid B-Rep.
+
+The library also builds separately:
+
+```bash
+cmake -S libopenparasolid -B build-parasolid -DBUILD_TESTING=OFF
+cmake --build build-parasolid --parallel
+```
+
+For the standard-library-only target, add
+`-DOPENPARASOLID_BUILD_TOOLS=OFF`. Standalone tests require an installed
+GoogleTest package; the top-level build supplies its existing GoogleTest target.
+
+## API
+
+Public headers are under `include/openparasolid/`:
+
+```cpp
+#include <openparasolid/parser.h>
+
+openparasolid::InspectOptions options;
+options.max_records = 100000;
+auto result = openparasolid::ParasolidInspector::InspectFile("part.x_b", options);
+if (!result.ok()) {
+  std::cerr << result.error().message << " at " << result.error().offset << '\n';
+  return;
+}
+const auto& report = result.value();
+std::cout << report.header.schema << '\n';
+std::cout << report.candidates.size() << " record candidates\n";
+```
+
+`Inspect(span, options)` reads memory directly. Results own their strings,
+metadata and previews; they retain no pointers into the supplied span.
+`ParasolidReader::ReadHeader(span)` reads the common and internal headers.
+`ReadCommonHeader(span)` reads only the signature, description and schema;
+container extraction uses this smaller contract. Calls have no shared mutable
+state.
+
+## Header and schema reporting
+
+The neutral binary signature is `PS 00 00`. Header reporting includes the
+big-endian description length, description, schema token and its byte range.
+The common-header reader permits bounded padding before the length-prefixed
+schema. All offsets refer to the complete extracted input, not the original
+SolidWorks file or a decompressed frame.
+
+Numeric schema keys have two or three components:
+
+- `SCH_<modeller>_<schema>`: a base-less key.
+- `SCH_<modeller>_<schema>_<base_schema>`: an embedded-schema key.
+
+An embedded-schema header carries a maximum schema type (`u16 BE`), followed
+by the user-field word count (`i32 BE`, permitted values 0 through 16). A
+base-less header carries the word count directly. `body_offset` follows these
+fields when `internal_header_complete` is true; `schema_end_offset` ends the
+common prologue. Unknown nonnumeric schema declarations remain inspectable
+through the common header but do not enable a record scan.
+
+A schema key identifies a layout; it does not establish complete model support.
+The sequential parser below resolves embedded schemas independently of candidate inspection.
+
+## Candidate inspection
+
+For zero-user-field streams using schema/base schema 13006, the inspector
+searches for these fixed-layout prefixes:
+
+| Tag | Candidate kind | Additional checks |
+|---|---|---|
+| `00 0e` | Face-use / bridge | Topology marker and orientation |
+| `00 0f` | Loop head | Bounded short-reference fields |
+| `00 10` | Edge-use | Topology marker |
+| `00 11` | Coedge | Bounded references and orientation |
+| `00 12` | Vertex-use | Topology marker |
+| `00 1d` | Point | Sentinel reference and finite coordinates |
+
+The optional `ff` schema marker and short, bare `u16` reference cells are
+recognized. Extended pointers, tripled cells, variable ownership nodes,
+geometry carriers and schema edits remain outside the candidate scan.
+A syntactic prefix match can occur inside other data. `candidates` and
+`candidate_counts` therefore report candidates, never proven entity counts.
+`prefix_size` describes the matched prefix, not a complete record boundary.
+Coordinates retain source values; the inspector does not infer a length unit.
+
+References retain their field, source offset and attribute value. A known
+reference role is matched by expected candidate kind and attribute **within
+this input only**. Results distinguish sentinels, unique candidates, ambiguous
+candidates, unresolved references and uninterpreted target families. A unique
+candidate does not prove a valid topology connection. No partition/delta
+merging or saved-state reconstruction takes place.
+
+Unknown regions preserve the complement of the matched prefixes, with offsets,
+lengths and up to 16 preview bytes. Original bytes remain recoverable from the
+input. Byte accounting is:
+
+```text
+body_offset + candidate_prefix_bytes + uninterpreted_bytes == byte_size
+```
+
+The JSON report includes header metadata, candidate and reference counts,
+scan-limit status, per-candidate fields and unknown regions. It is an inspection
+report, not a geometry interchange format. Text X_T input, geometric evaluation,
+delta application and STEP output remain future work.
+
+## Sequential schema and node decoding
+
+```bash
+parasolid_inspect --nodes part.x_b > nodes.json
+parasolid_inspect --nodes --summary part.x_b
+parasolid_inspect --schema-catalog /path/to/catalog.json part.x_b
+```
+
+This mode consumes nodes in order using resolved field definitions. It never
+resynchronizes by scanning for tag patterns. It supports embedded full
+definitions, unchanged definitions (`ff`) and the `C/D/I/A/Z` schema edit
+operations, including implicit removal of remaining base fields at `Z`.
+Fixed and variable arrays, compact indices, nullable numeric scalars and
+composite numeric fields are decoded. An `h` field transmits three coordinates.
+Nontransmitted variable fields consume no value bytes; transmitted opaque
+fields stop with an unsupported-codec diagnostic. Node indices must be positive
+and unique. The terminator is type 1, index 0, at the exact end of the stream.
+
+The schema-mode JSON report includes a `limits` object with all effective
+`SchemaLimits` values, also in summary reports. Positive integer options can
+adjust the following bounds; their defaults remain unchanged:
+
+| Option | Default | Scope in schema mode |
+|---|---:|---|
+| `--max-records N` | 10,000 | Ordinary nodes plus delta node occurrences |
+| `--max-fields N` | 65,536 | Field groups, applied separately to the catalog, resolved schemas and decoded nodes |
+| `--max-values N` | 1,000,000 | Scalar values, including composite components and pointers; status bytes are excluded |
+| `--max-delta-entries N` | 100,000 | Reference-map entries plus historical mark occurrences |
+
+The last three options require `--nodes` or `--schema-catalog`; they do not
+change candidate-scan mode. Limits remain independent: increasing the node
+bound does not increase the field, value or packet bounds. Bounds reached
+during node/packet decoding retain the completed prefix and report exit
+status 2. Initial input or catalog limit errors and invalid limit arguments
+report exit status 1. No automatic retry or unlimited setting is used.
+
+A larger explicit profile used for the local corpus is:
+
+```bash
+parasolid_inspect --nodes --summary \
+  --max-records 300000 --max-fields 3000000 \
+  --max-values 5000000 --max-delta-entries 300000 part.x_b
+```
+
+The built-in catalog covers 54 base types for streams with base schema 13006:
+
+| Family | Types |
+|---|---|
+| Administration | PARTITION 3, PMARK 4, WORLD 101 |
+| Body topology | BODY 12, SHELL 13, FACE 14, LOOP 15, EDGE 16, FIN 17, VERTEX 18, REGION 19 |
+| Points and analytic curves | POINT 29, LINE 30, CIRCLE 31, ELLIPSE 32 |
+| Analytic surfaces | PLANE 50, CYLINDER 51, CONE 52, SPHERE 53, TORUS 54 |
+| Procedural surfaces and forms | BLENDED_EDGE 56, BLEND_BOUND 59, OFFSET_SURF 60, SWEPT_SURF 67, SPUN_SURF 68, HELIX_SU_FORM 163, HELIX_CU_FORM 184 |
+| Intersections | INTERSECTION 38, CHART 40, LIMIT 41, GEOMETRIC_OWNER 141 |
+| Lists | LIST 70, POINTER_LIS_BLOCK 74 |
+| Spline dependencies | BSPLINE_VERTICES 45, B_SURFACE 124, SURFACE_DATA 125, NURBS_SURFACE 126, KNOT_MULT 127, KNOT_SET 128, TRIMMED_CURVE 133, B_CURVE 134, CURVE_DATA 135, NURBS_CURVE 136, SP_CURVE 137 |
+| Transforms | TRANSFORM 100 |
+| Attributes and values | ATT_DEF_ID 79, ATTRIB_DEF 80, ATTRIBUTE 81, INT_VALUES 82, REAL_VALUES 83, CHAR_VALUES 84, VECTOR_VALUES 86, UNICODE_VALUES 98, FIELD_NAMES 99 |
+
+The field layouts follow the public XT format and reviewed local reference
+readers. They describe the 13006 base, not the effective fields of a newer
+producer. BODY mesh/polyline/index fields, REGION owners and intersection
+extensions must arrive through embedded schema edits. They are not guessed
+members of the base. WORLD follows the public XT Format Reference (April 2008,
+pp. 82-83 and 118); PARTITION/PMARK use the reviewed wire structure below.
+INTERSECTION_DATA (204) is explicitly known absent from base 13006; its
+complete first-use definition is read from the stream. Other unlisted types
+have **unknown** base membership. The parser stops there rather
+than interpreting an unknown base type as a new embedded type. This is raw
+schema decoding; it does not construct or validate a B-Rep. Nonzero user-field
+word counts are unsupported.
+
+An external JSON catalog must name the **complete exact input schema key**:
+
+```json
+{
+  "schema_key": "SCH_1234567_12345_13006",
+  "source": "synthetic example",
+  "base_types": [
+    {
+      "node_type": 12,
+      "name": "SYNTHETIC",
+      "description": "Example only; not the actual BODY definition",
+      "fields": [
+        {"name": "value", "type": "d", "pointer_class": 0,
+         "elements": 0, "transmitted": true}
+      ]
+    }
+  ],
+  "absent_types": [204]
+}
+```
+
+`base_types` supplies known complete base layouts; `absent_types` explicitly
+asserts nonmembership in the base. Omitted types remain unknown. For a key
+without an embedded base, definitions are used directly with no schema bytes.
+Catalog files are limited to 4 MiB and JSON nesting to 64 levels. They are
+provided by the caller and are not downloaded or inferred from nearby versions.
+Field codes are `u c l n w d p q t f i v b h`. `elements` is 0 for a scalar,
+1 for the single final variable field, or at least 2 for a fixed array.
+A nonzero `pointer_class` requires codec `p`.
+
+In C++, include `<openparasolid/schema.h>` and call
+`SchemaParser::Parse(span, catalog, limits)` or `ParseFile(path, catalog, limits)`.
+`ReadDefinition` exposes standalone decoding when base membership is already
+known. Reports own their data and retain schemas, edit offsets, node ranges,
+field ranges and values. Composite values are flattened with an explicit
+component stride. Unset values become JSON `null`; nonfinite doubles retain
+all bits in a `nonfinite_f64_bits` object.
+
+Header, option and catalog failures return an error (CLI status 1). A later
+unsupported type, malformed node or resource limit returns the completed
+prefix plus a diagnostic, the failing node's offset and the uninterpreted tail
+(CLI status 2). Schemas resolved before a failed node may still be reported.
+`complete: true` and CLI status 0 require the valid final terminator; they do
+not validate reference targets, topology, geometric consistency or delta state.
+`--summary` omits schema and node arrays. `--max-records` sets the positive
+node limit in this mode. Defaults bound nodes to 10,000, resolved types to 1,024,
+fields per type to 4,096, catalog/resolved/decoded fields each to 65,536, scalar
+values to 1,000,000 and input to 128 MiB; C++ callers can set `SchemaLimits`.
+Byte accounting is:
+
+```text
+complete:   decoded_end + terminator_size == byte_size
+incomplete: decoded_end == uninterpreted_offset
+            uninterpreted_offset + uninterpreted_size == byte_size
+```
+
+## Delta administration prefix
+
+`--nodes` reads the leading PARTITION (type 3) and its current PMARK (type 4)
+in a deltas stream. Their two base layouts contain 2 and 10 fields. First-use
+`ff` and schema edits that preserve the reviewed field roles are supported.
+Unknown or modified roles stop with an unsupported-schema diagnostic.
+An explicit caller catalog remains authoritative and must supply these layouts
+with the same field names, types and pointer classes for typed interpretation.
+
+PARTITION carries `current_pmark` (pointer class 4) and `highest_id` (32-bit word).
+PMARK carries four class-4 references (`preceding`, `first_following`,
+`next_sibling`, `prev_sibling`), four words (`n_new_nodes`, `n_del_nodes`,
+`n_copy_mod_nodes`, `delta_key`), one logical `delta_is_forward` byte, and the
+32-bit `identifier`. Its scalar tail is 21 bytes; the logical precedes the
+identifier. The node index and reference indices use compact transmit encoding,
+including extended indices. Decoded index zero means null.
+
+The PARTITION index must differ from its non-null `current_pmark`, and that
+reference must name the following PMARK. Allocation need not be consecutive.
+The PMARK direction must be 0 or 1. No ordering or null constraint is guessed
+for historical marks that have not yet been read.
+
+`SchemaParseReport::delta_prefix` and JSON `delta_prefix` expose the validated
+pair, its byte range, the partition and the current mark. This object also
+appears with `--summary`; it is null until both complete nodes and their link
+are valid. IDs, counts and keys retain all 32 bits here, including bit patterns
+that generic schema integer values represent as negative or unset. The generic
+node/field report retains its normal scalar interpretation and exact ranges.
+
+The following supported packets are retained separately as described below.
+Unknown framing keeps the whole undecoded tail and the validated prefix. A failed PMARK leaves the preceding completed PARTITION in
+`nodes`, but no validated `delta_prefix`. Ending a deltas stream without the
+pair is an error. A delta stream can finish with two or four null references at the exact end;
+the four-reference form takes precedence. These have `terminator_size` 4 or 8.
+`complete` describes framing, not applied changes.
+
+This reads administration and bounded packets. It does not yet reconstruct
+the full mark graph, apply changes, select a configuration, or merge a partition
+with its changes. The next parser boundary is retained as a diagnostic.
+
+The field structure was compared with cadmpeg's documented PARTITION/PMARK
+format and checked against 811 locally extracted SolidWorks delta streams.
+The C++ implementation and synthetic tests are original MIT code. No Apache
+parser code or private CAD fixtures are incorporated.
+
+## Delta reference maps and historical packets
+
+After the validated prefix, `--nodes` consumes supported packets only at the
+current sequential boundary. `delta_packets` retains each packet's kind,
+offset, size, terminal and entries. Summary JSON reports `delta_packet_count`,
+`delta_reference_count` and `delta_historical_mark_count`, while omitting the
+packet arrays. Packet bytes contribute to `decoded_end`; a failed packet
+contributes no bytes or entries and its entire span remains uninterpreted.
+
+Two forms are supported:
+
+- A self-delimiting reference/type map is `0001 0001`, zero or more
+  `compact_reference, node_type:u16 BE` entries, then `0001 0000 word:u16 BE`.
+  Entry references are non-null and the terminal word is nonzero. Empty maps,
+  extended indices and repeated references are retained. Type labels are
+  bounded by the header range and remain declared labels; their schema and
+  target existence are not established by the map. Entries alone do not imply
+  creation, deletion, replacement or final-state membership.
+- A historical PMARK packet is `0001 0001` followed by one or more type-4
+  instances in the already established base layout, without another first-use
+  schema declaration. An optional ten-byte terminal is
+  `0001 0001 0001 00000000` or `0001 0001 0001 00000001`.
+  It belongs to the preceding historical packet. Its final value is retained
+  in `terminal_word` as numeric 0 or 1; without a terminal the field is null.
+  No state or direction meaning is assigned to that value.
+  Every occurrence keeps its fields, byte range and full-width words. Repeated
+  identities remain separate events in packet order; they do not replace the
+  prefix's current mark or enter the current `nodes` identity table.
+
+The standalone packet reader stops as ambiguous if both grammars complete at
+the same start. It does not interpret bytes after a candidate packet.
+`SchemaParser` has a complete sequential stream and additionally checks the
+two-byte node type immediately after each ambiguous candidate. A type outside
+`1..schema_max_type` makes that boundary impossible. If exactly one candidate
+has an impossible boundary and the other is followed by an in-range type,
+the latter is retained. An in-range type is only a necessary condition; normal
+schema and payload validation still follows. No bytes are skipped or searched.
+
+Two in-range boundaries remain ambiguous, including unknown base types.
+Missing boundary bytes do not select a candidate. Two out-of-range boundaries
+produce an invalid-record diagnostic without committing either candidate.
+A resource cap also cannot select one grammar by eliminating the other. Maps
+without the self-delimiting word terminal, shared-kind boundaries, the alternate
+one-byte map prefix and other change-packet forms remain unsupported.
+Historical packet capture does not validate reachability, sibling reciprocity,
+acyclicity or a selected state. A repeated historical identity is preserved,
+not asserted to be a valid unique mark in a reconstructed graph.
+
+`DeltaPacketReader::Read(span, offset, schema_max_type, max_entries)` exposes
+standalone packet framing. Callers must establish the packet boundary and the
+base PMARK layout. `SchemaParser` establishes those conditions from its prefix.
+`SchemaLimits` additionally bounds packets to 10,000 and the combined number
+of reference entries and historical marks to 100,000 by default.
+
+Supported status-framed nodes can follow these packets, as described below.
+Missing definitions still report an unknown base type. Complete packet capture
+is not delta application or saved-state reconstruction.
+
+## Status-framed delta node occurrences
+
+After PARTITION/current-PMARK, schema-defined delta nodes use their effective
+field order and have a binary status byte after **every pointer value**.
+The node's own compact index has no status byte. Variable element counts still
+precede that index; fixed and variable pointer arrays each carry a status per
+entry. Schema metadata has its own ordinary encoding and carries no such
+extra statuses. First-use schema resolution uses the same C/D/I/A/Z decoder.
+
+`SchemaParseReport::delta_nodes` and JSON `delta_nodes` preserve these complete
+occurrences in source order. Repeated node indices, including indices present
+in the administration prefix, remain separate occurrences. They do not replace
+`nodes`, which retains ordinary nodes and the delta administration prefix.
+`delta_node_count` is present in summary JSON. A `status_framed` node flag and
+per-field `reference_statuses` distinguish the two physical encodings. Status
+0 and 1 are retained without assigning create/delete/modify meanings. A status
+never changes whether a pointer index is null. Invalid statuses and truncated
+fields leave the entire failed node uninterpreted.
+
+Delta integer/tag fields expose unsigned 32-bit wire words, including all-ones
+and generic unset bit patterns. Ordinary node integer/tag fields keep their
+signed/nullable interpretation. Short integers, nullable real values, characters,
+logicals and UTF-16 code units keep their respective codecs. A delta `h` value
+has eleven scalar components; an ordinary `h` value has three. Nontransmitted
+variable fields consume no pointer or status bytes. Unsupported opaque codecs
+remain explicit failures.
+
+`max_nodes`, `max_total_fields` and `max_values` include all decoded delta
+occurrences; status bytes do not count as additional scalar values. The packet
+entry limits remain separate. Current generic nodes still require unique
+indices. Plain partition/transmit streams use no pointer statuses.
+
+The built-in base subset covers the families listed above. Unlisted
+definitions remain unknown, except for the explicit absence of type 204
+from base 13006. Referencing an unknown type does not require its definition,
+but decoding its payload does. Full-declaration support is limited to type
+204 in the built-in catalog or types explicitly known absent in a caller
+catalog. Optional repeated `ff` envelopes,
+shared status/tag bytes, compact tombstones and unsupported packet forms are
+not inferred from lookahead. A zero terminal value is supported only as the
+optional suffix of a historical packet. A standalone reference-map terminal
+with a zero word remains unsupported.
+
+The C++ field codecs and definitions are MIT code; format facts were checked
+against local reference readers. Delta field values, statuses and node ranges
+were compared with an independent Python reader over all 811 local streams.
+Even `complete: true` only establishes supported stream framing. No changes
+are applied and no final configuration, reference closure, topology or geometry
+is certified.
+
+## Topology and analytic geometry records
+
+The additional base layouts decode source fields and preserve source units,
+orientation characters, tolerance values, pointer classes and coefficient
+order. FACE includes its front- and back-shell links. EDGE preserves its FIN,
+curve and ownership references. BODY keeps the 23-field base before embedded
+insertions; REGION keeps its seven-field base before an owner is appended.
+POINT has four pointer fields and a three-component position; its owner class
+is 1011.
+
+Curve and surface records retain their common geometry header, including sense,
+and their typed scalar/vector groups. Cone radius, sine and cosine remain
+separate source coefficients. Spheres and tori preserve their coordinate axes
+and radii. No orientation, parameter range, unit or coefficient is normalized.
+INTERSECTION retains its fixed two-surface pointer array and chart/limit links.
+CHART and LIMIT use their declared counts and the ordinary three- or delta
+11-component `h` encoding. VECTOR_VALUES retains vector element grouping.
+GEOMETRIC_OWNER preserves its four ring/geometry references.
+
+Tests use synthetic ordinary and delta records, embedded BODY insertions,
+coefficient groups, pointer-status arrays and truncations. Independent local
+checks compare newly decoded field values, statuses and node byte boundaries.
+Reading these fields does not establish reciprocal links, valid loops, selected
+historical state, geometric evaluation or a solid model. Procedural surface definitions and remaining delta forms are separate work.
+
+## Lists and spline dependency records
+
+The 13006 LIST base contains twelve transmitted fields. `list_type` is a
+four-byte integer; its trailing block-cursor fields and `notransmit` logical
+are part of the base. A stream edit may drop any remaining base fields at `Z`.
+The stored `notransmit` value is decoded, not used to suppress later records.
+
+The POINTER_LIS_BLOCK base contains `n_entries`, `next_block` (class 74), and
+the final variable pointer array `entries` (class 1001). Its array count
+precedes its node index. A newer `index_map_offset` field is decoded from an
+embedded insertion, not built into the 13006 layout. Every transmitted delta
+pointer, including null array entries and `next_block`, retains its status.
+No twenty-entry array size or populated-entry count is inferred from a part
+name. List ownership, chain closure, cursor validity and live membership are
+not established by raw decoding.
+
+Spline records retain scalar control arrays (45), signed/nullable short knot
+multiplicities (127), and real knot arrays (128). NURBS_CURVE and NURBS_SURFACE
+keep degrees, vertex counts, dimensions, knot counts, periodic/closed/rational
+flags and their control/knot references. U and V descriptor fields remain
+separate. B_CURVE, B_SURFACE, TRIMMED_CURVE and SP_CURVE retain their common
+geometry headers and distinct tails. CURVE_DATA's analytic-form pointer has
+union class 1036; no particular concrete form is assumed. SURFACE_DATA keeps
+its four intervals, state bytes and four procedural-form references.
+
+Control coordinates and rational weights are not divided, regrouped, sampled
+or approximated. Knot order and duplicates remain unchanged. A descriptor does
+not yet cause another node's flat array to become a validated spline or prove
+that referenced control and knot counts agree. TRANSFORM retains its nine
+matrix scalars, translation, scale, flags and perspective vector without
+applying them to geometry or changing matrix order.
+
+Synthetic tests cover ordinary and delta encodings, list field widths, dropped
+base tails, inserted list-block fields, extended array pointers, spline
+coefficient groups, nullable multiplicities, truncation and oversized counts.
+Independent checks compare the new 14 base layouts and completed stream fields.
+The local comparison reader uses the documented twelve-field LIST base rather
+than sldprt2step's shorter LIST table, and independently retains variable-field
+transmission flags. All comparison inputs and outputs stay outside the repository.
+
+## Embedded intersection data
+
+INTERSECTION_DATA (204) is absent from the reviewed 13006 base schema, whose
+maximum type is 185. The built-in catalog marks only type 204 as known absent;
+it supplies no fixed payload layout for it. Its first occurrence must carry
+a complete definition, including the name, description, fields, pointer
+classes, array extents and transmission flags. Later occurrences reuse that
+stream's resolved definition. An unchanged `ff` marker without a base layout
+is an invalid-schema error. Caller catalogs remain authoritative and do not
+inherit the built-in absence list.
+
+The observed definitions contain a raw `uv_type` byte and a variable array
+of doubles. They preserve all scalar values, unset markers and signed zero.
+No UV enumeration, chart association, tuple stride or agreement with hvecs is
+inferred from the node number. Full declarations with other valid fields are
+handled by the same generic codecs. Empty and nontransmitted arrays retain
+their declared count and transmission metadata without consuming value bytes.
+Delta pointers, if declared, use the existing per-reference status encoding.
+Unknown membership for other node types remains a stop condition even when
+the next bytes resemble a full declaration.
+
+Synthetic tests cover full declarations and reuse, alternate field layouts,
+nullable doubles, fixed pointer arrays, delta statuses, empty arrays,
+nontransmitted arrays, unchanged-marker rejection, truncation, value limits,
+base-version scoping and caller catalog precedence. Independent checks over
+all 5,976 local streams compare 11,251 completed type-204 nodes in 920 streams,
+22,502 field groups and 282,677 values. Their first-use definitions are read
+independently rather than supplied as a guessed base layout.
+
+## Attribute definitions and names
+
+ATTRIB_DEF (80) retains its definition chain, identifier reference, type ID,
+eight action bytes, FIELD_NAMES reference, fourteen logical owner flags and
+variable array of field-type bytes. The 13006 base's nontransmitted callback
+pointer is excluded from this layout; it consumes neither bytes nor a delta
+pointer status. Embedded schema edits remain authoritative for newer streams.
+Action and field codes remain raw bytes. No attribute actions are executed,
+and owner legality or consistency with an ATTRIBUTE's values is not inferred.
+
+ATT_DEF_ID (79) retains its variable-length identifier as raw character bytes,
+including embedded zero and non-ASCII values. FIELD_NAMES (99) retains a
+variable pointer array with union class 1037, whose names can be CHAR_VALUES
+or UNICODE_VALUES. Those two value types were already supported. Empty arrays
+consume no values or status bytes; each transmitted delta pointer has its own
+status, including null and extended references. String decoding, name
+resolution and attribute-value interpretation remain separate work.
+
+The three base layouts were checked against the XT Format Reference
+(July 2022, pp. 101-102), the 13006 schema supplied with ps-parser, and the
+corresponding cadmpeg base descriptors. Synthetic tests cover ordinary and
+delta encodings, zero/one/multiple variable entries, fixed array widths,
+nullable type IDs, extended references, strict logical values, embedded
+insertions, truncation and resource bounds. Independent comparisons over all
+5,976 local streams match 53,109 completed attribute-definition/identifier
+nodes, 212,583 field groups and 1,211,292 values. No FIELD_NAMES node occurs
+in the decoded corpus prefixes; its wire decoding is covered synthetically.
+
+## Procedural geometry and forms
+
+The 13006 base catalog includes blend surfaces and boundaries, offset, swept
+and spun surfaces, and helical curve/surface forms. These layouts were checked
+against the XT Format Reference (July 2022, pp. 43, 60, 62, 67, 68 and 70) and
+independently compared with the corresponding 13006 base field descriptors.
+Embedded schema edits still determine each stream's effective layout.
+
+BLENDED_EDGE retains both supporting surfaces, its spine, two-element range
+and weight arrays, both boundary references and start/end limits. Each delta
+pointer array entry has its own status, including null references. BLEND_BOUND
+uses a signed nullable short. OFFSET_SURF preserves its logical flag, signed
+offset and nullable scale. SWEPT_SURF retains the section, sweep vector and
+scale; SPUN_SURF retains its profile, vectors, trim parameters and scale in
+wire order. Unset trim parameters and vector coordinates remain unset.
+HELIX_SU_FORM contains two vectors, handedness, a turns interval, pitch, gap
+and tolerance; it has no common surface header. HELIX_CU_FORM (184) instead
+contains three vectors (axis point, axis direction and a representative point),
+handedness, a turns interval, pitch and tolerance. It has neither a common
+curve header nor the surface form's gap field. Values and null markers remain
+in wire order, without generating a helix. Independent checks in the default
+limit run compare 70 curve-form nodes, 490 field groups and 980 scalar values
+across 18 streams. Ordinary/delta synthetic tests also cover extended indices,
+negative pitch, nullable tolerance and every truncated curve-form prefix.
+No surface evaluation,
+normalisation, trimming or blend reconstruction is performed.
+
+Synthetic tests cover ordinary and delta records, fixed arrays, independent
+pointer statuses, signed shorts, strict logical values, nullable coefficients,
+embedded edits and atomic rejection of truncated helix records. A local
+independent comparison checks all completed delta fields, values, statuses
+and byte ranges. Private streams, reference documents and comparison outputs
+remain outside this repository.
+
+## Validation and reference material
+
+Repository tests use synthetic bytes only. CAD files, extracted private
+streams and comparison outputs remain outside the repository.
+
+After adding HELIX_CU_FORM, 5,881 of 5,976 local streams reach their supported
+closing marker with the default limits, compared with 5,864 before this
+extension. All 18 earlier stops at type 184 are passed; one of those streams
+then reaches a resource limit. The remaining 95 streams stop only at configured
+resource bounds. With the explicit larger profile above, all 95 also reach
+their closing marker, so all 5,976 local streams can be framed. The largest
+completed runs contain 221,095 nodes or 221,759 combined delta entries. Previous
+decoded coverage is preserved; no format/schema corruption errors or crashes
+occur in the corpus run. Completion establishes wire framing, not delta
+application, a reconstructed state or a valid B-Rep.
+
+With sequential boundary checks, 796 of 811 local delta streams reach their
+supported closing marker, compared with 785 before this extension. All eleven
+previously ambiguous packets resolve as reference maps; their apparent PMARK
+endpoints fall inside map entries and precede out-of-range node types.
+Independent checks compare all 6,642 decoded packets, their terminal values,
+mark/reference fields and exact byte ownership alongside 4,251,498 decoded
+node values. With default limits, the remaining 15 delta streams stop at configured field
+limits (13) or node limits (2). They complete with the larger explicit profile.
+This measures wire decoding, not successful delta application. Regression
+checks on all 5,976 local streams show no loss of previously decoded coverage.
+Synthetic tests cover both historical terminal variants, following packets,
+truncated optional suffixes, unsupported terminal values, stream trailers
+and numeric zero in CLI JSON. Boundary tests cover both selection directions,
+two impossible boundaries, unknown schemas, truncated boundary words and entry
+limits. Reference-map terminals still require a nonzero
+word; zero is not accepted by broadening that grammar.
+
+Related format research includes
+[parasolid-kit](https://github.com/monozukuri-ai/parasolid-kit) and
+[cadmpeg](https://github.com/cadmpeg/cadmpeg). Their complete-document and
+partial-reader boundaries are distinct. This library implements its own C++
+reader under MIT and does not incorporate their Apache-licensed partial readers.
+The Apache-2.0 Python project `sldprt2step` is an additional local comparison
+reference for schema handling and future STEP mapping; its code and schema
+tables are not included.
+
+The MIT-licensed [ps-parser](https://github.com/khoanguyen-3fc/ps-parser) by
+khoanguyen-3fc provides another schema and topology traversal reference.
+Its source and schema tables are not incorporated into this implementation.
