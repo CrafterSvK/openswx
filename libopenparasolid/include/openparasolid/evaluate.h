@@ -164,6 +164,30 @@ struct IntersectionChartEvaluation {
 [[nodiscard]] Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
     const Model& model, NodeId curve, double tolerance);
 
+struct IntersectionEvaluationOptions {
+  /// Nonnegative absolute membership tolerance for the stored chart points.
+  double chart_tolerance = 0;
+  /// Positive absolute residual tolerance for interior coincidence/plane solves.
+  double solve_tolerance = 0;
+};
+
+/// Evaluates a directly referenced analytic INTERSECTION within its chart.
+/// Requires a finite parameter and explicit finite tolerances in source units.
+/// Prepares the chart, then locally solves coincidence of its
+/// two supporting surfaces with the XT chord-normal plane. Returns the natural
+/// dP/dt; curve sense does not reverse it. Exact chart parameters return their
+/// stored positions (subject to chart_tolerance, not solve_tolerance).
+/// Interior solves use at most 32 Newton updates and 16
+/// damping trials per update; singular/stalled/nonconvergent solves are errors.
+/// Chart/inversion/normal resource and validity checks remain in force.
+/// Outside-chart parameters are invalid options. No terminator extension, trim
+/// unwrapping, global branch certification or nonanalytic inversion is provided.
+/// EvaluateCurve retains its unsupported result for intersections because it
+/// has no explicit distance tolerance argument.
+[[nodiscard]] Result<CurveEvaluation> EvaluateIntersectionCurve(
+    const Model& model, NodeId curve, double parameter,
+    const IntersectionEvaluationOptions& options);
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_EVALUATE_H_

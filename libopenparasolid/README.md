@@ -430,7 +430,8 @@ dependencies, and remains MIT and STL-only.
 Together with `EvaluateSurfaceNormal`, inversion allows callers to obtain
 oriented normals at analytic chart positions. `EvaluateIntersectionChart`
 combines these operations with chart parameterisation. NURBS/procedural
-inversion and the exact intersection solver remain separate steps.
+inversion remains unsupported; a separate local analytic intersection
+evaluator is described below.
 
 Tests cover oblique/translated and slightly imperfect source frames, explicit
 distance tolerances, seams, signed cone slopes, poles/apices, torus sheets,
@@ -466,7 +467,7 @@ partials. It introduces no CLI settings or dependencies and remains MIT and
 STL-only. Oriented normals provide a building block for intersection chart
 parameterisation. The numeric chart API accepts supplied tangents; the model
 API obtains them through analytic inversion. NURBS/procedural inversion and
-a surface-intersection solver remain pending.
+nonanalytic intersection evaluation remain pending.
 
 Tests cover source orientation, rotated frames, rational/nonrational patches,
 procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,
@@ -516,7 +517,7 @@ Runtime is linear, with only the two bounded output arrays retained.
 This API does not recover surface UV coordinates or tangents from positions,
 certify curve membership or chart error estimates, extend to terminators,
 or solve/evaluate the exact intersection between chart points. `EvaluateCurve`
-continues to report the missing intersection solver explicitly. No CLI
+continues to require the separate intersection API with explicit tolerances. No CLI
 settings, environment variables or dependencies are added; code remains MIT
 and STL-only.
 
@@ -564,8 +565,9 @@ whose forward positions may differ from the stored point by that tolerance.
 The result does not certify exact surface/curve membership, chart accuracy,
 conditioning, branch topology or limit correspondence. Additional type-204
 UV data is not inferred or applied. Trim wrappers and terminator extensions
-are not traversed, and `EvaluateCurve` still requires a solver for exact
-intersection evaluation between chart points. No CLI settings or dependencies
+are not traversed. The separate `EvaluateIntersectionCurve` API evaluates
+analytic interiors with explicit solver options; `EvaluateCurve` retains its
+unsupported result because it has no such controls. No CLI settings or dependencies
 are added; the implementation remains MIT and STL-only.
 
 Synthetic tests cover surface order/senses, forward references, source units,
@@ -578,6 +580,62 @@ other errors in this selection. At a requested tolerance of `1e-8`, the
 maximum independent forward residual is below `1.8e-10` in source units,
 tangent component difference below `9e-15`, and normalized parameter/scale
 difference below `1.2e-16`. Private inputs and comparison tools remain outside
+the repository.
+
+## Analytic intersection evaluation
+
+`EvaluateIntersectionCurve(model, curve_id, parameter, options)` evaluates a
+direct analytic `INTERSECTION` inside its reconstructed chart. It returns
+a point and natural first derivative without flipping them for curve sense.
+`IntersectionEvaluationOptions` requires two explicit finite tolerances in
+source units: nonnegative `chart_tolerance` for stored-point membership and
+positive `solve_tolerance` for interior residuals. A coarse source chart does
+not force a loose numerical solve. The ordinary `EvaluateCurve` overload
+retains an explicit unsupported-format result and points callers to this API.
+
+For an interior parameter, the chart defines a chord point by linear
+interpolation of its endpoint parameters. The XT Format Reference (July 2022,
+p. 47) selects the local intersection of the two supporting surfaces with
+the plane through that point perpendicular to the chord. The implementation
+solves four equations in the two surface UV pairs: three coincidence
+coordinates and the first surface point's signed distance to that plane.
+The returned position is the first surface's evaluated point. Its distance
+to the second surface's evaluated point and its absolute plane residual must
+both satisfy `solve_tolerance`.
+
+The initial UV pairs interpolate recovered chart parameters, using local
+periodic branches for azimuth and ring-torus meridians. Newton updates use
+natural surface partials, independently scaled Jacobian columns and partial
+pivoting. At most 32 updates are attempted, each with at most 16 halving
+trials that must decrease the residual. Invalid trial parameters are rejected;
+singular systems, stalled or nonconvergent iterations return explicit errors.
+There is no polyline fallback or global branch search.
+
+The oriented unit tangent `T` is formed from the two surface normals at the
+solution. For unit chord direction `D`, chord length `C` and parameter span
+`dt`, the derivative is `T * C / (dt * dot(T,D))`. Nonpositive projections and
+unrepresentable derivatives are errors. At an exact chart parameter the
+stored position is returned, subject to `chart_tolerance` rather than the
+interior solve tolerance. Knot derivatives use the following chord, except
+at the final endpoint. Source rounding can affect numerical C1 agreement.
+
+Chart preparation is repeated per call and retains its bounds and dependency
+checks. Parameters outside the chart are invalid options; terminator extensions,
+trim wrappers and nonanalytic surfaces remain unsupported by this API.
+Residual tolerances are not bounds on point/derivative error near poorly
+conditioned intersections. Global branch identity, regularity, chart accuracy
+and topology are not certified. No CLI settings or dependencies are added;
+the implementation remains MIT and STL-only.
+
+Tests compare circles and lines with closed-form positions/derivatives and
+central differences, including angular seams, knot behavior, signed source
+orientation, cylinder/cone/torus sections, separate tolerance roles and explicit
+numerical failures. An independent SciPy root solver with complex-step
+Jacobians checks 5,400 interior evaluations across the 419 analytic charts
+already accepted in the 90-stream selection. All queries succeed with
+`chart_tolerance = 1e-9` and `solve_tolerance = 1e-13`. Maximum point component
+difference is below `3e-13` in source units, and normalized derivative component
+difference below `8e-8`. Private inputs and comparison tools remain outside
 the repository.
 
 ## Intersection curve definitions
@@ -606,7 +664,7 @@ type-204 UV arrays remain in the raw graph. No UV tuple layout is inferred.
 Chart and limit hvecs transmit positions only in these non-delta streams;
 tangents, surface parameters and individual chart parameters are not invented.
 
-Model construction provides definitions for a future surface-intersection solver.
+Model construction provides definitions for the separate intersection evaluator.
 `EvaluateCurve` still returns an explicit unsupported-format error for an
 intersection curve, including through a trim. The chart is a chordal guide,
 not the exact curve. The separate parameterisation API requires supplied
