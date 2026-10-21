@@ -147,9 +147,8 @@ TEST(ParasolidEvaluate, RejectsOverflowAndAllowsFiniteExtremeResults) {
 
 TEST(ParasolidEvaluate, RejectsUnsupportedPayloadsExplicitly) {
   const GeometryPayload unsupported[] = {
-      PointGeometry{},      PlaneGeometry{},       CylinderGeometry{},
-      ConeGeometry{},       SphereGeometry{},      TorusGeometry{},
-      NurbsCurveGeometry{}, NurbsSurfaceGeometry{}};
+      PointGeometry{},  PlaneGeometry{}, CylinderGeometry{},    ConeGeometry{},
+      SphereGeometry{}, TorusGeometry{}, NurbsSurfaceGeometry{}};
   for (const auto& geometry : unsupported) {
     const auto result = EvaluateCurve(geometry, 0);
     ASSERT_FALSE(result.ok());

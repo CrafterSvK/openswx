@@ -4,6 +4,8 @@
 
 #include <cmath>
 
+#include "evaluate_internal.h"
+
 namespace openparasolid {
 namespace {
 constexpr double kFrameTolerance = 1e-10;
@@ -86,6 +88,9 @@ Result<CurveEvaluation> EvaluateCurve(const GeometryPayload& geometry,
     return EvaluateConic(ellipse->center, ellipse->normal, ellipse->x_axis,
                          ellipse->major_radius, ellipse->minor_radius,
                          parameter);
+  }
+  if (const auto* curve = std::get_if<NurbsCurveGeometry>(&geometry)) {
+    return internal::EvaluateNurbsCurve(*curve, parameter);
   }
   return Result<CurveEvaluation>::Err(
       {ErrorCode::kUnsupportedFormat, 0,

@@ -14,10 +14,10 @@ Geometry mode and existing options also support `OPENPARASOLID_*` environment
 settings, with command-line precedence. Delta application and B-Rep validation
 remain separate work.
 
-## Analytic curve evaluation
+## Curve evaluation
 
-`openparasolid/evaluate.h` evaluates an untrimmed line, circle or ellipse,
-returning its position and natural first derivative in source coordinates:
+`openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS
+curve, returning its position and natural first derivative in source coordinates:
 
 ```cpp
 openparasolid::LineGeometry line{{1, 2, 3}, {0, 0, 1}};
@@ -29,23 +29,51 @@ if (evaluated.ok()) {
 ```
 
 For model data, pass `geometry.payload` to `EvaluateCurve`. The parameter is
-signed and unbounded; circle and ellipse parameters are angles in radians.
+signed and unbounded for analytic curves; circle and ellipse parameters are
+angles in radians. NURBS parameters are restricted to the defined knot domain.
 The returned derivative is `dP/dt`, without normalization or curve-sense
 reversal. This follows the natural parameter direction; edge orientation and
 trimming belong to topology. Units and source coefficients are preserved.
 
-The evaluator requires finite inputs, positive radii, unit directions and
+Analytic evaluation requires finite inputs, positive radii, unit directions and
 orthogonal conic frames (absolute tolerance `1e-10`). It rejects malformed data
 instead of normalizing it. These checks are stricter than the model builder's
 initial nonzero/nonparallel checks. Nonfinite parameters, nonfinite results
 and unsupported payloads return explicit `Result` errors. Evaluation errors
 use offset zero because a payload does not contain a source byte offset.
 
+NURBS evaluation uses de Boor interpolation with derivative propagation in
+homogeneous coordinates. Rational controls already contain weighted spatial
+coordinates followed by a positive weight; no extra multiplication by the
+weight is performed. Two-dimensional controls are returned in the XY plane.
+The knot domain is `[U[degree], U[control_count]]`, where `U` is the expanded
+knot vector. Both endpoints are included. At repeated interior knots the
+returned derivative is right-sided; at the domain end it is left-sided.
+There is no automatic periodic wrapping or extrapolation, including for curves
+marked periodic. Closure and periodic continuity are not certified.
+
+Public NURBS payloads are checked again: dimensions, counts, finite controls,
+positive weights, distinct knot ordering, multiplicities, expanded knot count
+and a nonempty domain. Evaluation is bounded to degree 64, 1,000,000 control
+scalars, and 1,000,000 entries in each knot/multiplicity array or the expanded
+knot vector. Excessive input returns `kResourceLimit` before expansion.
+Nonfinite or out-of-domain parameters return `kInvalidOptions`; malformed
+payloads and unrepresentable numerical results return `kInvalidRecord`.
+Scratch space is linear in the expanded knot count plus degree; de Boor work
+is quadratic in degree. Extended-precision intermediate calculations reduce
+overflow, but final positions and derivatives must fit in `double`.
+
 The formulas and frame conventions follow the XT Format Reference (July 2022,
-pp. 35–38); natural derivatives and curve sense follow section 5.2.8 (p. 82).
-NURBS and surface evaluation, parameter-domain validation, topology traversal,
-delta application and STEP export remain separate work. The inspector's JSON
-and command-line options are unchanged.
+pp. 35–40); natural derivatives and curve sense follow section 5.2.8 (p. 82).
+Surface evaluation, topology traversal, delta application and STEP export
+remain separate work. The inspector's JSON and command-line options are unchanged.
+
+Synthetic tests cover rational quarter circles, 2D/3D controls, homogeneous
+scaling, endpoint and repeated-knot derivatives, unclamped knots, invalid data
+and resource limits. An independent local comparison with SciPy agrees on
+8,565 samples from 600 synthetic curves and 192 curves in 20 private streams.
+SciPy and private comparison artifacts are not library dependencies or
+repository fixtures.
 
 ## Build and run
 
