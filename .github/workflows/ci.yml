@@ -9,7 +9,13 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-24.04
+    # GitHub-hosted Linux runners provide the Docker host; builds run in Debian.
+    runs-on: ubuntu-latest
+    container:
+      image: debian:13-slim
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -43,22 +49,21 @@ jobs:
             exe_linker_flags: "-fsanitize=undefined"
             shared_linker_flags: "-fsanitize=undefined"
 
-    name: ${{ matrix.name }}
+    name: Debian 13 / ${{ matrix.name }}
     env:
+      DEBIAN_FRONTEND: noninteractive
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
       ASAN_OPTIONS: detect_leaks=1
       UBSAN_OPTIONS: print_stacktrace=1
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
       - name: Install system dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
+          apt-get update
+          apt-get install -y --no-install-recommends \
             build-essential \
+            ca-certificates \
             clang \
             cmake \
             curl \
@@ -72,6 +77,9 @@ jobs:
             ninja-build \
             nlohmann-json3-dev \
             pkg-config
+
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Configure
         run: >
