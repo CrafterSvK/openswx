@@ -186,6 +186,12 @@ Its strict analytic unit-frame, NURBS knot-domain and finite-result checks do
 not change model construction or the meaning of `typed_geometry_complete`.
 See README for its supported scope.
 
+`EvaluateSurface` evaluates the five analytic surface payloads and returns
+natural first partial derivatives. Its frame, cone-angle and parameter-domain
+checks are independent of initial model construction. Singular boundary points
+remain evaluable, but no face trimming, sense reversal or placement transform
+is applied. NURBS surface evaluation remains separate work.
+
 Synthetic tests cover ownership, copying/moving, forward and cyclic references,
 null/missing/wrong/unreviewed classes, malformed reports, reordered fields,
 finite coefficients, lemon tori, shared spline arrays, rational coordinates,

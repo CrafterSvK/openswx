@@ -65,7 +65,7 @@ overflow, but final positions and derivatives must fit in `double`.
 
 The formulas and frame conventions follow the XT Format Reference (July 2022,
 pp. 35–40); natural derivatives and curve sense follow section 5.2.8 (p. 82).
-Surface evaluation, topology traversal, delta application and STEP export
+NURBS surface evaluation, topology traversal, delta application and STEP export
 remain separate work. The inspector's JSON and command-line options are unchanged.
 
 Synthetic tests cover rational quarter circles, 2D/3D controls, homogeneous
@@ -74,6 +74,61 @@ and resource limits. An independent local comparison with SciPy agrees on
 8,565 samples from 600 synthetic curves and 192 curves in 20 private streams.
 SciPy and private comparison artifacts are not library dependencies or
 repository fixtures.
+
+## Analytic surface evaluation
+
+`EvaluateSurface(geometry.payload, u, v)` in `openparasolid/evaluate.h` returns
+a `SurfaceEvaluation` with `position`, `u_derivative` and `v_derivative`.
+It supports planes, cylinders, cones, spheres and tori. Results use source
+coordinates and natural partial derivatives; surface/face sense, placement
+transforms, length units and face trimming are not applied. The underlying
+surface frame is preserved, with `Y = axis cross X` (the normal is the axis
+for a plane). Frames must be orthonormal within absolute tolerance `1e-10`.
+
+| Surface | Parameters and supported domain |
+|---|---|
+| Plane | Signed distances `u`, `v`, both unbounded |
+| Cylinder | Angle `u` in radians and signed axial distance `v`, both unbounded |
+| Cone | Angle `u` in radians; signed axial parameter `v` with `r + v*tan(a) >= 0` |
+| Sphere | Longitude `u` in radians, unbounded; latitude `v` in `[-pi/2, pi/2]` |
+| Ring torus (`major > minor`) | Angles `u`, `v` in radians, both unbounded |
+| Apple/lemon torus | Angle `u`, unbounded; principal minor angle `abs(v) <= acos(-major/minor)` |
+
+The cone uses the XT convention `P - v*A + (r + v*tan(a))*radial(u)`.
+Its axis has the opposite direction to the PK interface's cone axis. The
+supported half-angle is positive and acute; its stored sine and cosine must
+be positive and satisfy unit length within `1e-10`. Cone radius may be zero.
+The evaluator rejects parameters beyond the apex instead of returning the
+other mathematical half-cone.
+
+Torus minor radii must be positive. Positive major radii support ring, apple
+and horn (`major == minor`) tori. Negative major radii preserve the XT lemon
+sheet and require `abs(major) < minor`; zero major radius is a sphere case
+and is rejected. Apple/lemon parameters outside the principal branch are
+rejected without automatic wrapping. Angular endpoints are compared with
+the computed `acos` limit, allowing endpoint rounding without clamping radii.
+
+Sphere poles, cone apices and torus branch endpoints are valid evaluation
+points even though a partial derivative may vanish there. No unit normal or
+regularity certification is returned. Floating-point trigonometric values at
+these boundaries may leave derivatives close to zero rather than exactly zero.
+
+Both parameters must be finite. Invalid parameters or domains return
+`kInvalidOptions`; malformed geometry or unrepresentable numerical results
+return `kInvalidRecord`; unsupported payloads, including NURBS surfaces, return
+`kUnsupportedFormat`. Error offsets are zero, as for `EvaluateCurve`.
+Intermediate calculations use extended precision where available and final
+values must fit in `double`. The implementation adds no dependencies or CLI
+options and requires no dynamic scratch storage for surface evaluation.
+
+Formulas and torus types follow the XT Format Reference (July 2022, pp. 53–59).
+Synthetic tests cover rotated frames, natural derivatives, the XT cone axis,
+singular/domain boundaries, malformed payloads, numerical overflow and model
+integration without applying surface sense.
+An independent NumPy comparison checks 2,910 samples from 600 synthetic
+surfaces and 370 surfaces in 25 private streams, using complex-step
+differentiation for both partials. Comparison tools and data stay outside the
+repository and are not dependencies of the library.
 
 ## Build and run
 

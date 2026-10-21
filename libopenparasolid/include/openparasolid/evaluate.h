@@ -28,6 +28,25 @@ struct CurveEvaluation {
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
     const GeometryPayload& geometry, double parameter);
 
+struct SurfaceEvaluation {
+  Vector3 position;
+  /// Natural partial derivatives, without normalization or sense reversal.
+  Vector3 u_derivative;
+  Vector3 v_derivative;
+};
+
+/// Evaluates a PLANE, CYLINDER, CONE, SPHERE or TORUS in source coordinates.
+/// Angular parameters are radians. Frames must be orthonormal within 1e-10.
+/// Sphere latitude v lies in [-pi/2, pi/2]. Cones require a positive acute
+/// half-angle and r + v*tan(angle) >= 0 (XT axis convention: axial term -v*A).
+/// Apple/lemon tori use the principal branch |v| <= acos(-major/minor);
+/// ring tori have no v restriction. No periodic branch wrapping is performed.
+/// Singular boundary points are allowed: partial derivatives may be zero.
+/// Surface/face sense, face trimming, placement transforms and units are not
+/// applied. Errors follow EvaluateCurve; NURBS surfaces remain unsupported.
+[[nodiscard]] Result<SurfaceEvaluation> EvaluateSurface(
+    const GeometryPayload& geometry, double u, double v);
+
 }  // namespace openparasolid
 
 #endif  // OPENPARASOLID_EVALUATE_H_
