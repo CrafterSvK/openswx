@@ -392,6 +392,55 @@ samples, 120 unavailable-payload errors and 80 explicit NURBS domain errors;
 evaluated endpoints agree within `1.5e-10` in source units. Private inputs
 and comparison tools remain outside the repository.
 
+## Analytic surface inversion
+
+`InvertSurface(geometry, point, tolerance)` and its model/ID overload recover
+natural `u/v` parameters on planes, cylinders, cones, spheres and tori. The
+result includes the distance between the requested point and its forward
+evaluation. A finite nonnegative absolute tolerance in source units is
+required; success means that this measured distance does not exceed it.
+Zero tolerance requires exact point agreement. There is no implicit geometric
+tolerance and no general closest-point guarantee.
+
+The actual source basis is inverted, including small frame residuals already
+accepted by `EvaluateSurface`; axes are not normalized or replaced. Plane
+coordinates follow the stored x-axis and `axis cross x` direction. Cylinder
+and cone axial parameters retain the writer's `+v*axis` convention. Azimuth
+and torus meridian angles use the principal `atan2` branch; spherical latitude
+lies in `[-pi/2, pi/2]`. Undefined azimuth is represented by zero. Recovering
+parameters at a sphere pole or cone/torus singularity does not imply that a
+parametric normal exists there.
+
+Ring, apple, lemon and horn tori retain the forward evaluator's principal
+sheet. An angular overshoot within eight double-precision epsilons times
+`max(1, branch_bound)` may snap to the branch endpoint to accommodate rounding;
+the final point must still satisfy the caller's unchanged distance tolerance.
+No additional sheet or periodic continuation is searched.
+
+The returned parameters are always checked by the existing forward evaluator,
+including its geometry/frame validity, domain and representability rules.
+Invalid request values return `kInvalidOptions`; nonmatching points, candidate
+parameters outside the natural domain and invalid definitions/results return
+`kInvalidRecord`. Missing or untyped model targets retain explicit lookup
+errors. NURBS, spun, swept and other geometry kinds return
+`kUnsupportedFormat`. Surface/face senses, placement and units are not applied.
+The implementation uses bounded stack storage, adds no CLI settings or
+dependencies, and remains MIT and STL-only.
+
+Together with `EvaluateSurfaceNormal`, inversion allows callers to obtain
+oriented normals at analytic chart positions. Automatic chart tangent
+construction, NURBS/procedural inversion and the exact intersection solver
+remain separate steps.
+
+Tests cover oblique/translated and slightly imperfect source frames, explicit
+distance tolerances, seams, signed cone slopes, poles/apices, torus sheets,
+extreme radii, invalid data and model lookup. A separate comparison generates
+19,668 points with independent NumPy forward equations from analytic surfaces
+in 90 selected private streams, then checks the recovered parameters modulo
+their angular periods. Maximum parameter difference is below `2e-13`, and
+maximum forward residual below `4e-16` in source units. Private inputs and
+comparison tools remain outside the repository.
+
 ## Oriented surface normals
 
 `EvaluateSurfaceNormal(model, surface_id, u, v)` returns an oriented unit
@@ -416,7 +465,8 @@ resource and representability checks, including those on the point and both
 partials. It introduces no CLI settings or dependencies and remains MIT and
 STL-only. Oriented normals provide a building block for intersection chart
 parameterisation. The separate chart API below requires supplied tangents;
-automatic surface inversion and a surface-intersection solver remain pending.
+analytic inversion is available separately, while NURBS/procedural inversion
+and a surface-intersection solver remain pending.
 
 Tests cover source orientation, rotated frames, rational/nonrational patches,
 procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,

@@ -94,6 +94,29 @@ struct SurfaceEvaluation {
                                                    NodeId surface,
                                                    double u, double v);
 
+struct SurfaceParameters {
+  double u = 0;
+  double v = 0;
+  /// Distance to the point returned by EvaluateSurface at these parameters.
+  double residual = 0;
+};
+
+/// Finds natural parameters on an analytic surface (plane, cylinder, cone,
+/// sphere or torus). The finite nonnegative absolute tolerance is in source
+/// units. Success requires the forward-evaluated point to be within tolerance;
+/// this is not a general closest-point projection. Angular parameters use
+/// atan2's principal branch; an undefined azimuth is represented by zero.
+/// Sphere poles and cone/torus singularities may yield parameters while the
+/// normal remains undefined. The torus's principal sheet is retained.
+/// Source frames, senses and units are not changed. Invalid request values
+/// return kInvalidOptions, nonmatching points or invalid geometry/results
+/// kInvalidRecord, other geometry kinds kUnsupportedFormat. Inherits the
+/// forward evaluator's validity/domain checks. No implicit tolerance is added.
+[[nodiscard]] Result<SurfaceParameters> InvertSurface(
+    const GeometryPayload& geometry, Vector3 point, double tolerance);
+[[nodiscard]] Result<SurfaceParameters> InvertSurface(
+    const Model& model, NodeId surface, Vector3 point, double tolerance);
+
 struct IntersectionChartParameters {
   /// One strictly increasing parameter per chart position.
   std::vector<double> parameters;

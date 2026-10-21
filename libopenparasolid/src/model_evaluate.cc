@@ -258,4 +258,10 @@ Result<Vector3> EvaluateSurfaceNormal(const Model& model, NodeId surface,
   }
   return internal::UnitSurfaceNormal(sample.value(), *sense == '-');
 }
+Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
+                                        Vector3 point, double tolerance) {
+  const auto geometry = Geometry(model, surface);
+  if (!geometry.ok()) return Result<SurfaceParameters>::Err(geometry.error());
+  return InvertSurface(geometry.value()->payload, point, tolerance);
+}
 }  // namespace openparasolid
