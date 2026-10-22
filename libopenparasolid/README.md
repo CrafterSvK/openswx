@@ -149,7 +149,7 @@ natural endpoints and nullable curve reference. Its positive primary and
 negative secondary fins form a closed two-fin ring with null loop, forward,
 backward and curve roles. Non-null `next_at_vx` links can remain on wire
 anchors: each locally checked target must be another primary/secondary edge
-anchor at the same non-null vertex. This handles both shared wire vertices
+anchor or a valid isolated-loop fin at the same non-null vertex. This handles both shared wire vertices
 and closed edges whose two endpoint IDs agree. Full vertex-chain traversal
 and cycle/completeness certification remain separate work.
 
@@ -399,7 +399,8 @@ links within that loop. This checks immediate neighbors without walking or
 certifying the entire loop. Dummy fins must be anchors and retain null
 loop/forward/backward/curve roles. As in shell traversal, actual writer data
 may retain non-null dummy vertex-chain links; those links are checked locally
-against another anchor at the same vertex. Complete vertex chains are not
+against another anchor or a valid isolated-loop fin at the same vertex.
+Complete vertex chains are not
 walked. Curve references may be null or remain untyped; tolerant-curve and
 edge-to-curve orientation rules are not inferred.
 
@@ -430,6 +431,59 @@ with an edge reference is accounted for in that selection. No radial query
 errors remain. Those samples have two fins per edge; higher-arity rings are
 covered synthetically. Private inputs and comparison programs remain outside
 the repository.
+
+## Vertex incidence
+
+`TraverseVertexIncidence(model, vertex_id, options)` in
+`openparasolid/topology.h` returns an owned `VertexIncidence` with vertex,
+owner and point IDs and all listed fins in `VERTEX.halfedge` /
+`FIN.next_at_vx` order. Each `VertexFinUse` retains fin and loop IDs. Its
+optional `edge_use` contains an oriented `FinUse` for an edge anchor; absence
+identifies an isolated-loop fin whose sense is insignificant.
+
+The point must be a non-null POINT reference and the owner a BODY or SHELL.
+Compound-parent BODY references are preserved without inferring child
+ownership. SHELL-owned acorn vertices require null fin heads. BODY-owned
+null heads are accepted structurally without claiming complete incidence.
+Point geometry may remain untyped; no coordinates or tolerances are inferred.
+
+Every listed fin must reference the queried vertex. Edge entries must be
+primary or secondary anchors with consistent senses/endpoints and local
+loop/dummy links. Other radial fins are excluded even when they reference
+that vertex. Both anchors of one closed edge may occur at a single vertex.
+Isolated-loop fins require self forward/backward links, null edge/other/curve
+roles and their loop's halfedge head pointing back to them. Their sense may
+be unknown or absent. Dummy vertex links may lead to these isolated-loop fins
+as well as anchors; existing edge and shell local-link checks now support
+that case too.
+
+`VertexTraversalOptions.max_fins` defaults to 100,000 and must be positive.
+It counts all entries, including dummy anchors and isolated fins. The chain
+must terminate at null; every repeated fin is a cycle, including a return to
+the head. Cycles fail even at the exact fin limit. Zero returns
+`kInvalidOptions`, exhaustion `kResourceLimit`, malformed connectivity or
+missing/wrong targets `kInvalidRecord`, and unavailable roles/anchor senses
+or unreviewed classes `kUnsupportedFormat`. Errors preserve source context
+without partial results. Results own their data and leave the model unchanged.
+
+The query does not scan for unlisted incident fins, certify owner-list
+membership, walk full radial rings or loops, or establish geometric validity,
+manifoldness, shell closure or tolerance bounds. Rules follow the XT Format
+Reference (July 2022, pp. 96-97), including its isolated-loop exception to the
+anchor-only vertex-chain rule. The library remains MIT and STL-only; no CLI
+settings or dependencies are added.
+
+Synthetic tests cover mixed real/dummy/isolated chains, closed-edge anchors,
+acorn and body-owned null heads, result ownership, limits and cycles,
+malformed owners/points/vertices, non-anchor rejection, invalid isolated fins,
+unavailable metadata and untyped point geometry. An independent raw-field
+walk of the same 130 selected private streams checks 13,187 vertices and
+40,608 chain entries: 40,532 edge anchors (including 181 dummy anchors) and
+76 isolated-loop fins. All edge uses match the prior radial results. Every
+expected source anchor and isolated fin is accounted for, including 46 acorn
+vertices. The longest observed chain has 19 entries; no traversal errors
+remain in that selection. Private files and comparison programs remain
+outside the repository.
 
 ## Curve evaluation
 

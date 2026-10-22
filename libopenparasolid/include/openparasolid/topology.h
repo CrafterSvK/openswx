@@ -64,6 +64,46 @@ struct EdgeTraversalOptions {
 [[nodiscard]] Result<EdgeBoundary> TraverseEdgeBoundary(
     const Model& model, NodeId edge, const EdgeTraversalOptions& options = {});
 
+struct VertexFinUse {
+  NodeId fin;
+  /// Null for a dummy edge anchor; non-null for real anchors/isolated loops.
+  NodeId loop;
+  /// Present only for a primary or secondary edge anchor. An isolated-loop
+  /// entry has no edge use and its raw fin sense is insignificant.
+  std::optional<FinUse> edge_use;
+};
+struct VertexIncidence {
+  NodeId vertex;
+  /// Source BODY owner (possibly a compound parent), or SHELL for an acorn.
+  NodeId owner;
+  NodeId point;
+  /// VERTEX.halfedge / FIN.next_at_vx source order, null-terminated.
+  std::vector<VertexFinUse> fins;
+};
+struct VertexTraversalOptions {
+  uint64_t max_fins = 100000;
+};
+
+/// Reads a vertex's listed incident anchor/isolated-loop fins. Requires a
+/// non-null POINT and a BODY or SHELL owner. A SHELL-owned acorn must have a
+/// null fin head; a BODY-owned null head is accepted structurally without
+/// asserting complete incidence. Every listed fin must reference this vertex.
+/// Edge entries must be primary/secondary anchors with consistent endpoints,
+/// senses and local loop/dummy links. Isolated-loop fins must be their loop's
+/// head with self forward/backward links and null edge/other/curve; their sense
+/// is ignored. FIN.next_at_vx must terminate without repeating a fin.
+/// max_fins is positive and counts all entries, including dummy and isolated
+/// fins. Zero returns kInvalidOptions, exhaustion kResourceLimit, malformed
+/// topology/targets kInvalidRecord, unavailable roles/senses or unreviewed
+/// classes kUnsupportedFormat. No error returns partial data; results own
+/// their data and leave the model unchanged. Does not scan for unlisted fins,
+/// certify owner-list membership, walk complete edge rings/loops or establish
+/// geometric, tolerance, manifoldness or body validity. Point data may remain
+/// untyped and child-body ownership is not inferred.
+[[nodiscard]] Result<VertexIncidence> TraverseVertexIncidence(
+    const Model& model, NodeId vertex,
+    const VertexTraversalOptions& options = {});
+
 struct IsolatedLoopVertex {
   NodeId fin;
   NodeId vertex;

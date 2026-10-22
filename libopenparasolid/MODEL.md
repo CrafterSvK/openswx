@@ -61,6 +61,9 @@ preserves recorded region-parent IDs; see
 [child boundaries](README.md#child-body-boundaries).
 `TraverseEdgeBoundary` reads complete listed radial fin rings, including dummy
 anchors; see [edge fin rings](README.md#edge-fin-rings).
+`TraverseVertexIncidence` reads listed anchor/isolated-loop fin chains while
+retaining vertex owner and point IDs; see
+[vertex incidence](README.md#vertex-incidence).
 These APIs validate selected connectivity and list ownership without changing the
 model or claiming complete body/geometric validation or a proof of manifoldness.
 

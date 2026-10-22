@@ -30,6 +30,8 @@ class TopologyReader {
   explicit TopologyReader(const Model& model) : model_(model) {}
   Result<LoopBoundary> ReadLoop(NodeId id, const LoopTraversalOptions& options);
   Result<EdgeBoundary> ReadEdge(NodeId id, const EdgeTraversalOptions& options);
+  Result<VertexIncidence> ReadVertex(NodeId id,
+                                     const VertexTraversalOptions& options);
   Result<FaceBoundary> ReadFace(NodeId id, const FaceTraversalOptions& options);
   Result<ShellBoundary> ReadShell(NodeId id,
                                   const ShellTraversalOptions& options,
@@ -62,6 +64,8 @@ class TopologyReader {
                 ShellBudget& budget, const ShellTraversalOptions& options);
   bool WireEdges(NodeId first, ShellBoundary& result, uint64_t limit);
   bool Dummy(const ModelNode& fin);
+  bool DummyShape(const ModelNode& fin);
+  bool VertexUse(const ModelNode& fin, VertexFinUse& use);
   bool LoopLinks(const ModelNode& fin, NodeId loop);
   bool VertexNext(const ModelNode& fin);
   bool SeparateShell(const ShellBoundary& shell,
@@ -238,6 +242,92 @@ Result<EdgeBoundary> TopologyReader::ReadEdge(
     current = next;
   } while (current != first);
   return Result<EdgeBoundary>::Ok(std::move(result));
+}
+bool TopologyReader::VertexUse(const ModelNode& fin, VertexFinUse& use) {
+  use.fin = fin.id;
+  NodeId edge, other;
+  if (!Reference(fin, "loop", 15, true, use.loop) ||
+      !Reference(fin, "edge", 16, true, edge) ||
+      !Reference(fin, "other", 17, true, other))
+    return false;
+  if (!edge.value) {
+    NodeId forward, backward, curve, head;
+    if (!use.loop.value)
+      return Fail(fin, "loop", "Isolated vertex fin requires a loop");
+    if (!Reference(fin, "forward", 17, false, forward) ||
+        !Reference(fin, "backward", 17, false, backward) ||
+        !Reference(fin, "curve", 1008, true, curve) ||
+        !Reference(*model_.FindNode(use.loop), "halfedge", 17, false, head))
+      return false;
+    if (forward != fin.id || backward != fin.id || head != fin.id ||
+        other.value || curve.value)
+      return Fail(fin, "loop/edge", "Invalid isolated vertex fin");
+    return true;
+  }
+  NodeId primary, secondary;
+  if (!Reference(*model_.FindNode(edge), "halfedge", 17, false, primary) ||
+      !Reference(*model_.FindNode(primary), "other", 17, false, secondary))
+    return false;
+  if (fin.id != primary && fin.id != secondary)
+    return Fail(fin, "edge", "Vertex chain contains a non-anchor edge fin");
+  FinUse edge_use;
+  if (!EdgeUse(fin, edge, other, edge_use)) return false;
+  if (use.loop.value ? !LoopLinks(fin, use.loop) : !DummyShape(fin))
+    return false;
+  use.edge_use = edge_use;
+  return true;
+}
+Result<VertexIncidence> TopologyReader::ReadVertex(
+    NodeId id, const VertexTraversalOptions& options) {
+  if (!options.max_fins)
+    return Result<VertexIncidence>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Vertex traversal requires a positive fin limit"});
+  const auto* vertex = Node(id, 18);
+  if (!vertex) return Result<VertexIncidence>::Err(*error_);
+  uint16_t owner_type = 12;
+  for (const auto& ref : vertex->references) {
+    if (ref.field != "owner") continue;
+    const auto* target = model_.FindNode(ref.target);
+    if (target && target->node_type == 13) owner_type = 13;
+  }
+  VertexIncidence result;
+  result.vertex = id;
+  NodeId current;
+  if (!Reference(*vertex, "owner", owner_type, false, result.owner) ||
+      !Reference(*vertex, "point", 29, false, result.point) ||
+      !Reference(*vertex, "halfedge", 17, true, current))
+    return Result<VertexIncidence>::Err(*error_);
+  if (owner_type == 13 && current.value) {
+    Fail(*vertex, "halfedge", "Acorn vertex must not have a fin-chain head");
+    return Result<VertexIncidence>::Err(*error_);
+  }
+  std::unordered_set<uint32_t> visited;
+  while (current.value) {
+    const auto& fin = *model_.FindNode(current);
+    if (visited.contains(current.value)) {
+      Fail(fin, "next_at_vx", "Vertex fin chain contains a cycle");
+      return Result<VertexIncidence>::Err(*error_);
+    }
+    if (visited.size() >= options.max_fins)
+      return Result<VertexIncidence>::Err({ErrorCode::kResourceLimit,
+                                           fin.source_offset,
+                                           "Vertex fin limit exceeded"});
+    visited.insert(current.value);
+    NodeId target, next;
+    if (!Reference(fin, "vertex", 18, false, target) ||
+        !Reference(fin, "next_at_vx", 17, true, next))
+      return Result<VertexIncidence>::Err(*error_);
+    if (target != id) {
+      Fail(fin, "vertex", "Listed fin belongs to another vertex");
+      return Result<VertexIncidence>::Err(*error_);
+    }
+    VertexFinUse use;
+    if (!VertexUse(fin, use)) return Result<VertexIncidence>::Err(*error_);
+    result.fins.push_back(std::move(use));
+    current = next;
+  }
+  return Result<VertexIncidence>::Ok(std::move(result));
 }
 Result<LoopBoundary> TopologyReader::ReadLoop(
     NodeId id, const LoopTraversalOptions& options) {
@@ -433,7 +523,7 @@ bool TopologyReader::FaceUses(NodeId current, ShellFaceSide side,
   }
   return true;
 }
-bool TopologyReader::Dummy(const ModelNode& fin) {
+bool TopologyReader::DummyShape(const ModelNode& fin) {
   constexpr std::pair<const char*, uint16_t> roles[]{
       {"loop", 15}, {"forward", 17}, {"backward", 17}, {"curve", 1008}};
   for (const auto& [role, type] : roles) {
@@ -442,9 +532,12 @@ bool TopologyReader::Dummy(const ModelNode& fin) {
     if (target.value)
       return Fail(fin, role, "Dummy fin retains loop or curve links");
   }
+  return true;
+}
+bool TopologyReader::Dummy(const ModelNode& fin) {
   // Wire anchors can retain vertex-chain links even though their loop-chain
   // roles are null. Check the local vertex link rather than discarding it.
-  return VertexNext(fin);
+  return DummyShape(fin) && VertexNext(fin);
 }
 bool TopologyReader::VertexNext(const ModelNode& fin) {
   NodeId next, vertex, next_vertex, edge_id, primary_id, secondary_id;
@@ -453,14 +546,21 @@ bool TopologyReader::VertexNext(const ModelNode& fin) {
   const auto& target = *model_.FindNode(next);
   if (!Reference(fin, "vertex", 18, false, vertex) ||
       !Reference(target, "vertex", 18, false, next_vertex) ||
-      !Reference(target, "edge", 16, false, edge_id))
+      !Reference(target, "edge", 16, true, edge_id))
     return false;
+  if (next == fin.id || vertex != next_vertex)
+    return Fail(
+        fin, "next_at_vx",
+        "Vertex-chain link must reference another fin at the same vertex");
+  if (!edge_id.value) {
+    VertexFinUse isolated;
+    return VertexUse(target, isolated);
+  }
   const auto& edge = *model_.FindNode(edge_id);
   if (!Reference(edge, "halfedge", 17, false, primary_id)) return false;
   const auto& primary = *model_.FindNode(primary_id);
   if (!Reference(primary, "other", 17, false, secondary_id)) return false;
-  if (next == fin.id || vertex != next_vertex ||
-      (next != primary_id && next != secondary_id))
+  if (next != primary_id && next != secondary_id)
     return Fail(fin, "next_at_vx",
                 "Vertex-chain link is not another anchor at the same vertex");
   return true;
@@ -871,6 +971,11 @@ Result<ChildBodyBoundary> TopologyReader::ReadChild(
 }
 
 }  // namespace
+Result<VertexIncidence> TraverseVertexIncidence(
+    const Model& model, NodeId vertex, const VertexTraversalOptions& options) {
+  return TopologyReader(model).ReadVertex(vertex, options);
+}
+
 Result<EdgeBoundary> TraverseEdgeBoundary(const Model& model, NodeId edge,
                                           const EdgeTraversalOptions& options) {
   return TopologyReader(model).ReadEdge(edge, options);
