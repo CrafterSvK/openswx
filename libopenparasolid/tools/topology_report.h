@@ -29,8 +29,15 @@ inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
            {"paired_edges", incidence.paired_edges},
            {"higher_valence_edges", incidence.higher_valence_edges},
            {"face_fins", incidence.face_fins},
-           {"isolated_loops", incidence.isolated_loops}};
+           {"isolated_loops", incidence.isolated_loops},
+           {"face_components", incidence.face_components}};
   if (!summary) {
+    out["components"] = json::array();
+    for (const auto& component : incidence.components) {
+      json faces = json::array();
+      for (const auto face : component.faces) faces.push_back(face.value);
+      out["components"].push_back({{"faces", std::move(faces)}});
+    }
     out["edges"] = json::array();
     for (const auto& edge : incidence.edges) {
       const auto uses = edge.forward_fins + edge.reverse_fins;
@@ -67,6 +74,7 @@ inline Result<json> BodyTopologyReport(const ValidatedBodyTopology& body,
       total_incidence.higher_valence_edges += counts.higher_valence_edges;
       total_incidence.face_fins += counts.face_fins;
       total_incidence.isolated_loops += counts.isolated_loops;
+      total_incidence.face_components += counts.face_components;
       incidence_reports.push_back(ShellIncidenceReport(counts, summary));
     }
   }

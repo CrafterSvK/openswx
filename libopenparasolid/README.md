@@ -2018,6 +2018,7 @@ records sorted by ID, with forward/reverse fin counts, and totals:
 | `higher_valence_edges` | More than two face-boundary fins use it. |
 | `face_fins` | Number of non-isolated face-boundary fins counted. |
 | `isolated_loops` | Vertex-only loops, which have no edge use. |
+| `face_components` | Groups of faces connected through shared source edge IDs. |
 
 Each stored face is counted once, independently of front/back shell-side uses.
 Two seam fins on the same face count separately. Wire edges and dummy radial
@@ -2030,8 +2031,9 @@ Positive limits bound stored faces, aggregate loops, aggregate fins (including
 one per isolated loop), and distinct edges. Defaults are 10,000 faces/loops and
 100,000 fins/edges. Exact limits are accepted; exhaustion returns
 `kResourceLimit` with no partial result. Zero limits return `kInvalidOptions`.
-The API rejects null edge references, unknown fin senses and loops mixing
-isolated-vertex and edge-fin data, but does not revalidate full connectivity.
+The API rejects null/duplicate face IDs, null edge references, unknown fin
+senses and loops mixing isolated-vertex and edge-fin data, but does not
+revalidate full connectivity.
 Use `TraverseShellBoundary` or `ValidateBodyTopology` first.
 
 `--body-topology` adds aggregate `shell_edge_incidence` counts in both full and
@@ -2054,6 +2056,47 @@ boundary and 2,666 paired shell-edge occurrences, no higher-valence edges,
 5,362 face fins and two isolated-loop occurrences. All earlier topology counts
 and automatic geometry outcomes remain unchanged. Private inputs, comparison
 scripts and reports remain outside the repository.
+
+## Face components within shells
+
+`AnalyzeShellEdgeIncidence` also returns `components`: groups of source faces
+connected through shared edge IDs, with a `face_components` count. Both the
+face IDs within each component and the components themselves are ordered by
+ascending face ID (smallest member first). Reordering source faces does not
+change this result.
+
+A shared edge connects all its incident faces, including higher-valence edges;
+connectivity does not imply acceptable valence. Seam fins on one face do not
+create another component. Front/back face uses do not double components, and
+faces meeting only at a vertex remain separate. A face with no edge fins,
+including an untrimmed face or one containing only isolated-vertex loops,
+forms its own component. A shell without faces has zero components; wire and
+acorn data do not connect face groups.
+
+The existing face/loop/fin/edge budgets bound this analysis. Iterative union by
+size with path compression avoids recursion and pairwise expansion of
+high-valence edges; scratch storage is linear in the number of faces and
+edges. The API retains atomic resource and invalid-record errors and rejects
+null or repeated stored face IDs. No additional options or dependencies are
+introduced.
+
+`--body-topology` includes `face_components` in aggregate and per-shell
+incidence counts. Full per-shell output additionally contains
+`components: [{"faces": [ID, ...]}, ...]`; summaries omit membership arrays.
+Body aggregates sum component occurrences independently across shells and
+regions, without merging them. Multiple components remain a diagnostic and do
+not change otherwise valid topology's exit status. This is connectivity of the
+recorded face-edge graph, not proof of geometric connectedness, vertex
+manifoldness, closed boundaries or positive volume.
+
+Tests cover transitive connections, stable ordering, seams, vertex-only
+contacts, isolated/untrimmed faces, disconnected groups whose edges all have
+valence two, higher-valence shared edges, and empty/wire/acorn shells. An
+independent breadth-first graph search matches every reported component in the
+57-body private selection: 77 shell occurrences contain 47 face-bearing
+shells, each with one face component. Earlier incidence counts and geometry
+binding outcomes remain unchanged. Private inputs, scripts and reports remain
+outside the repository.
 
 ## Inspecting validated body topology
 

@@ -174,6 +174,9 @@ TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
   const auto& summary = summary_result.value();
   EXPECT_EQ(report["shell_edge_incidence"]["boundary_edges"], 1);
   EXPECT_EQ(report["shell_edge_incidence"]["face_fins"], 1);
+  EXPECT_EQ(report["shell_edge_incidence"]["face_components"], 1);
+  EXPECT_EQ(s["edge_incidence"]["components"][0]["faces"], json::array({4}));
+  EXPECT_FALSE(summary["shell_edge_incidence"].contains("components"));
   EXPECT_EQ(report["shell_edge_incidence"]["isolated_loops"], 1);
   EXPECT_EQ(s["edge_incidence"]["edges"][0]["edge"], 8);
   EXPECT_EQ(s["edge_incidence"]["edges"][0]["classification"], "boundary");

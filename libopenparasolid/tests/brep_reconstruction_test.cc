@@ -1338,6 +1338,7 @@ TEST(ParasolidBodyFaceBinding, BindsUniqueFacesAndPreservesBothSourceSides) {
   ASSERT_TRUE(incidence.ok());
   EXPECT_EQ(incidence.value().paired_edges, 1);
   EXPECT_EQ(incidence.value().face_fins, 2);
+  EXPECT_EQ(incidence.value().face_components, 1);
 
   EXPECT_LT(result.value().faces[1].loops[0].fins[0].end,
             result.value().faces[1].loops[0].fins[0].start);

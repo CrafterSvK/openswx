@@ -234,6 +234,10 @@ struct ShellEdgeUseCount {
   uint64_t forward_fins = 0;
   uint64_t reverse_fins = 0;
 };
+struct ShellFaceComponent {
+  // Sorted source face IDs; components are ordered by their smallest face ID.
+  std::vector<NodeId> faces;
+};
 struct ShellEdgeIncidence {
   NodeId shell;
   uint64_t boundary_edges = 0;
@@ -243,6 +247,8 @@ struct ShellEdgeIncidence {
   uint64_t isolated_loops = 0;
   // Sorted by edge ID; wires and dummy radial anchors are excluded.
   std::vector<ShellEdgeUseCount> edges;
+  uint64_t face_components = 0;
+  std::vector<ShellFaceComponent> components;
 };
 struct ShellEdgeIncidenceOptions {
   uint64_t max_faces = 10000;
@@ -255,9 +261,14 @@ struct ShellEdgeIncidenceOptions {
 // more fin uses classify boundary, paired and higher-valence edges. A seam's
 // two fins on one face count separately. Isolated loops consume the fin budget
 // but have no edge use. Positive aggregate limits bound work and storage.
+// Groups faces connected by shared edge IDs, including higher-valence edges.
+// Vertex-only contacts do not connect faces. Faces without edge fins each form
+// a component; wire/acorn shells without faces have none. Null or duplicate
+// face IDs are invalid records. Component work/storage use the same budgets.
 // Does not revalidate connectivity, orient face sides or compare geometry.
-// Paired edges alone do not certify manifold vertices, connectedness, shell
-// closure, hole orientation or volume. Empty/wire/acorn shells have no entries.
+// Paired edges alone do not certify manifold vertices, geometric connectedness,
+// shell closure, hole orientation or volume. Empty/wire/acorn shells have no
+// entries.
 [[nodiscard]] Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
     const ShellBoundary& shell, const ShellEdgeIncidenceOptions& options = {});
 

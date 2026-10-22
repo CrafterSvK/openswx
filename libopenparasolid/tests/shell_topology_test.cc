@@ -2,6 +2,8 @@
 // Copyright (c) 2026 openswx contributors
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <initializer_list>
 #include <utility>
 
 #include "model_test_helpers.h"
@@ -479,20 +481,94 @@ TEST(ParasolidShellIncidence, TraversedWireAndAcornShellsHaveNoFaceEdges) {
     EXPECT_EQ(result.value().face_fins, 0);
     EXPECT_EQ(result.value().boundary_edges, 0);
     EXPECT_EQ(result.value().paired_edges, 0);
+    EXPECT_EQ(result.value().face_components, shell.value().faces.size());
   }
 }
 TEST(ParasolidShellIncidence, RejectsMalformedEdgeUsesAndMixedIsolatedLoops) {
-  for (int bad = 0; bad < 3; ++bad) {
+  for (int bad = 0; bad < 5; ++bad) {
     auto shell = IncidenceShell();
     auto& fin = shell.faces[0].loops[0].fins[0];
     if (bad == 0) fin.edge = NodeId{};
     if (bad == 1) fin.sense = static_cast<TopologySense>(99);
     if (bad == 2)
       shell.faces[0].loops[0].isolated_vertex = IsolatedLoopVertex{};
+    if (bad == 3) shell.faces[0].face = NodeId{};
+    if (bad == 4) shell.faces[1].face = shell.faces[0].face;
     const auto result = AnalyzeShellEdgeIncidence(shell);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
   }
+}
+void ComponentFace(ShellBoundary& shell, uint32_t id,
+                   std::initializer_list<uint32_t> edges) {
+  FaceBoundary face;
+  face.face = NodeId{id};
+  LoopBoundary loop;
+  for (uint32_t edge : edges) {
+    FinUse fin;
+    fin.fin = NodeId{static_cast<uint32_t>(shell.faces.size() * 1000 +
+                                           loop.fins.size() + 1)};
+    fin.edge = NodeId{edge};
+    // All test faces share a vertex, which must not connect edge-disjoint
+    // faces.
+    fin.start_vertex = NodeId{99};
+    fin.end_vertex = NodeId{99};
+    loop.fins.push_back(fin);
+  }
+  if (!loop.fins.empty()) face.loops.push_back(loop);
+  shell.faces.push_back(face);
+}
+TEST(ParasolidShellIncidence, GroupsTransitiveEdgeConnectionsInStableIdOrder) {
+  ShellBoundary shell;
+  ComponentFace(shell, 90, {5});
+  ComponentFace(shell, 10, {6});
+  ComponentFace(shell, 40, {5, 6});
+  ComponentFace(shell, 3, {7, 7});
+  ComponentFace(shell, 80, {});
+  ComponentFace(shell, 2, {});
+  LoopBoundary isolated;
+  isolated.isolated_vertex = IsolatedLoopVertex{NodeId{90}, NodeId{99}};
+  shell.faces.back().loops.push_back(isolated);
+  shell.face_uses = {{0, ShellFaceSide::kFront}, {0, ShellFaceSide::kBack}};
+  for (int order = 0; order < 2; ++order) {
+    const auto result = AnalyzeShellEdgeIncidence(shell);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    const auto& groups = result.value().components;
+    ASSERT_EQ(groups.size(), 4);
+    EXPECT_EQ(result.value().face_components, 4);
+    EXPECT_EQ(groups[0].faces, (std::vector<NodeId>{{2}}));
+    EXPECT_EQ(groups[1].faces, (std::vector<NodeId>{{3}}));
+    EXPECT_EQ(groups[2].faces, (std::vector<NodeId>{{10}, {40}, {90}}));
+    EXPECT_EQ(groups[3].faces, (std::vector<NodeId>{{80}}));
+    std::reverse(shell.faces.begin(), shell.faces.end());
+  }
+}
+TEST(ParasolidShellIncidence, PairedEdgesCanBelongToSeparateComponents) {
+  ShellBoundary shell;
+  ComponentFace(shell, 1, {10, 10});
+  ComponentFace(shell, 2, {20, 20});
+  const auto result = AnalyzeShellEdgeIncidence(shell);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().boundary_edges, 0);
+  EXPECT_EQ(result.value().paired_edges, 2);
+  EXPECT_EQ(result.value().face_components, 2);
+}
+TEST(ParasolidShellIncidence, HigherValenceEdgesConnectAllTheirFaces) {
+  ShellBoundary shell;
+  for (uint32_t id = 300; id > 0; --id) ComponentFace(shell, id, {1});
+  const auto result = AnalyzeShellEdgeIncidence(shell, {300, 300, 300, 1});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().higher_valence_edges, 1);
+  EXPECT_EQ(result.value().face_components, 1);
+  ASSERT_EQ(result.value().components.size(), 1);
+  const auto& faces = result.value().components[0].faces;
+  ASSERT_EQ(faces.size(), 300);
+  EXPECT_EQ(faces.front(), NodeId{1});
+  EXPECT_EQ(faces.back(), NodeId{300});
+  const auto empty = AnalyzeShellEdgeIncidence(ShellBoundary{});
+  ASSERT_TRUE(empty.ok());
+  EXPECT_EQ(empty.value().face_components, 0);
+  EXPECT_TRUE(empty.value().components.empty());
 }
 }  // namespace
 }  // namespace openparasolid
