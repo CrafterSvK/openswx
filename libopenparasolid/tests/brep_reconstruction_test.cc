@@ -2,6 +2,7 @@
 // Copyright (c) 2026 openswx contributors
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 
@@ -485,6 +486,174 @@ ModelFixture ClosedTrimFace(bool vertex_free, bool negative_basis,
     Set(f, 2, "curve", 402);
   }
   return f;
+}
+ModelFixture Sheet(ModelFixture f) {
+  Set(f, 6, "edge", 0);
+  Set(f, 6, "face", 30);
+  Set(f, 6, "front_face", 30);
+  Set(f, 2, "owner", 1);
+  Set(f, 1, "edge", 2);
+  Set(f, 1, "body_type", 3);
+  return f;
+}
+ModelFixture TwoFaceBody() {
+  auto f = Sheet(ClosedTrimFace(false, false));
+  Set(f, 20, "next", 0);
+  Set(f, 21, "face", 31);
+  Set(f, 30, "next", 31);
+  Set(f, 30, "next_front", 31);
+  f.Add(14, 31,
+        {Pointer("loop", 21, 15), Pointer("surface", 300, 1006),
+         Pointer("shell", 6, 13), Pointer("front_shell", 6, 13),
+         Pointer("previous", 30, 14), Pointer("next", 0, 14),
+         Pointer("previous_front", 30, 14), Pointer("next_front", 0, 14),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  std::erase_if(f.report.nodes, [](const auto& n) { return n.index == 101; });
+  Set(f, 100, "next", 0);
+  Set(f, 11, "next_at_vx", 10);
+  return f;
+}
+TEST(ParasolidBodyFaceBinding, BindsUniqueFacesAndPreservesBothSourceSides) {
+  const auto result = [] {
+    const auto f = TwoFaceBody();
+    const auto model = ModelBuilder::Build(f.report);
+    if (!model.ok()) return Result<BodyFaceBinding>::Err(model.error());
+    return BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+  }();
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().faces.size(), 2);
+  EXPECT_EQ(result.value().faces[0].face.value, 30);
+  EXPECT_EQ(result.value().faces[1].face.value, 31);
+  EXPECT_EQ(
+      result.value().topology.boundary.regions[0].shells[0].face_uses.size(),
+      4);
+  EXPECT_EQ(result.value().topology.edges.size(), 1);
+  EXPECT_EQ(result.value().topology.vertices.size(), 1);
+  EXPECT_LT(result.value().faces[1].loops[0].fins[0].end,
+            result.value().faces[1].loops[0].fins[0].start);
+}
+TEST(ParasolidBodyFaceBinding, AppliesExplicitIntervalsAndOwnedSolverOptions) {
+  const auto f = Sheet(IntersectionFace(false, true));
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const double end = std::sqrt(2.);
+  const FinParameterInterval p[]{{NodeId{11}, end, 0}, {NodeId{10}, 0, end}};
+  BodyFaceBindingOptions options;
+  options.intersection = IntersectionEvaluationOptions{1e-12, 1e-12};
+  auto result = BindBodyFaces(model.value(), NodeId{1}, p, 1e-12, options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().faces.size(), 1);
+  options.intersection.reset();
+  const auto sample = EvaluateBoundFin(
+      model.value(), result.value().faces[0].loops[0].fins[0], .5, 1e-12);
+  ASSERT_TRUE(sample.ok());
+  EXPECT_NEAR(sample.value().curve.position.x, std::sqrt(.5), 1e-12);
+  EXPECT_FALSE(BindBodyFaces(model.value(), NodeId{1}, 1e-12, options).ok());
+}
+TEST(ParasolidBodyFaceBinding, RejectsMissingDuplicateAndForeignIntervals) {
+  const auto f = Sheet(Face());
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (int bad = 0; bad < 4; ++bad) {
+    std::vector<FinParameterInterval> p{{NodeId{10}, 0, 1}, {NodeId{11}, 1, 0}};
+    if (bad == 0) p.pop_back();
+    if (bad == 1) p.push_back(p[0]);
+    if (bad == 2) p.push_back({NodeId{999}, 0, 1});
+    if (bad == 3) p[0].end = 0;
+    const auto result = BindBodyFaces(model.value(), NodeId{1}, p, 1e-12);
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+}
+TEST(ParasolidBodyFaceBinding, EnforcesAggregateLimitsAcrossFacesAndSides) {
+  const auto f = TwoFaceBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  BodyFaceBindingOptions exact;
+  exact.max_faces = 2;
+  exact.max_fins = 2;
+  exact.face.max_fins = 1;
+  const auto good = BindBodyFaces(model.value(), NodeId{1}, 1e-12, exact);
+  ASSERT_TRUE(good.ok()) << good.error().message;
+  for (int bad = 0; bad < 4; ++bad) {
+    auto options = exact;
+    if (bad == 0) options.max_faces = 1;
+    if (bad == 1) options.max_fins = 1;
+    if (bad == 2) options.topology.max_radial_fins = 1;
+    if (bad == 3) options.topology.traversal.body.max_face_uses = 3;
+    const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12, options);
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  }
+}
+TEST(ParasolidBodyFaceBinding, CountsIsolatedVertexLoopsInAggregateBudget) {
+  auto f = TwoFaceBody();
+  Set(f, 21, "next", 22);
+  f.Add(15, 22,
+        {Pointer("face", 31, 14), Pointer("halfedge", 12, 17),
+         Pointer("next", 0, 15)});
+  Fin(f, 12, 100, 0, 22, 12);
+  Set(f, 12, "edge", 0);
+  Set(f, 10, "next_at_vx", 12);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  BodyFaceBindingOptions options;
+  options.max_fins = 3;
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12, options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().faces[1].loops.size(), 2);
+  EXPECT_TRUE(result.value().faces[1].loops[1].isolated_vertex.has_value());
+  options.max_fins = 2;
+  const auto limited = BindBodyFaces(model.value(), NodeId{1}, 1e-12, options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(ParasolidBodyFaceBinding, RejectsTopologyOrLateGeometryFailureAtomically) {
+  for (bool geometry : {false, true}) {
+    auto f = TwoFaceBody();
+    if (geometry) {
+      Set(f, 31, "surface", 399);
+      f.Add(50, 399,
+            {Numbers("origin", {0, 0, 1}, FieldType::kVector),
+             Numbers("normal", {0, 0, 1}, FieldType::kVector),
+             Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+             ByteValue("sense", '+', FieldType::kCharacter)});
+    } else {
+      Set(f, 1, "edge", 0);
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    if (geometry)
+      EXPECT_NE(result.error().message.find("face 31"), std::string::npos);
+  }
+}
+TEST(ParasolidBodyFaceBinding,
+     KeepsWireTopologyAndValidatesEmptyBindingOptions) {
+  const auto f = Wire();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, 0);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_TRUE(result.value().faces.empty());
+  EXPECT_EQ(result.value().topology.edges.size(), 1);
+  for (int bad = 0; bad < 5; ++bad) {
+    BodyFaceBindingOptions options;
+    if (bad == 0) options.max_faces = 0;
+    if (bad == 1) options.max_fins = 0;
+    if (bad == 2) options.face.max_fins = 0;
+    if (bad == 3) options.face.max_loops = 0;
+    if (bad == 4) options.intersection = IntersectionEvaluationOptions{};
+    const auto rejected = BindBodyFaces(model.value(), NodeId{1}, 0, options);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidOptions);
+  }
+  const FinParameterInterval foreign[]{{NodeId{10}, 0, 1}};
+  const auto rejected = BindBodyFaces(model.value(), NodeId{1}, foreign, 0);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidOptions);
 }
 TEST(ParasolidFaceBinding, SourceTrimsPreserveClosedBranchesAndFinDirection) {
   for (bool vertex_free : {false, true}) {

@@ -92,6 +92,51 @@ preserved. Synthetic tests cover both fin directions and basis senses, closed
 trim branches, invalid stored points, open vertex-free trims and ambiguous
 fin trims. This comparison is independent of the earlier 130-stream selection.
 
+## Binding all faces of a body
+
+`BindBodyFaces(model, body, tolerance, options)` first validates the complete
+recorded body topology, then automatically binds the loop geometry of every
+distinct face. The explicit overload adds a span of `FinParameterInterval`
+before `tolerance`; it requires exactly one interval per non-isolated fin in
+the selected body's faces. Input interval order is arbitrary; duplicate,
+missing and foreign fin IDs are invalid options. Isolated loops need no
+intervals. Both overloads return `BodyFaceBinding{topology, faces}`.
+
+The owned result retains regions, shells and front/back uses in
+`topology.boundary`. `faces` contains one binding per distinct face, sorted by
+face ID, even when a face has multiple source uses. All face bindings inherit
+the existing surface, endpoint, direction and sampled membership checks.
+Errors preserve their code and source offset; per-face failures additionally
+identify the body and face. Failure discards the entire result.
+
+`BodyFaceBindingOptions` separates complete topology limits (`topology`),
+per-face traversal limits (`face`), optional intersection solver settings
+(`intersection`) and aggregate geometry limits (`max_faces`, `max_fins`).
+Both aggregate limits must be positive. Fins are counted across unique faces,
+including one per isolated vertex loop; front/back uses do not multiply this
+allowance. Explicit interval input is also bounded by `max_fins`. Geometry
+options are validated even for bodies without faces.
+
+```cpp
+BodyFaceBindingOptions options;
+options.intersection = IntersectionEvaluationOptions{1e-7, 1e-9};
+auto body_faces = BindBodyFaces(model, body, intervals, 1e-7, options);
+```
+
+Wire edges and acorns are retained as validated topology, without binding
+their geometry. A body without faces can therefore succeed with an empty
+`faces` vector. This API does not certify manifoldness, inside/outside,
+positive volume or curve membership at every parameter.
+
+In the separate 39-stream private selection, automatic body-face binding at
+1e-7 succeeds for 51 of 57 body occurrences: 21 have 367 bound faces with
+1,752 fin uses, and 30 have no faces. Six bodies retain explicit unsupported
+results: four require directed curve intervals, one has a fin trim needing
+explicit endpoints/intervals, and one needs unsupported surface inversion.
+Synthetic tests cover shared front/back uses, multi-face aggregate budgets,
+isolated loops, explicit intervals, stored intersection settings, topology
+failure, late geometry failure and bodies without faces.
+
 ## Intersection curves in face bindings
 
 Both `BindFaceTrimming` overloads accept optional `IntersectionEvaluationOptions`

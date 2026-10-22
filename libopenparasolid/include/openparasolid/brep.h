@@ -92,5 +92,35 @@ struct FinGeometryEvaluation {
 [[nodiscard]] Result<FinGeometryEvaluation> EvaluateBoundFin(
     const Model& model, const BoundFinGeometry& fin, double fraction,
     double tolerance);
+struct BodyFaceBindingOptions {
+  BodyValidationOptions topology;
+  FaceTraversalOptions face;
+  std::optional<IntersectionEvaluationOptions> intersection;
+  uint64_t max_faces = 10000;
+  // Aggregate bound across unique faces, including isolated vertex loops.
+  uint64_t max_fins = 100000;
+};
+struct BodyFaceBinding {
+  ValidatedBodyTopology topology;
+  // Exactly one binding per distinct face, sorted by face ID. Source uses
+  // (front/back sides, regions and shells) remain in topology.boundary.
+  std::vector<FaceTrimming> faces;
+};
+// Validates the selected body's complete recorded topology, then binds every
+// distinct face's loop geometry. Atomic result: any failure returns no partial
+// body. Explicit mode requires one interval per non-isolated fin across all
+// selected faces; duplicate, missing or foreign fin IDs are invalid options.
+// Automatic mode inherits BindFaceTrimming's supported interval inference.
+// Face/solver options and positive aggregate limits are validated up front.
+// Wire edges/acorns are retained as topology, without binding their geometry.
+// Does not certify manifoldness, volume, hole classification or agreement at
+// every curve parameter. Errors preserve their code and source offset.
+[[nodiscard]] Result<BodyFaceBinding> BindBodyFaces(
+    const Model& model, NodeId body,
+    std::span<const FinParameterInterval> intervals, double tolerance,
+    const BodyFaceBindingOptions& options = {});
+[[nodiscard]] Result<BodyFaceBinding> BindBodyFaces(
+    const Model& model, NodeId body, double tolerance,
+    const BodyFaceBindingOptions& options = {});
 }  // namespace openparasolid
 #endif  // OPENPARASOLID_BREP_H_
