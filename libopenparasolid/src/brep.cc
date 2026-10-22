@@ -175,6 +175,64 @@ Result<FinParameterInterval> ConicInterval(const Model& model,
   return Result<FinParameterInterval>::Ok(
       {use.fin, start.value(), start.value() + span});
 }
+Result<FinParameterInterval> ChartInterval(
+    const Model& model, const GeometryObject& curve, const FinUse& use,
+    double tolerance,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  if (!intersection)
+    return Result<FinParameterInterval>::Err(
+        Error("Intersection interval requires explicit solver settings", 0,
+              ErrorCode::kUnsupportedFormat));
+  if (!use.start_vertex.value || !use.end_vertex.value ||
+      use.start_vertex == use.end_vertex)
+    return Result<FinParameterInterval>::Err(
+        Error("Closed or vertex-free intersection needs an explicit interval",
+              0, ErrorCode::kUnsupportedFormat));
+  if (!use.fin_curve.value &&
+      (!curve.sense || (*curve.sense != '+' && *curve.sense != '-')))
+    return Result<FinParameterInterval>::Err(
+        Error("Intersection edge/curve sense is unknown", 0,
+              ErrorCode::kUnsupportedFormat));
+  const auto start = Point(model, use.start_vertex);
+  const auto end = Point(model, use.end_vertex);
+  if (!start.ok()) return Result<FinParameterInterval>::Err(start.error());
+  if (!end.ok()) return Result<FinParameterInterval>::Err(end.error());
+  const auto chart = EvaluateIntersectionChart(model, curve.source,
+                                               intersection->chart_tolerance);
+  if (!chart.ok()) return Result<FinParameterInterval>::Err(chart.error());
+  const auto& positions =
+      std::get<IntersectionCurveGeometry>(curve.payload).chart.positions;
+  std::optional<std::size_t> first, last;
+  for (std::size_t i = 0; i < positions.size(); ++i) {
+    if (Distance(positions[i], start.value()) <= tolerance) {
+      if (first)
+        return Result<FinParameterInterval>::Err(
+            Error("Ambiguous intersection start chart point", 0,
+                  ErrorCode::kUnsupportedFormat));
+      first = i;
+    }
+    if (Distance(positions[i], end.value()) <= tolerance) {
+      if (last)
+        return Result<FinParameterInterval>::Err(
+            Error("Ambiguous intersection end chart point", 0,
+                  ErrorCode::kUnsupportedFormat));
+      last = i;
+    }
+  }
+  if (!first || !last || first == last)
+    return Result<FinParameterInterval>::Err(
+        Error("Intersection endpoints need distinct unique chart matches", 0,
+              ErrorCode::kUnsupportedFormat));
+  const auto& parameters = chart.value().parameterization.parameters;
+  const FinParameterInterval interval{use.fin, parameters[*first],
+                                      parameters[*last]};
+  if (!use.fin_curve.value &&
+      ((interval.end > interval.start) !=
+       ((*curve.sense == '+') == (use.sense == TopologySense::kForward))))
+    return Result<FinParameterInterval>::Err(
+        Error("Chart endpoint order contradicts edge/curve sense"));
+  return Result<FinParameterInterval>::Ok(interval);
+}
 Result<CurveEvaluation> SampleCurve(
     const Model& model, NodeId curve, double parameter,
     const std::optional<IntersectionEvaluationOptions>& intersection) {
@@ -616,6 +674,13 @@ Result<FaceTrimming> BindFaceTrimmingWithOverrides(
         return Result<FaceTrimming>::Err(
             Error("Curve interval needs explicit branch/endpoints", 0,
                   ErrorCode::kUnsupportedFormat));
+      if (std::holds_alternative<IntersectionCurveGeometry>(curve->payload)) {
+        auto interval =
+            ChartInterval(model, *curve, use, tolerance, intersection);
+        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
+        intervals.push_back(interval.value());
+        continue;
+      }
       if (std::holds_alternative<CircleGeometry>(curve->payload) ||
           std::holds_alternative<EllipseGeometry>(curve->payload)) {
         auto interval = ConicInterval(model, *curve, use);

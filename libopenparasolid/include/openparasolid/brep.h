@@ -76,8 +76,12 @@ struct FinGeometryEvaluation {
 // Resolves lines, accurate source trim intervals and accurate circle/ellipse
 // edges. Edge trims retain transmitted parameters, ordered by fin sense, even
 // for closed/vertex-free edges. Stored trim points must match curve samples.
-// Fin trims require unambiguous vertex correspondence. Conics select a single
-// directed arc or one full turn for closed/vertex-free edges. Coincident
+// With solver settings, direct intersections use distinct, unique vertex
+// matches among validated chart points. Closed/missing endpoints and ambiguous
+// or unmatched charts require explicit intervals. Accurate edge orientation
+// must agree with curve sense. Fin trims require unambiguous vertex
+// correspondence. Conics select one directed arc, or a full turn for
+// closed/vertex-free edges. Coincident
 // distinct conic vertices, fin conics, ambiguous fin trims and untrimmed NURBS
 // branches require the explicit overload.
 [[nodiscard]] Result<FaceTrimming> BindFaceTrimming(

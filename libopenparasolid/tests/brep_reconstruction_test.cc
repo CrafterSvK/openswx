@@ -95,7 +95,8 @@ ModelFixture Face() {
          ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
-ModelFixture IntersectionFace(bool trimmed, bool curved = false) {
+ModelFixture IntersectionFace(bool trimmed, bool curved = false,
+                              const std::vector<Vector3>& chart_points = {}) {
   auto f = Face();
   const Vector3 a = curved ? Vector3{1, 0, 0} : Vector3{0, 0, 0};
   const Vector3 b = curved ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
@@ -124,16 +125,22 @@ ModelFixture IntersectionFace(bool trimmed, bool curved = false) {
          Pointer("start", 403, 41),
          Pointer("end", 404, 41),
          ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto points =
+      chart_points.empty() ? std::vector<Vector3>{a, b} : chart_points;
+  std::vector<ScalarValue> positions;
+  for (const auto point : points)
+    for (double value : {point.x, point.y, point.z})
+      positions.emplace_back(value);
   f.Add(40, 402,
         {Numbers("base_parameter", {0}),
          Numbers("base_scale", {1}),
-         Integer("chart_count", 2),
+         Integer("chart_count", static_cast<int64_t>(points.size())),
          Numbers("chordal_error", {.1}),
          Numbers("angular_error", {1}),
          {{"parameter_error", FieldType::kDouble, 0, 2, true},
           {std::monostate{}, std::monostate{}}},
          Array("positions", FieldType::kIntersectionPoint,
-               {a.x, a.y, a.z, b.x, b.y, b.z})});
+               std::move(positions))});
   f.Add(41, 403,
         {ByteValue("type", 'L', FieldType::kCharacter),
          Array("positions", FieldType::kIntersectionPoint, {a.x, a.y, a.z})});
@@ -186,6 +193,142 @@ TEST(ParasolidFaceBinding, BindsIntersectionSolvesAndOwnsSolverSettings) {
       EXPECT_NEAR(sample.value().curve.first_derivative.y, curved ? sign : 0,
                   1e-12);
     }
+  }
+}
+TEST(ParasolidChartFinIntervals, BindsDirectIntersectionsInBothFinDirections) {
+  for (bool curved : {false, true}) {
+    const auto f = IntersectionFace(false, curved);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto no_options = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+    ASSERT_FALSE(no_options.ok());
+    EXPECT_EQ(no_options.error().code, ErrorCode::kUnsupportedFormat);
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                         IntersectionEvaluationOptions{1e-12, 1e-12});
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    const auto& fins = result.value().loops[0].fins;
+    const double end = curved ? std::sqrt(2.) : 1;
+    EXPECT_EQ(fins[0].start, 0);
+    EXPECT_DOUBLE_EQ(fins[0].end, end);
+    EXPECT_DOUBLE_EQ(fins[1].start, end);
+    EXPECT_EQ(fins[1].end, 0);
+    const auto midpoint = EvaluateBoundFin(model.value(), fins[0], .5, 1e-12);
+    ASSERT_TRUE(midpoint.ok());
+    EXPECT_NEAR(midpoint.value().curve.position.x, curved ? std::sqrt(.5) : .5,
+                1e-12);
+  }
+}
+TEST(ParasolidChartFinIntervals,
+     SelectsInteriorChartPointsInOriginalParameterUnits) {
+  auto f = IntersectionFace(
+      false, false,
+      {{0, 0, 0}, {.25, 0, 0}, {.5, 0, 0}, {.75, 0, 0}, {1, 0, 0}});
+  for (auto& n : f.report.nodes) {
+    if (n.index == 200) n.fields[0].values = {.25, 0., 0.};
+    if (n.index == 201) n.fields[0].values = {.75, 0., 0.};
+    if (n.index == 402) {
+      n.fields[0].values[0] = -4.;
+      n.fields[1].values[0] = 2.5;
+    }
+  }
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                       IntersectionEvaluationOptions{1e-12, 1e-12});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& fin = result.value().loops[0].fins[0];
+  EXPECT_DOUBLE_EQ(fin.start, -3.375);
+  EXPECT_DOUBLE_EQ(fin.end, -2.125);
+  const auto midpoint = EvaluateBoundFin(model.value(), fin, .5, 1e-12);
+  ASSERT_TRUE(midpoint.ok());
+  EXPECT_NEAR(midpoint.value().curve.position.x, .5, 1e-12);
+  EXPECT_NEAR(midpoint.value().curve.first_derivative.x, .5, 1e-12);
+}
+TEST(ParasolidChartFinIntervals,
+     RejectsUnmatchedAmbiguousOrCollapsedCorrespondence) {
+  for (int bad = 0; bad < 3; ++bad) {
+    auto f = IntersectionFace(false);
+    for (auto& n : f.report.nodes) {
+      if (n.index == 200 && bad == 0) n.fields[0].values = {.25, 0., 0.};
+      if (n.index == 200 && bad == 2) n.fields[0].values = {.1, 0., 0.};
+      if (n.index == 201 && bad == 2) n.fields[0].values = {.2, 0., 0.};
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30},
+                         bad == 0   ? 1e-12
+                         : bad == 1 ? 1
+                                    : .25,
+                         {}, IntersectionEvaluationOptions{1e-12, 1e-12});
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
+TEST(ParasolidChartFinIntervals,
+     HonorsEdgeSenseAndRejectsUnknownOrContradictoryOrder) {
+  for (int mode = 0; mode < 3; ++mode) {
+    auto f = IntersectionFace(false);
+    Set(f, 401, "sense", mode == 0 ? '?' : '-');
+    if (mode == 2) {
+      Set(f, 10, "vertex", 100);
+      Set(f, 11, "vertex", 101);
+      Set(f, 100, "halfedge", 10);
+      Set(f, 101, "halfedge", 11);
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                         IntersectionEvaluationOptions{1e-12, 1e-12});
+    if (mode == 2) {
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().loops[0].fins[0].start, 1);
+      EXPECT_EQ(result.value().loops[0].fins[0].end, 0);
+    } else {
+      ASSERT_FALSE(result.ok());
+      EXPECT_EQ(result.error().code, mode == 0 ? ErrorCode::kUnsupportedFormat
+                                               : ErrorCode::kInvalidRecord);
+    }
+  }
+}
+TEST(ParasolidChartFinIntervals,
+     FinCurveUsesUniqueOrientedVertexCorrespondence) {
+  auto f = IntersectionFace(false);
+  Set(f, 2, "curve", 400);
+  Set(f, 10, "curve", 401);
+  Set(f, 401, "sense", '?');
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                       IntersectionEvaluationOptions{1e-12, 1e-12});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().loops[0].fins[0].curve.value, 401);
+  EXPECT_EQ(result.value().loops[0].fins[0].start, 0);
+  EXPECT_EQ(result.value().loops[0].fins[0].end, 1);
+  EXPECT_EQ(result.value().loops[0].fins[1].curve.value, 400);
+}
+TEST(ParasolidChartFinIntervals,
+     ClosedAndVertexFreeEdgesStillNeedExplicitIntervals) {
+  for (bool vertex_free : {false, true}) {
+    auto f = IntersectionFace(false);
+    Set(f, 10, "vertex", vertex_free ? 0 : 100);
+    Set(f, 11, "vertex", vertex_free ? 0 : 100);
+    Set(f, 10, "forward", 10);
+    Set(f, 10, "backward", 10);
+    Set(f, 11, "loop", 0);
+    Set(f, 11, "forward", 0);
+    Set(f, 11, "backward", 0);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                         IntersectionEvaluationOptions{1e-12, 1e-12});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
   }
 }
 TEST(ParasolidFaceBinding, AutomaticallyBindsTrimmedIntersectionsWithOptions) {
@@ -544,6 +687,9 @@ TEST(ParasolidBodyFaceBinding, AppliesExplicitIntervalsAndOwnedSolverOptions) {
   auto result = BindBodyFaces(model.value(), NodeId{1}, p, 1e-12, options);
   ASSERT_TRUE(result.ok()) << result.error().message;
   ASSERT_EQ(result.value().faces.size(), 1);
+  const auto automatic =
+      BindBodyFaces(model.value(), NodeId{1}, 1e-12, options);
+  ASSERT_TRUE(automatic.ok()) << automatic.error().message;
   options.intersection.reset();
   const auto sample = EvaluateBoundFin(
       model.value(), result.value().faces[0].loops[0].fins[0], .5, 1e-12);

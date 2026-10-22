@@ -182,14 +182,23 @@ intersection solver, including intersections reached through source trims:
 ```cpp
 IntersectionEvaluationOptions solver{1e-7, 1e-9};
 auto bound = BindFaceTrimming(model, face, intervals, 1e-7, {}, solver);
-// With transmitted trim intervals, the automatic overload is also available:
+// Automatic inference uses source trims or unique chart-point matches:
 auto automatic = BindFaceTrimming(model, face, 1e-7, {}, solver);
 ```
 
-Direct intersections still require explicit directed intervals. The automatic
-overload can resolve source trims of intersections using their transmitted
-parameters; it does not infer edge intervals from chart endpoints. Omitting
-solver options retains the explicit unsupported result for intersections.
+With solver options, direct intersections can resolve an interval when each
+oriented vertex matches exactly one stored chart point within the binding
+tolerance. The matches must be distinct. The chart is first validated and
+parameterized by the existing evaluator; matches can select interior chart
+points and retain the original parameter units. Accurate edges additionally
+require known curve sense agreeing with the directed endpoint order. Fin
+curves use their oriented vertex correspondence. No interval is inferred for
+closed/vertex-free edges, ambiguous matches or endpoints between chart points.
+Those cases still require explicit intervals or partial overrides.
+
+The automatic overload also resolves source trims of intersections using their
+transmitted parameters. Omitting solver options retains the explicit
+unsupported result for intersections.
 Invalid solver options are rejected even when the face has no curve samples.
 
 Each `BoundFinGeometry` owns a copy of the solver settings in `intersection`.
@@ -199,14 +208,27 @@ the existing solver semantics. Face membership and vertex matching still use
 the separate binding tolerance. Directed tangents retain their scale/reversal
 with respect to the fin fraction. Chart bounds, source trim bounds, dependency
 and work limits remain in force. This provides local chart evaluation, without
-certifying a global intersection branch or extending to terminators.
+certifying a global intersection branch or extending to terminators. Endpoint
+matching adds one bounded chart preparation and linear scan before the usual
+finite membership checks; it does not perform curve point inversion.
 
 Synthetic tests cover plane/plane and curved plane/sphere intersections, stored
 settings, reversed fins, source trims, independent face tolerances, invalid
 options and chart bounds. All 542 faces in the separate 39-stream selection
 still bind with and without the supplied solver options. That selection has no
-additional eligible trimmed-intersection faces, so it establishes regression
-coverage rather than real-file coverage for the new intersection binding.
+additional eligible trimmed-intersection faces, so that filtered comparison
+establishes regression coverage. The expanded body comparison below exercises
+direct intersections from real files.
+
+With `IntersectionEvaluationOptions{1e-7, 1e-9}` and binding tolerance 1e-7,
+chart-point interval matching binds 52 of the 57 body occurrences in that
+39-stream selection (22 with faces, 30 without). All 51 earlier successes
+remain supported. The additional body has 104 faces and 456 fin uses; totals
+are now 471 bound faces and 2,208 fin uses. Five bodies remain unsupported:
+two need unique chart matches, one needs another curve interval, one has an
+unresolved fin trim and one needs unsupported surface inversion. Synthetic
+regressions cover interior chart points, nontrivial parameter units, both fin
+and curve directions, unmatched/ambiguous/collapsed matches and closed edges.
 
 ## Analytic offset surfaces
 
