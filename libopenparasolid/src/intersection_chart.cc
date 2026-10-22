@@ -23,13 +23,13 @@ Result<const GeometryObject*> InvertibleSurface(const Model& model, NodeId id) {
     case 52:
     case 53:
     case 54:
+    case 68:
     case 124:
       break;
     case 56:
     case 59:
     case 60:
     case 67:
-    case 68:
     case 120:
     case 201:
       return Result<const GeometryObject*>::Err(
@@ -101,10 +101,10 @@ Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
     std::array<Vector3, 2> normals{};
     for (std::size_t side = 0; side < surfaces.size(); ++side) {
       const auto uv =
-          i == 0 ? InvertSurface(surfaces[side]->payload, chart.positions[i],
-                                 tolerance)
-                 : InvertSurface(surfaces[side]->payload, chart.positions[i],
-                                 tolerance,
+          i == 0 ? InvertSurface(model, surfaces[side]->source,
+                                 chart.positions[i], tolerance)
+                 : InvertSurface(model, surfaces[side]->source,
+                                 chart.positions[i], tolerance,
                                  SurfaceParameterSeed{
                                      result.surface_parameters.back()[side].u,
                                      result.surface_parameters.back()[side].v});

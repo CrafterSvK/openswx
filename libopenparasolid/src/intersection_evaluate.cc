@@ -39,12 +39,12 @@ struct State {
   std::array<long double, 4> residual;
   long double error;
 };
-Result<State> Sample(const std::array<const GeometryPayload*, 2>& surfaces,
+Result<State> Sample(const Model& model, const std::array<NodeId, 2>& surfaces,
                      const Parameters& uv, const Plane& plane) {
   State state{};
   for (std::size_t side = 0; side < surfaces.size(); ++side) {
     const auto sample =
-        EvaluateSurface(*surfaces[side], uv[2 * side], uv[2 * side + 1]);
+        EvaluateSurface(model, surfaces[side], uv[2 * side], uv[2 * side + 1]);
     if (!sample.ok()) return Result<State>::Err(sample.error());
     state.surfaces[side] = sample.value();
   }
@@ -189,9 +189,9 @@ Result<IntersectionCurveEvaluation> Finish(
       {{position, {derivative[0], derivative[1], derivative[2]}},
        diagnostics.value()});
 }
-Result<State> Solve(const std::array<const GeometryPayload*, 2>& surfaces,
+Result<State> Solve(const Model& model, const std::array<NodeId, 2>& surfaces,
                     Parameters& uv, const Plane& plane, double tolerance) {
-  auto sampled = Sample(surfaces, uv, plane);
+  auto sampled = Sample(model, surfaces, uv, plane);
   if (!sampled.ok()) return Result<State>::Err(sampled.error());
   State state = sampled.value();
   constexpr std::size_t kMaxUpdates = 32;
@@ -215,7 +215,7 @@ Result<State> Solve(const std::array<const GeometryPayload*, 2>& surfaces,
         if (valid) candidate[i] = static_cast<double>(value);
       }
       if (!valid) continue;
-      auto next = Sample(surfaces, candidate, plane);
+      auto next = Sample(model, surfaces, candidate, plane);
       if (next.ok() && next.value().error < state.error) {
         uv = candidate;
         state = next.value();
@@ -296,20 +296,27 @@ Result<IntersectionCurveEvaluation> EvaluateIntersectionCurveWithDiagnostics(
                      std::lerp(points[index].y, points[index + 1].y, fraction),
                      std::lerp(points[index].z, points[index + 1].z, fraction)},
                     normal};
-  std::array<const GeometryPayload*, 2> surfaces{};
   Parameters uv{};
   for (std::size_t side = 0; side < 2; ++side) {
     const auto* node = model.FindNode(intersection.surfaces[side]);
-    surfaces[side] = &model.geometry()[*node->geometry].payload;
+    const auto& surface = model.geometry()[*node->geometry].payload;
     const auto& a = prepared.value().surface_parameters[index][side];
     const auto& b = prepared.value().surface_parameters[index + 1][side];
-    uv[2 * side] = Interpolate(a.u, b.u, fraction,
-                               node->node_type >= 51 && node->node_type <= 54);
-    const auto* torus = std::get_if<TorusGeometry>(surfaces[side]);
+    const auto* spun = std::get_if<SpunSurfaceGeometry>(&surface);
+    // Bounded profile coordinates must stay in the transmitted interval.
+    // Preferred chart seeds retain their source period; only an unbounded
+    // circular profile may use the shortest angular interpolation.
+    const bool periodic_u =
+        (node->node_type >= 51 && node->node_type <= 54) ||
+        (spun && !spun->start_parameter && !spun->end_parameter);
+    uv[2 * side] = Interpolate(a.u, b.u, fraction, periodic_u);
+    const auto* torus = std::get_if<TorusGeometry>(&surface);
     uv[2 * side + 1] = Interpolate(
-        a.v, b.v, fraction, torus && torus->major_radius > torus->minor_radius);
+        a.v, b.v, fraction,
+        spun || (torus && torus->major_radius > torus->minor_radius));
   }
-  const auto solved = Solve(surfaces, uv, plane, options.solve_tolerance);
+  const auto solved =
+      Solve(model, intersection.surfaces, uv, plane, options.solve_tolerance);
   if (!solved.ok())
     return Result<IntersectionCurveEvaluation>::Err(solved.error());
   return Finish(model, intersection, uv, solved.value().surfaces[0].position,

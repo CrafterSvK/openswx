@@ -1242,8 +1242,7 @@ budget is 128 forward evaluations, at most 24 updates per start and eight dampin
 trials per update. Exhaustion returns `kResourceLimit`; failed local searches do
 not prove absence of a preimage. Tolerance, including zero, is unchanged. General
 profiles, tilted circles and horn/apple/lemon cases remain unsupported. This
-extends model inversion and face binding; intersection charts still require
-analytic or NURBS supports.
+extends model inversion, face binding and the model-based intersection solver.
 
 Together with `EvaluateSurfaceNormal`, inversion allows callers to obtain
 oriented normals at analytic and NURBS chart positions.
@@ -1283,8 +1282,9 @@ resource and representability checks, including those on the point and both
 partials. It introduces no CLI settings or dependencies and remains MIT and
 STL-only. Oriented normals provide a building block for intersection chart
 parameterisation. The numeric chart API accepts supplied tangents; the model
-API obtains them through analytic or NURBS inversion. Local intersection
-evaluation is described below; procedural surface inversion remains pending.
+API obtains them through supported surface inversion. Local intersection
+evaluation is described below; general procedural surface inversion remains
+unsupported.
 
 Tests cover source orientation, rotated frames, rational/nonrational patches,
 procedural surfaces, radii from `1e-300` to `1e300`, subnormal derivatives,
@@ -1387,7 +1387,8 @@ comparison programs remain outside the repository.
 
 `EvaluateIntersectionChart(model, curve_id, tolerance)` prepares a directly
 referenced `INTERSECTION` chart without caller-supplied tangents. Both surface
-targets must support analytic or NURBS inversion and have known senses. At each stored chart point it:
+targets must support analytic, NURBS or circular spun ring inversion and have
+known senses. At each stored chart point it:
 
 1. Inverts the point onto both surfaces with the caller's explicit absolute
    distance tolerance in source units. The previous recovered UV supplies the
@@ -1420,7 +1421,7 @@ The result does not certify exact surface/curve membership, chart accuracy,
 conditioning, branch topology or limit correspondence. Additional type-204
 UV data is not inferred or applied. Trim wrappers and terminator extensions
 are not traversed. The separate `EvaluateIntersectionCurve` API evaluates
-analytic/NURBS interiors with explicit solver options. `EvaluateCurve` without
+supported surface interiors with explicit solver options. `EvaluateCurve` without
 options retains its unsupported result. No CLI settings or dependencies
 are added; the implementation remains MIT and STL-only.
 
@@ -1438,11 +1439,22 @@ nine starts also find residuals above tolerance for those 30, ranging from
 `7.03e-8` to `6.42e-3`; this is not a proof of the global minimum. Private
 inputs and comparison programs remain outside the repository.
 
+Circular spun support is covered by analytic plane/ring intersections across
+both angular seams, reversed senses, bounded profile coordinates, swapped
+surface order and trim wrappers. Missing profiles and non-ring/non-meridian
+profiles retain contextual failures. The separate 39-stream regression corpus
+contains no intersections on eligible spun surfaces: all 32 existing charts and
+128 chord-midpoint evaluations still succeed. Body binding remains at 56 of
+57 occurrences; the closed tolerant fin without vertices still requires an
+explicit directed interval. These finite comparisons do not certify global
+intersection branches. Private CAD inputs and comparison programs remain
+outside the repository.
+
 ## Local intersection evaluation
 
 `EvaluateIntersectionCurve(model, curve_id, parameter, options)` evaluates a
-direct `INTERSECTION` with analytic/NURBS supports inside its reconstructed
-chart. It returns
+direct `INTERSECTION` with analytic, NURBS or supported circular spun ring
+surfaces inside its reconstructed chart. It returns
 a point and natural first derivative without flipping them for curve sense.
 `IntersectionEvaluationOptions` requires two explicit finite tolerances in
 source units: nonnegative `chart_tolerance` for stored-point membership and
@@ -1463,7 +1475,11 @@ to the second surface's evaluated point and its absolute plane residual must
 both satisfy `solve_tolerance`.
 
 The initial UV pairs interpolate recovered chart parameters, using local
-periodic branches for analytic azimuth and ring-torus meridians. NURBS
+periodic branches for analytic azimuth, ring-torus meridians and spun angles.
+Bounded spun profile parameters interpolate directly, retaining source bounds;
+unbounded circular profile parameters may use the shortest angular branch.
+All inversion, normals and solver samples use the actual model surface, with
+no canonical-torus substitution. General spun profiles remain unsupported. NURBS
 coordinates interpolate in their original knot units without angular
 wrapping. Newton updates use
 natural surface partials, independently scaled Jacobian columns and partial

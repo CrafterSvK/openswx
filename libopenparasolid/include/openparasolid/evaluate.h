@@ -183,8 +183,8 @@ struct IntersectionChartEvaluation {
 };
 
 /// Reconstructs a directly referenced INTERSECTION's chart from the model.
-/// Both surface targets must support analytic or NURBS inversion and have
-/// known senses. The previous recovered UV supplies the next point's hint;
+/// Both surface targets must support analytic, NURBS or circular spun ring
+/// inversion and have known senses. The previous UV supplies the next hint;
 /// local NURBS roots and periodic seam continuity are not certified.
 /// Each stored chart position must invert onto both surfaces within the finite
 /// nonnegative absolute tolerance in source units. Normals are sampled at the
@@ -231,8 +231,8 @@ struct IntersectionEvaluationOptions {
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);
 
-/// Evaluates a directly referenced INTERSECTION with analytic/NURBS supports
-/// within its chart.
+/// Evaluates a directly referenced INTERSECTION with analytic, NURBS or
+/// supported circular spun ring surfaces within its chart.
 /// Requires a finite parameter and explicit finite chart/solve tolerances in
 /// source units. Optional endpoint tolerance uses original parameter units.
 /// Prepares the chart, then locally solves coincidence of its
@@ -242,6 +242,9 @@ struct IntersectionEvaluationOptions {
 /// Interior solves use at most 32 Newton updates and 16
 /// damping trials per update; singular/stalled/nonconvergent solves are errors.
 /// Chart/inversion/normal resource and validity checks remain in force.
+/// Model surface evaluation retains spun profile bounds. Spin angles and
+/// unbounded circular profile angles use local periodic interpolation; bounded
+/// profile parameters interpolate directly without extending their domain.
 /// Optional geometric regularity minimums apply at the query and reject
 /// samples below a minimum with kInvalidRecord.
 /// Outside-chart parameters beyond chart_parameter_tolerance are invalid

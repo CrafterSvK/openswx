@@ -67,6 +67,164 @@ void Sphere(ModelFixture& f) {
          Numbers("radius", {1.}),
          ByteValue("sense", '+', FieldType::kCharacter)});
 }
+void SpunRing(ModelFixture& f, bool meridian, bool bounded = false,
+              bool reverse = false, double major_radius = 3) {
+  const double first = reverse ? 3.3 : 3., last = reverse ? 3. : 3.3;
+  std::vector<Vector3> points;
+  for (double angle : {first, last})
+    points.push_back(
+        meridian ? Vector3{major_radius + std::cos(angle), 0, -std::sin(angle)}
+                 : Vector3{(major_radius + 1) * std::cos(angle),
+                           (major_radius + 1) * std::sin(angle), 0});
+  Definition(f, points);
+  f.Add(50, 50,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, meridian ? 1. : 0., meridian ? 0. : 1.},
+                 FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", reverse ? '-' : '+', FieldType::kCharacter)});
+  const ModelField null_vector{
+      {"start", FieldType::kVector},
+      {std::monostate{}, std::monostate{}, std::monostate{}}};
+  f.Add(68, 51,
+        {Pointer("profile", 60, 1008),
+         Numbers("base", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector),
+         null_vector,
+         {{"end", FieldType::kVector}, null_vector.values},
+         {{"x_axis", FieldType::kVector}, null_vector.values},
+         {{"start_param", FieldType::kDouble},
+          {bounded ? ScalarValue{3.} : ScalarValue{std::monostate{}}}},
+         {{"end_param", FieldType::kDouble},
+          {bounded ? ScalarValue{3.4} : ScalarValue{std::monostate{}}}},
+         {{"scale", FieldType::kDouble}, {std::monostate{}}},
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  f.Add(
+      31, 60,
+      {Numbers("center", {major_radius, 0, 0}, FieldType::kVector),
+       Numbers("normal", {0, 1, 0}, FieldType::kVector),
+       Numbers("x_axis", {1, 0, 0}, FieldType::kVector), Numbers("radius", {1}),
+       ByteValue("sense", '+', FieldType::kCharacter)});
+}
+TEST(ParasolidIntersectionEvaluate, CircularSpunSupportsCrossAngularSeams) {
+  for (bool meridian : {false, true}) {
+    for (bool reverse : {false, true}) {
+      for (bool bounded : {false, true}) {
+        if (bounded && !meridian) continue;
+        ModelFixture f;
+        SpunRing(f, meridian, bounded, reverse);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto chart =
+            EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+        ASSERT_TRUE(chart.ok()) << chart.error().message;
+        const auto& times = chart.value().parameterization.parameters;
+        for (double fraction : {0., .2, .5, .8, 1.}) {
+          const double parameter =
+              std::lerp(times.front(), times.back(), fraction);
+          const auto result = EvaluateIntersectionCurveWithDiagnostics(
+              model.value(), NodeId{1}, parameter, {1e-12, 1e-12});
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          const double direction = reverse ? -1 : 1;
+          const double delta = std::asin((2 * fraction - 1) * std::sin(.15));
+          const double angle = 3.15 + direction * delta;
+          const auto& point = result.value().curve.position;
+          EXPECT_NEAR(point.x,
+                      meridian ? 3 + std::cos(angle) : 4 * std::cos(angle),
+                      1e-11);
+          EXPECT_NEAR(point.y, meridian ? 0 : 4 * std::sin(angle), 1e-11);
+          EXPECT_NEAR(point.z, meridian ? -std::sin(angle) : 0, 1e-11);
+          const auto& tangent = result.value().curve.first_derivative;
+          const double scale = direction / (3 * std::cos(delta));
+          EXPECT_NEAR(tangent.x, -scale * std::sin(angle), 1e-11);
+          EXPECT_NEAR(tangent.y, meridian ? 0 : scale * std::cos(angle), 1e-11);
+          EXPECT_NEAR(tangent.z, meridian ? -scale * std::cos(angle) : 0,
+                      1e-11);
+          EXPECT_NEAR(result.value().diagnostics.surface_normal_sine, 1, 1e-12);
+        }
+        if (bounded) {
+          for (const auto& uv : chart.value().surface_parameters) {
+            EXPECT_GE(uv[1].u, 3);
+            EXPECT_LE(uv[1].u, 3.4);
+          }
+        }
+      }
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     SpunSupportsRetainSurfaceOrderAndTrimBounds) {
+  ModelFixture f;
+  SpunRing(f, false);
+  // Swap the supports and reverse the plane sense, retaining chart direction.
+  f.report.nodes[0].fields[0].values = {uint64_t{51}, uint64_t{50}};
+  for (auto& node : f.report.nodes) {
+    if (node.index != 50) continue;
+    const auto& fields = f.report.schemas[node.schema_index].definition.fields;
+    for (auto& field : node.fields)
+      if (fields[field.definition_index].name == "sense")
+        field.values = {uint64_t{'-'}};
+  }
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+  ASSERT_TRUE(chart.ok()) << chart.error().message;
+  const auto& times = chart.value().parameterization.parameters;
+  EXPECT_NEAR(chart.value().surface_parameters.front()[0].v, 3, 1e-12);
+  EXPECT_NEAR(chart.value().surface_parameters.front()[1].u, 4 * std::cos(3.),
+              1e-12);
+  f.Add(133, 70,
+        {Pointer("basis_curve", 1, 1008),
+         Numbers("point_1", {4 * std::cos(3.3), 4 * std::sin(3.3), 0},
+                 FieldType::kVector),
+         Numbers("point_2", {4 * std::cos(3.), 4 * std::sin(3.), 0},
+                 FieldType::kVector),
+         Numbers("parm_1", {times.back()}), Numbers("parm_2", {times.front()}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto trimmed = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(trimmed.ok());
+  const IntersectionEvaluationOptions options{1e-12, 1e-12};
+  const double parameter = std::lerp(times.front(), times.back(), .2);
+  const auto direct =
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, parameter, options);
+  const auto sample =
+      EvaluateCurve(trimmed.value(), NodeId{70}, parameter, options);
+  ASSERT_TRUE(direct.ok());
+  ASSERT_TRUE(sample.ok()) << sample.error().message;
+  EXPECT_DOUBLE_EQ(sample.value().position.x, direct.value().position.x);
+  EXPECT_DOUBLE_EQ(sample.value().first_derivative.y,
+                   direct.value().first_derivative.y);
+  const auto outside =
+      EvaluateCurve(trimmed.value(), NodeId{70}, times.back() + 1, options);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kInvalidOptions);
+}
+TEST(ParasolidIntersectionEvaluate, SpunChartsRetainExplicitProfileFailures) {
+  for (int bad = 0; bad < 3; ++bad) {
+    ModelFixture f;
+    SpunRing(f, false, false, false, bad == 0 ? 1 : 3);
+    for (auto& node : f.report.nodes) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (auto& field : node.fields) {
+        const auto& name = fields[field.definition_index].name;
+        if (bad == 1 && node.index == 51 && name == "profile")
+          field.values = {uint64_t{99}};
+        if (bad == 2 && node.index == 60 && name == "normal")
+          field.values = {0., 0., 1.};
+      }
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, bad == 1 ? ErrorCode::kInvalidRecord
+                                            : ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(result.error().message.find("point 0, surface 1"),
+              std::string::npos);
+  }
+}
 TEST(ParasolidIntersectionEvaluate,
      RationalNurbsSupportsKeepOriginalKnotUnits) {
   ModelFixture f;
