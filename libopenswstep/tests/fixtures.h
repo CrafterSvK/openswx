@@ -755,6 +755,131 @@ inline ModelFixture ToroidalProfileBand(bool across_seam) {
   }
   return f;
 }
+inline void CircleBasis(ModelFixture& f, uint32_t id, Vector3 center,
+                        double radius = 1, char sense = '+') {
+  RemoveNode(f, id);
+  f.Add(31, id,
+        {Numbers("center", {center.x, center.y, center.z}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         Numbers("radius", {radius}),
+         ByteValue("sense", sense, FieldType::kCharacter)});
+}
+inline ModelFixture QuarterDisk() {
+  auto f = Polyhedron({{1, 0, 0}, {0, 1, 0}, {0, 0, 0}}, {{0, 1, 2}});
+  CircleBasis(f, 4000, {0, 0, 0});
+  return f;
+}
+inline ModelFixture RoundedRectangle(bool reverse = false) {
+  std::vector<unsigned> polygon{0, 1, 2, 3, 4, 5, 6, 7};
+  if (reverse) std::reverse(polygon.begin(), polygon.end());
+  auto f = Polyhedron({{1, 0, 0},
+                       {3, 0, 0},
+                       {4, 1, 0},
+                       {4, 2, 0},
+                       {3, 3, 0},
+                       {1, 3, 0},
+                       {0, 2, 0},
+                       {0, 1, 0}},
+                      {polygon});
+  struct Arc {
+    unsigned first, last;
+    Vector3 center;
+  };
+  for (const auto arc : {Arc{1, 2, {3, 1, 0}}, Arc{3, 4, {3, 2, 0}},
+                         Arc{5, 6, {1, 2, 0}}, Arc{7, 0, {1, 1, 0}}}) {
+    for (std::size_t i = 0; i < polygon.size(); ++i) {
+      const auto a = polygon[i], b = polygon[(i + 1) % polygon.size()];
+      if (std::min(a, b) == std::min(arc.first, arc.last) &&
+          std::max(a, b) == std::max(arc.first, arc.last))
+        CircleBasis(f, static_cast<uint32_t>(4000 + i), arc.center, 1,
+                    arc.first < arc.last ? '+' : '-');
+    }
+  }
+  return f;
+}
+inline ModelFixture HalfDisk() {
+  auto f = Polyhedron({{-1, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {{0, 1, 2}});
+  // Keep the chord and one upper semicircle; reconnect the two source vertices
+  // and their anchor fin lists after removing the triangle's third edge.
+  for (const auto id : {102u, 1008u, 1009u, 4002u, 202u, 502u})
+    RemoveNode(f, id);
+  Set(f, 101, "next", 0);
+  Set(f, 201, "next", 0);
+  Set(f, 1000, "forward", 1004);
+  Set(f, 1000, "backward", 1004);
+  Set(f, 1004, "forward", 1000);
+  Set(f, 1004, "backward", 1000);
+  Set(f, 1004, "vertex", 200);
+  Set(f, 1001, "next_at_vx", 1004);
+  Set(f, 1004, "next_at_vx", 0);
+  CircleBasis(f, 4001, {0, 0, 0});
+  return f;
+}
+inline ModelFixture HalfEllipse() {
+  auto f = HalfDisk();
+  for (auto& node : f.report.nodes) {
+    if (node.index == 500 || node.index == 4000)
+      node.fields[0].values = {-2., 0., 0.};
+    if (node.index == 501) node.fields[0].values = {2., 0., 0.};
+  }
+  RemoveNode(f, 4001);
+  f.Add(32, 4001,
+        {Numbers("center", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         Numbers("major_radius", {2}), Numbers("minor_radius", {1}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture CircularLens() {
+  auto f = HalfDisk();
+  CircleBasis(f, 4000, {0, 1, 0}, std::sqrt(2.));
+  CircleBasis(f, 4001, {0, -1, 0}, std::sqrt(2.));
+  return f;
+}
+inline ModelFixture MajorCircularSegment() {
+  auto f = HalfDisk();
+  const auto q = std::sqrt(0.5);
+  for (auto& node : f.report.nodes) {
+    if (node.index == 500) node.fields[0].values = {1., 0., 0.};
+    if (node.index == 501) node.fields[0].values = {0., 1., 0.};
+    if (node.index == 4000) {
+      node.fields[0].values = {1., 0., 0.};
+      node.fields[1].values = {-q, q, 0.};
+    }
+  }
+  return f;
+}
+inline ModelFixture SplitCircle(bool double_turn = false) {
+  std::vector<Vector3> points;
+  const unsigned count = double_turn ? 5 : 4;
+  const auto turn = 2 * std::acos(-1.);
+  for (unsigned i = 0; i < count; ++i)
+    points.push_back(
+        {std::cos(turn * i / count), std::sin(turn * i / count), 0});
+  const std::vector<unsigned> polygon =
+      double_turn ? std::vector<unsigned>{0, 2, 4, 1, 3}
+                  : std::vector<unsigned>{0, 1, 2, 3};
+  auto f = Polyhedron(points, {polygon});
+  for (unsigned i = 0; i < count; ++i)
+    CircleBasis(f, 4000 + i, {0, 0, 0}, 1,
+                polygon[i] < polygon[(i + 1) % count] ? '+' : '-');
+  return f;
+}
+inline ModelFixture ConcaveArcFace() {
+  auto f = Polyhedron({{0, 0, 0},
+                       {4, 0, 0},
+                       {4, 4, 0},
+                       {3, 4, 0},
+                       {3, 2, 0},
+                       {1, 2, 0},
+                       {1, 4, 0},
+                       {0, 4, 0}},
+                      {{0, 1, 2, 3, 4, 5, 6, 7}});
+  CircleBasis(f, 4004, {2, 2, 0}, 1, '-');
+  return f;
+}
 inline ModelFixture Acorn() {
   auto f = Polyhedron({{0, 0, 0}, {1, 0, 0}}, {});
   Set(f, 4, "edge", 0);

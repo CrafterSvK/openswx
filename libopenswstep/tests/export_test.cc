@@ -117,18 +117,14 @@ TEST(OpenSwStep, AcceptsExactEntityAndByteBudgets) {
   ASSERT_FALSE(entities.ok());
   EXPECT_EQ(entities.error().code, ErrorCode::kResourceLimit);
 }
-TEST(OpenSwStep, RejectsCurvedFaceEdgesWithoutApproximation) {
-  auto f = test::Polyhedron({{1, 0, 0}, {0, 1, 0}, {0, 0, 0}}, {{0, 1, 2}});
-  test::RemoveNode(f, 4000);
-  f.Add(31, 4000,
-        {test::Numbers("center", {0, 0, 0}, FieldType::kVector),
-         test::Numbers("normal", {0, 0, 1}, FieldType::kVector),
-         test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
-         test::Numbers("radius", {1}),
-         test::ByteValue("sense", '+', FieldType::kCharacter)});
-  const auto result = Export(f);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+TEST(OpenSwStep, ExportsCircularSectorsWithoutApproximation) {
+  const auto result = Export(test::QuarterDisk());
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.vertices, 3);
+  EXPECT_EQ(result.value().statistics.edges, 3);
+  EXPECT_EQ(result.value().statistics.faces, 1);
+  EXPECT_NE(result.value().text.find("=CIRCLE("), std::string::npos);
+  CheckReferences(result.value());
 }
 TEST(OpenSwStep, RejectsCrossingPolygonsAndBoundsPolygonWork) {
   const auto crossing = Export(
@@ -797,6 +793,65 @@ TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
     const auto sheet = Export(f);
     ASSERT_TRUE(sheet.ok()) << sheet.error().message;
   }
+}
+TEST(OpenSwStep, ExportsConvexLineArcAndSplitCircleBoundariesExactly) {
+  for (const auto& fixture :
+       {test::RoundedRectangle(), test::RoundedRectangle(true),
+        test::HalfDisk(), test::CircularLens(), test::MajorCircularSegment(),
+        test::SplitCircle()}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    CheckReferences(result.value());
+  }
+  const auto rectangle = Export(test::RoundedRectangle());
+  ASSERT_TRUE(rectangle.ok());
+  EXPECT_EQ(rectangle.value().statistics.vertices, 8);
+  EXPECT_EQ(rectangle.value().statistics.edges, 8);
+  const auto half = Export(test::HalfDisk());
+  ASSERT_TRUE(half.ok());
+  EXPECT_EQ(half.value().statistics.vertices, 2);
+  EXPECT_EQ(half.value().statistics.edges, 2);
+}
+TEST(OpenSwStep, BoundsConvexCornerChecksAndRejectsConcaveOrRepeatedTurns) {
+  auto options = Options();
+  options.max_polygon_checks = 8;
+  const auto exact = Export(test::RoundedRectangle(), options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  options.max_polygon_checks = 7;
+  const auto limited = Export(test::RoundedRectangle(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto concave = Export(test::ConcaveArcFace());
+  ASSERT_FALSE(concave.ok());
+  EXPECT_EQ(concave.error().code, ErrorCode::kUnsupportedFormat);
+  const auto repeated = Export(test::SplitCircle(true));
+  ASSERT_FALSE(repeated.ok());
+  EXPECT_EQ(repeated.error().code, ErrorCode::kInvalidRecord);
+}
+TEST(OpenSwStep, HandlesConvexArcsOnTranslatedAndNegativelySensedPlanes) {
+  auto negative = test::RoundedRectangle();
+  test::Set(negative, 300, "sense", '-');
+  for (auto& node : negative.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  for (const auto& fixture :
+       {negative, test::RotateAndTranslate(test::RoundedRectangle())}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+  }
+}
+TEST(OpenSwStep, RejectsPartialEllipseFaceBoundariesExplicitly) {
+  const auto result = Export(test::HalfEllipse());
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("LINE/CIRCLE"), std::string::npos);
+}
+TEST(OpenSwStep, ParsesConvexArcFacesThroughTheBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::RoundedRectangle());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.edges, 8);
 }
 class StepFileTest : public testing::Test {
  protected:

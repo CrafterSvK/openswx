@@ -16,6 +16,15 @@ int main(int argc, char** argv) {
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
           {"tetra", test::Tetrahedron()},
+          {"rounded-rectangle", test::RoundedRectangle()},
+          {"rounded-rectangle-reverse", test::RoundedRectangle(true)},
+          {"half-disk", test::HalfDisk()},
+          {"quarter-disk", test::QuarterDisk()},
+          {"circular-lens", test::CircularLens()},
+          {"major-circular-segment", test::MajorCircularSegment()},
+          {"split-circle", test::SplitCircle()},
+          {"oblique-rounded-rectangle",
+           test::RotateAndTranslate(test::RoundedRectangle())},
           {"toroidal-solid", test::ToroidalBand()},
           {"toroidal-tube", test::ToroidalTube()},
           {"toroidal-inward", test::InwardToroidalBand()},

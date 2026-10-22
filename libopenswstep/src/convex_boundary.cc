@@ -1,0 +1,191 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 openswx contributors
+#include "convex_boundary.h"
+
+#include <algorithm>
+#include <cmath>
+#include <numbers>
+#include <vector>
+
+#include "openparasolid/evaluate.h"
+
+namespace openswstep::internal {
+namespace {
+using namespace openparasolid;
+constexpr long double kCirclePlaneAlignmentTolerance = 1e-9L;
+struct Point2 {
+  long double x, y;
+};
+struct Segment {
+  Point2 first_tangent, last_tangent;
+  long double area2;
+  long double curvature;
+  long double length;
+};
+ParseError Invalid(const char* message) {
+  return {ErrorCode::kInvalidRecord, 0, message};
+}
+ParseError Unsupported(const char* message) {
+  return {ErrorCode::kUnsupportedFormat, 0, message};
+}
+long double Cross(Point2 a, Point2 b) { return a.x * b.y - a.y * b.x; }
+long double Project(Vector3 point, Vector3 origin, Vector3 axis) {
+  return (static_cast<long double>(point.x) - origin.x) * axis.x +
+         (static_cast<long double>(point.y) - origin.y) * axis.y +
+         (static_cast<long double>(point.z) - origin.z) * axis.z;
+}
+struct Frame {
+  Vector3 origin, x, y;
+  Point2 Point(Vector3 point) const {
+    return {Project(point, origin, x), Project(point, origin, y)};
+  }
+  Point2 Direction(Vector3 vector) const {
+    return {Project(vector, {}, x), Project(vector, {}, y)};
+  }
+};
+Result<Point2> Tangent(Vector3 value, const Frame& frame, bool forward) {
+  const auto t = frame.Direction(value);
+  const auto length = std::hypot(t.x, t.y);
+  if (!std::isfinite(length) || length == 0)
+    return Result<Point2>::Err(
+        Invalid("Planar boundary tangent is degenerate"));
+  const long double sign = forward ? 1 : -1;
+  return Result<Point2>::Ok({sign * t.x / length, sign * t.y / length});
+}
+Result<Segment> ReadSegment(const PlanarCurve& curve,
+                            const PlaneGeometry& plane, const Frame& frame,
+                            double tolerance) {
+  using Return = Result<Segment>;
+  if (!curve.geometry || !std::isfinite(curve.start) ||
+      !std::isfinite(curve.end) || curve.start == curve.end)
+    return Return::Err(
+        Invalid("Planar curve requires a finite nonzero interval"));
+  const auto* line = std::get_if<LineGeometry>(curve.geometry);
+  const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
+  if (!line && !circle)
+    return Return::Err(
+        Unsupported("Convex curved boundaries require LINE/CIRCLE bases"));
+  const auto first = EvaluateCurve(*curve.geometry, curve.start);
+  if (!first.ok()) return Return::Err(first.error());
+  const auto last = EvaluateCurve(*curve.geometry, curve.end);
+  if (!last.ok()) return Return::Err(last.error());
+  for (const auto p : {first.value().position, last.value().position}) {
+    const auto distance = Project(p, plane.origin, plane.normal);
+    if (!std::isfinite(distance) || std::abs(distance) > tolerance)
+      return Return::Err(
+          Invalid("Curved boundary endpoint is outside the plane"));
+  }
+  const auto first_tangent =
+      Tangent(first.value().first_derivative, frame, curve.end > curve.start);
+  if (!first_tangent.ok()) return Return::Err(first_tangent.error());
+  const auto last_tangent =
+      Tangent(last.value().first_derivative, frame, curve.end > curve.start);
+  if (!last_tangent.ok()) return Return::Err(last_tangent.error());
+  const auto a = frame.Point(first.value().position),
+             b = frame.Point(last.value().position);
+  Segment result{first_tangent.value(), last_tangent.value(), Cross(a, b), 0,
+                 std::hypot(b.x - a.x, b.y - a.y)};
+  if (circle) {
+    const auto span = curve.end - curve.start;
+    if (!std::isfinite(span) || std::abs(span) > 2 * std::numbers::pi)
+      return Return::Err(
+          Unsupported("Curved boundary arc exceeds one conic turn"));
+    const auto& n = circle->normal;
+    const auto& x = circle->x_axis;
+    const Vector3 y{n.y * x.z - n.z * x.y, n.z * x.x - n.x * x.z,
+                    n.x * x.y - n.y * x.x};
+    const auto center_residual =
+        std::abs(Project(circle->center, plane.origin, plane.normal));
+    const auto excursion =
+        circle->radius *
+        std::hypot(Project(x, {}, plane.normal), Project(y, {}, plane.normal));
+    if (!std::isfinite(center_residual + excursion) ||
+        center_residual + excursion > tolerance)
+      return Return::Err(
+          Invalid("Complete supporting circle is outside the face plane"));
+    const auto rx = frame.Direction(x), ry = frame.Direction(y);
+    const auto determinant = Cross(rx, ry);
+    if (!std::isfinite(determinant) ||
+        std::abs(determinant) < 1 - kCirclePlaneAlignmentTolerance)
+      return Return::Err(Invalid("Supporting circle plane is misaligned"));
+    result.curvature = determinant > 0 ? span : -span;
+    if (result.curvature <= 0)
+      return Return::Err(Unsupported(
+          "Curved planar export requires a convex source-oriented boundary"));
+    const auto center = frame.Point(circle->center);
+    result.area2 = Cross(center, {b.x - a.x, b.y - a.y}) +
+                   static_cast<long double>(circle->radius) * circle->radius *
+                       determinant * span;
+    result.length = static_cast<long double>(circle->radius) * std::abs(span);
+  }
+  if (!std::isfinite(result.area2) || !std::isfinite(result.length) ||
+      result.length <= tolerance)
+    return Return::Err(
+        Invalid("Curved boundary segment is degenerate or unrepresentable"));
+  return Return::Ok(result);
+}
+}  // namespace
+Result<ConvexBoundary> ValidateConvexPlanarLoop(
+    std::span<const PlanarCurve> curves, const PlaneGeometry& plane,
+    bool natural_sense, double tolerance, uint64_t& remaining_checks) {
+  using Return = Result<ConvexBoundary>;
+  if (!std::isfinite(tolerance) || tolerance <= 0)
+    return Return::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Convex boundary tolerance must be positive and finite"});
+  if (curves.size() < 2 || !curves.front().geometry)
+    return Return::Err(
+        Unsupported("Convex curved loop requires at least two edges"));
+  const auto first =
+      EvaluateCurve(*curves.front().geometry, curves.front().start);
+  if (!first.ok()) return Return::Err(first.error());
+  const auto& n = plane.normal;
+  const auto& x = plane.x_axis;
+  const double sign = natural_sense ? 1 : -1;
+  const Frame frame{
+      first.value().position,
+      x,
+      {sign * (n.y * x.z - n.z * x.y), sign * (n.z * x.x - n.x * x.z),
+       sign * (n.x * x.y - n.y * x.x)}};
+  std::vector<Segment> segments;
+  segments.reserve(curves.size());
+  long double area2 = 0, perimeter = 0, turning = 0;
+  for (const auto& curve : curves) {
+    const auto segment = ReadSegment(curve, plane, frame, tolerance);
+    if (!segment.ok()) return Return::Err(segment.error());
+    segments.push_back(segment.value());
+    area2 += segment.value().area2;
+    perimeter += segment.value().length;
+    turning += segment.value().curvature;
+  }
+  if (!std::isfinite(area2) || !std::isfinite(perimeter) ||
+      area2 <= tolerance * perimeter)
+    return Return::Err(
+        Invalid("Curved boundary area is degenerate or has incorrect winding"));
+  constexpr long double kAngleTolerance = 1e-10L;
+  // Bound accepted negative corner noise by both angle and source length.
+  const auto corner_tolerance =
+      std::min(kAngleTolerance, static_cast<long double>(tolerance) /
+                                    perimeter / segments.size());
+  for (std::size_t i = 0; i < segments.size(); ++i) {
+    if (!remaining_checks)
+      return Return::Err({ErrorCode::kResourceLimit, 0,
+                          "Convex boundary corner limit exceeded"});
+    --remaining_checks;
+    const auto a = segments[i].last_tangent,
+               b = segments[(i + 1) % segments.size()].first_tangent;
+    const auto corner = std::atan2(Cross(a, b), a.x * b.x + a.y * b.y);
+    if (!std::isfinite(corner) || corner < -corner_tolerance ||
+        corner >= std::numbers::pi_v<long double> - kAngleTolerance)
+      return Return::Err(Unsupported(
+          "Curved planar export requires convex corners without reversals"));
+    turning += std::max(0.L, corner);
+  }
+  if (!std::isfinite(turning) ||
+      std::abs(turning - 2 * std::numbers::pi_v<long double>) >
+          kAngleTolerance * (segments.size() + 1))
+    return Return::Err(
+        Invalid("Curved planar loop does not make one convex revolution"));
+  return Return::Ok({area2 / 2, first.value().position});
+}
+}  // namespace openswstep::internal

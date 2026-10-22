@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "conic_boundary.h"
+#include "convex_boundary.h"
 #include "planar_boundary.h"
 #include "step_writer.h"
 #include "torus_boundary.h"
@@ -30,7 +31,7 @@ struct FaceData {
   bool natural_sense = true;
   std::vector<std::vector<Vector3>> polygons;
   std::optional<std::size_t> outer_loop = 0;
-  long double conic_area = 0;
+  long double planar_area = 0;
   long double axial_height = 0;
   Vector3 reference_point;
   std::optional<CircularBand> cone_band;
@@ -66,6 +67,7 @@ class BodyWriter {
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
   Result<bool> PrepareConicFace(FaceData& face);
+  Result<bool> PrepareConvexFace(FaceData& face);
   Result<std::vector<ConicBoundary>> ConicLoops(const FaceData& face);
   Result<bool> CheckVertexLinks();
   Result<bool> OrientFaces();
@@ -297,12 +299,47 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
     const auto& loop = loops.value()[i];
     const auto area =
         std::numbers::pi_v<long double> * loop.major_radius * loop.minor_radius;
-    face.conic_area += i == boundary.value() ? area : -area;
+    face.planar_area += i == boundary.value() ? area : -area;
   }
-  if (!std::isfinite(face.conic_area) || face.conic_area <= 0)
+  if (!std::isfinite(face.planar_area) || face.planar_area <= 0)
     return Result<bool>::Err(
         Error(face.source->face, ErrorCode::kInvalidRecord,
               "Conic face area is nonpositive or unrepresentable"));
+  return Result<bool>::Ok(true);
+}
+Result<bool> BodyWriter::PrepareConvexFace(FaceData& face) {
+  if (face.source->loops.size() != 1 ||
+      face.source->loops.front().isolated_vertex)
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kUnsupportedFormat,
+              "Curved convex planar faces require one non-isolated loop"));
+  std::set<uint32_t> vertices;
+  std::vector<PlanarCurve> curves;
+  for (const auto& fin : face.source->loops.front().fins) {
+    if (fin.use.fin_curve.value)
+      return Result<bool>::Err(
+          Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
+                "Tolerant fin curves need an explicit STEP pcurve mapping"));
+    if (!fin.use.start_vertex.value || !fin.use.end_vertex.value ||
+        !vertices.insert(fin.use.start_vertex.value).second)
+      return Result<bool>::Err(Error(
+          face.source->face, ErrorCode::kUnsupportedFormat,
+          "Multi-edge curved loops require distinct non-null source vertices"));
+    const auto basis = Basis(fin.curve);
+    if (!basis.ok()) return Result<bool>::Err(basis.error());
+    curves.push_back({&basis.value()->payload, fin.start, fin.end});
+    uses_[fin.use.edge.value].push_back(
+        {faces_.size(), fin.use.sense == TopologySense::kForward});
+  }
+  const auto boundary =
+      ValidateConvexPlanarLoop(curves, *face.plane, face.natural_sense,
+                               options_.tolerance, polygon_checks_remaining_);
+  if (!boundary.ok())
+    return Result<bool>::Err(Error(face.source->face, boundary.error().code,
+                                   boundary.error().message.c_str()));
+  face.planar_area = boundary.value().area;
+  face.reference_point = boundary.value().reference_point;
+  face.outer_loop = 0;
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareFaces() {
@@ -340,6 +377,21 @@ Result<bool> BodyWriter::PrepareFaces() {
       if (!conic.ok()) return conic;
       faces_.push_back(std::move(face));
       continue;
+    }
+    if (plane && source.loops.size() == 1) {
+      bool curved = false;
+      for (const auto& fin : source.loops.front().fins) {
+        const auto basis = Basis(fin.curve);
+        if (!basis.ok()) return Result<bool>::Err(basis.error());
+        curved = curved ||
+                 !std::holds_alternative<LineGeometry>(basis.value()->payload);
+      }
+      if (curved) {
+        const auto boundary = PrepareConvexFace(face);
+        if (!boundary.ok()) return boundary;
+        faces_.push_back(std::move(face));
+        continue;
+      }
     }
     for (const auto& loop : source.loops) {
       if (loop.isolated_vertex || loop.fins.size() < 3)
@@ -531,7 +583,7 @@ Result<bool> BodyWriter::CheckSolid() {
   long double volume6 = 0;
   for (std::size_t i = 0; i < faces_.size(); ++i) {
     const auto& face = faces_[i];
-    if (face.cylinder || face.cone || face.torus || face.conic_area > 0) {
+    if (face.cylinder || face.cone || face.torus || face.planar_area > 0) {
       const auto sign = face.natural_sense != reversed_[i] ? 1.L : -1.L;
       if (face.torus) {
         volume6 +=
@@ -564,7 +616,7 @@ Result<bool> BodyWriter::CheckSolid() {
         const auto distance = (static_cast<long double>(p.x) - origin.x) * n.x +
                               (static_cast<long double>(p.y) - origin.y) * n.y +
                               (static_cast<long double>(p.z) - origin.z) * n.z;
-        volume6 += sign * 2 * face.conic_area * distance;
+        volume6 += sign * 2 * face.planar_area * distance;
       }
       continue;
     }

@@ -15,6 +15,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, including holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
+| Single convex planar contour containing LINE/CIRCLE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular sectors, two-edge segments/lenses and split circles |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with disjoint circular holes | Exact circular outer/inner bounds, including annuli and nonconcentric holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
@@ -46,6 +47,21 @@ inside that outer loop. Source loop order is preserved; the outer loop need not
 come first. Crossings, touching or tolerance-ambiguous edges, nested holes and
 disconnected islands are rejected. Through holes in closed planar solids retain
 their interior walls and subtract from enclosed volume.
+
+The mixed line/circular-arc subset supports one convex outer contour with at
+least two edges and distinct non-null source vertices. It checks nonnegative
+source-oriented arc curvature, convex corner turns and one full revolution of
+the boundary tangent. Accepted negative corner noise is bounded by both an
+angular limit and the source length tolerance divided across the perimeter and
+corners. Every corner consumes one comparison-budget check. Circular support
+planes are checked over the entire circle; straight endpoints retain plane
+membership checks. Area is integrated analytically over each source line/arc.
+No chords, fitted curves or triangulation replace the source boundary.
+
+This additional subset excludes holes, nonconvex curved contours and partial
+ellipse edges. Existing all-line polygon faces retain their concave-polygon
+and polygon-hole support. Existing full-circle hole faces retain their separate
+analytic containment checks.
 
 Conic planar loops must each contain one complete circle or ellipse edge. The
 exporter checks the maximum plane residual over the entire analytic curve, not
@@ -101,8 +117,8 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS, mixed line/conic face boundaries, multi-edge conic loops, elliptical
-holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
+NURBS, nonconvex curved face boundaries, mixed curved/polygon hole loops,
+partial ellipse edges, elliptical holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -160,7 +176,7 @@ do not enable unsupported output geometry or bypass validation.
 Positive entity, output byte and polygon comparison budgets bound serialization
 and polygon checks. The shared polygon budget counts nonadjacent segments within
 each loop, all segment pairs between loops, and containment edge tests across
-the entire selected body. Circular containment and hole-pair comparisons consume
+the entire selected body. Convex line/arc contours consume one check per corner. Circular containment and hole-pair comparisons consume
 one check each from the same budget; each cylindrical/conical/toroidal cut pair consumes one
 check. Parser, model and body-binding budgets remain independently configurable
 in `ExportOptions`. The file adapter checks source file size before container
@@ -194,7 +210,8 @@ GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon holes, through holes, cylindrical
-bands, conical frustums, toroidal intervals, invalid topology, budget boundaries and preserved source diagnostics.
+bands, conical frustums, toroidal intervals, convex arc contours, invalid
+topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
 Python interpreter providing the `OCP` bindings:
@@ -209,20 +226,20 @@ ctest --test-dir build -R openswstep_occt_roundtrip --output-on-failure
 It imports generated synthetic STEP documents, runs `BRepCheck_Analyzer`, checks
 unique vertex/edge/face/solid counts and compares volumes, areas and curve
 lengths, including hole areas and analytic cylinder/frustum/tube/toroidal
-volumes. Different seam phases exercise importer-created periodic seams and ring splits. OCCT is
-exclusively a test dependency and is never linked into the export library.
+volumes. Different seam phases exercise importer-created periodic seams and ring
+splits. OCCT is exclusively a test dependency and is never linked into the export library.
 Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 41 export successfully, including eleven face-bearing bodies
-with 59 faces; 30 successes contain only wire/point geometry. All 41 generated
-documents pass OCCT import and B-rep validity checks. The other 16 return
-unsupported-format errors. Toroidal-band support adds one complete eight-face
-body and preserves all 40 previous successes. The remaining private bodies
-require additional geometry features before their complete export can succeed.
-These are raw body selections, including archival partition snapshots, rather than automatic active-configuration
-conversions.
+extracted streams: 42 export successfully, including twelve face-bearing bodies
+with 60 faces; 30 successes contain only wire/point geometry. All 42 generated
+documents pass OCCT import and B-rep validity checks. The other 15 return
+unsupported-format errors. Convex line/arc support adds one complete single-face
+body with eight source edges and preserves all 41 previous successes. The
+remaining private bodies require additional geometry features before their
+complete export can succeed. These are raw body selections, including archival
+partition snapshots, rather than automatic active-configuration conversions.
 
 Run `doxygen Doxyfile` from this directory to generate public API HTML at
 `../build/openswstep-docs/html/index.html`; documentation warnings fail generation.
