@@ -219,6 +219,31 @@ Result<CurveEvaluation> EvaluateNurbsCurve(const NurbsCurveGeometry& curve,
       {projected.value().position, projected.value().u_derivative});
 }
 
+Result<std::array<double, 2>> NurbsCurveDomain(
+    const NurbsCurveGeometry& curve) {
+  if (auto error = ValidateAxis(curve.axis))
+    return Result<std::array<double, 2>>::Err(std::move(*error));
+  if (auto error =
+          ValidateControls(curve.controls, curve.axis.control_count, false))
+    return Result<std::array<double, 2>>::Err(std::move(*error));
+  std::array<double, 2> result{};
+  std::size_t slot = 0;
+  for (uint32_t index : {curve.axis.degree, curve.axis.control_count}) {
+    uint64_t end = 0;
+    for (std::size_t i = 0; i < curve.axis.knots.size(); ++i) {
+      end += curve.axis.multiplicities[i];
+      if (index < end) {
+        result[slot++] = curve.axis.knots[i];
+        break;
+      }
+    }
+  }
+  if (slot != result.size() || result[0] >= result[1])
+    return Result<std::array<double, 2>>::Err(
+        Invalid("Empty NURBS curve domain"));
+  return Result<std::array<double, 2>>::Ok(result);
+}
+
 Result<std::array<double, 4>> NurbsSurfaceDomain(
     const NurbsSurfaceGeometry& surface) {
   for (const auto* axis : {&surface.u, &surface.v})

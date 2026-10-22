@@ -233,6 +233,59 @@ Result<FinParameterInterval> ChartInterval(
         Error("Chart endpoint order contradicts edge/curve sense"));
   return Result<FinParameterInterval>::Ok(interval);
 }
+Result<FinParameterInterval> SplineInterval(const Model& model,
+                                            const GeometryObject& curve,
+                                            const FinUse& use,
+                                            double tolerance) {
+  if (!use.start_vertex.value || !use.end_vertex.value)
+    return Result<FinParameterInterval>::Err(
+        Error("Spline interval requires explicit endpoints or interval", 0,
+              ErrorCode::kUnsupportedFormat));
+  if (!use.fin_curve.value &&
+      (!curve.sense || (*curve.sense != '+' && *curve.sense != '-')))
+    return Result<FinParameterInterval>::Err(
+        Error("Spline edge/curve sense is unknown", 0,
+              ErrorCode::kUnsupportedFormat));
+  const GeometryObject* basis = &curve;
+  if (const auto* sp = std::get_if<SurfaceCurveGeometry>(&curve.payload)) {
+    const auto* node = model.FindNode(sp->parameter_curve);
+    if (!node || node->node_type != 134)
+      return Result<FinParameterInterval>::Err(
+          Error("Surface curve has no compatible parameter curve"));
+    basis = Geometry(model, sp->parameter_curve);
+  }
+  if (!basis)
+    return Result<FinParameterInterval>::Err(Error(
+        "Untyped spline parameter curve", 0, ErrorCode::kUnsupportedFormat));
+  const auto* spline = std::get_if<NurbsCurveGeometry>(&basis->payload);
+  if (!spline)
+    return Result<FinParameterInterval>::Err(
+        Error("Curve has no NURBS parameter domain", 0,
+              ErrorCode::kUnsupportedFormat));
+  const auto domain = internal::NurbsCurveDomain(*spline);
+  if (!domain.ok()) return Result<FinParameterInterval>::Err(domain.error());
+  const double low = domain.value()[0], high = domain.value()[1];
+  const auto first = EvaluateCurve(model, curve.source, low);
+  const auto second = EvaluateCurve(model, curve.source, high);
+  if (!first.ok()) return Result<FinParameterInterval>::Err(first.error());
+  if (!second.ok()) return Result<FinParameterInterval>::Err(second.error());
+  const auto start = Point(model, use.start_vertex);
+  const auto end = Point(model, use.end_vertex);
+  if (!start.ok()) return Result<FinParameterInterval>::Err(start.error());
+  if (!end.ok()) return Result<FinParameterInterval>::Err(end.error());
+  const bool forward =
+      Distance(first.value().position, start.value()) <= tolerance &&
+      Distance(second.value().position, end.value()) <= tolerance;
+  const bool backward =
+      Distance(second.value().position, start.value()) <= tolerance &&
+      Distance(first.value().position, end.value()) <= tolerance;
+  if (forward == backward)
+    return Result<FinParameterInterval>::Err(
+        Error("Spline domain endpoints need unambiguous vertex correspondence",
+              0, ErrorCode::kUnsupportedFormat));
+  return Result<FinParameterInterval>::Ok(
+      {use.fin, forward ? low : high, forward ? high : low});
+}
 Result<CurveEvaluation> SampleCurve(
     const Model& model, NodeId curve, double parameter,
     const std::optional<IntersectionEvaluationOptions>& intersection) {
@@ -498,11 +551,10 @@ Result<FinGeometryEvaluation> EvaluateBoundFin(const Model& model,
         model, std::get<TrimmedCurveGeometry>(geometry->payload).basis_curve);
   }
   if (geometry &&
-      std::holds_alternative<SurfaceCurveGeometry>(geometry->payload)) {
+      std::holds_alternative<SurfaceCurveGeometry>(geometry->payload) &&
+      std::get<SurfaceCurveGeometry>(geometry->payload).surface ==
+          fin.surface) {
     const auto& sp = std::get<SurfaceCurveGeometry>(geometry->payload);
-    if (sp.surface != fin.surface)
-      return Result<FinGeometryEvaluation>::Err(
-          Error("Fin SP-curve belongs to another surface"));
     auto parameter =
         SampleCurve(model, sp.parameter_curve, t, fin.intersection);
     if (!parameter.ok())
@@ -674,6 +726,13 @@ Result<FaceTrimming> BindFaceTrimmingWithOverrides(
         return Result<FaceTrimming>::Err(
             Error("Curve interval needs explicit branch/endpoints", 0,
                   ErrorCode::kUnsupportedFormat));
+      if (std::holds_alternative<NurbsCurveGeometry>(curve->payload) ||
+          std::holds_alternative<SurfaceCurveGeometry>(curve->payload)) {
+        auto interval = SplineInterval(model, *curve, use, tolerance);
+        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
+        intervals.push_back(interval.value());
+        continue;
+      }
       if (std::holds_alternative<IntersectionCurveGeometry>(curve->payload)) {
         auto interval =
             ChartInterval(model, *curve, use, tolerance, intersection);

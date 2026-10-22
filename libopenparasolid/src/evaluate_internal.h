@@ -11,6 +11,9 @@
 namespace openparasolid::internal {
 [[nodiscard]] std::optional<ParseError> ValidateIntersectionOptions(
     const IntersectionEvaluationOptions& options);
+// Validates axis/controls and reads the actual expanded-knot domain.
+[[nodiscard]] Result<std::array<double, 2>> NurbsCurveDomain(
+    const NurbsCurveGeometry& curve);
 // Bounds are u-low, u-high, v-low, v-high; validates before extracting knots.
 [[nodiscard]] Result<std::array<double, 4>> NurbsSurfaceDomain(
     const NurbsSurfaceGeometry& surface);

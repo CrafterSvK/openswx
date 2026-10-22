@@ -74,16 +74,18 @@ struct FinGeometryEvaluation {
     const std::optional<IntersectionEvaluationOptions>& intersection =
         std::nullopt);
 // Resolves lines, accurate source trim intervals and accurate circle/ellipse
-// edges. Edge trims retain transmitted parameters, ordered by fin sense, even
-// for closed/vertex-free edges. Stored trim points must match curve samples.
-// With solver settings, direct intersections use distinct, unique vertex
-// matches among validated chart points. Closed/missing endpoints and ambiguous
-// or unmatched charts require explicit intervals. Accurate edge orientation
-// must agree with curve sense. Fin trims require unambiguous vertex
-// correspondence. Conics select one directed arc, or a full turn for
-// closed/vertex-free edges. Coincident
-// distinct conic vertices, fin conics, ambiguous fin trims and untrimmed NURBS
-// branches require the explicit overload.
+// edges. NURBS/SP curves use the complete natural spline domain when its
+// endpoint correspondence is unambiguous. No partial-domain inversion or
+// periodic wrapping is inferred. Edge trims retain transmitted parameters,
+// ordered by fin sense, even for closed/vertex-free edges. Stored trim points
+// must match curve samples. With solver settings, direct intersections use
+// distinct, unique vertex matches among validated chart points. Closed/missing
+// endpoints and ambiguous or unmatched charts require explicit intervals.
+// Accurate edge orientation must agree with curve sense. Fin trims require
+// unambiguous vertex correspondence. Conics select one directed arc, or a full
+// turn for closed/vertex-free edges. Coincident distinct conic vertices, fin
+// conics, ambiguous fin trims and partial or ambiguous spline domains require
+// the explicit overload.
 [[nodiscard]] Result<FaceTrimming> BindFaceTrimming(
     const Model& model, NodeId face, double tolerance,
     const FaceTraversalOptions& options = {},
@@ -100,9 +102,10 @@ struct FinGeometryEvaluation {
     const std::optional<IntersectionEvaluationOptions>& intersection =
         std::nullopt);
 // Fraction is in [0,1]. Tangent is dP/d(fraction), including directed reversal.
-// Uses transmitted SP-curve UVs when available; otherwise bounded surface
-// inversion. Uses the binding's owned intersection settings when supplied.
-// No periodic UV continuation or inside/outside classification.
+// Uses transmitted SP-curve UVs on the same surface; otherwise maps the 3D
+// curve point to the face through bounded surface inversion. Uses the binding's
+// owned intersection settings when supplied. No periodic UV continuation or
+// inside/outside classification.
 [[nodiscard]] Result<FinGeometryEvaluation> EvaluateBoundFin(
     const Model& model, const BoundFinGeometry& fin, double fraction,
     double tolerance);

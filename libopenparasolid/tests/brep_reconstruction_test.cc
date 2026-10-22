@@ -944,9 +944,198 @@ void ParameterCurve(ModelFixture& f) {
   f.Add(127, 414,
         {Array("multiplicities", FieldType::kShort, {int64_t{2}, int64_t{2}})});
 }
+ModelFixture SplineFace(bool on_surface, bool rational = false,
+                        bool unclamped = false) {
+  auto f = Sheet(Face());
+  f.Add(134, 410,
+        {Pointer("nurbs", 411, 136),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  const uint16_t dimension =
+      on_surface ? (rational ? 3 : 2) : (rational ? 4 : 3);
+  f.Add(136, 411,
+        {Integer("degree", 1, FieldType::kShort), Integer("n_vertices", 2),
+         Integer("vertex_dim", dimension, FieldType::kShort),
+         Integer("n_knots", unclamped ? 4 : 2), ByteValue("knot_type", 2),
+         Logical("periodic", false), Logical("closed", false),
+         Logical("rational", rational), ByteValue("curve_form", 1),
+         Pointer("bspline_vertices", 412, 45), Pointer("knots", 413, 128),
+         Pointer("knot_mult", 414, 127)});
+  std::vector<ScalarValue> controls;
+  for (int i = 0; i < 2; ++i) {
+    const double weight = rational ? (i == 0 ? 2 : 5) : 1;
+    controls.emplace_back(i * weight);
+    controls.emplace_back(0.);
+    if (!on_surface) controls.emplace_back(0.);
+    if (rational) controls.emplace_back(weight);
+  }
+  f.Add(45, 412, {Array("vertices", FieldType::kDouble, std::move(controls))});
+  f.Add(128, 413,
+        {unclamped ? Array("knots", FieldType::kDouble, {-5., -2., 3., 7.})
+                   : Array("knots", FieldType::kDouble, {-2., 3.})});
+  f.Add(127, 414,
+        {unclamped ? Array("multiplicities", FieldType::kShort,
+                           {int64_t{1}, int64_t{1}, int64_t{1}, int64_t{1}})
+                   : Array("multiplicities", FieldType::kShort,
+                           {int64_t{2}, int64_t{2}})});
+  if (on_surface) {
+    f.Add(137, 500,
+          {Pointer("surface", 300, 1006), Pointer("b_curve", 410, 134),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    Set(f, 10, "curve", 500);
+    Set(f, 11, "curve", 500);
+  } else {
+    Set(f, 2, "curve", 410);
+  }
+  return f;
+}
+TEST(ParasolidSplineFinIntervals,
+     BindsCompleteDomainsWithRationalAndUnclampedAxes) {
+  for (bool on_surface : {false, true})
+    for (bool rational : {false, true})
+      for (bool unclamped : {false, true}) {
+        const auto f = SplineFace(on_surface, rational, unclamped);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        const auto& fins = result.value().faces[0].loops[0].fins;
+        EXPECT_DOUBLE_EQ(fins[0].start, -2);
+        EXPECT_DOUBLE_EQ(fins[0].end, 3);
+        EXPECT_DOUBLE_EQ(fins[1].start, 3);
+        EXPECT_DOUBLE_EQ(fins[1].end, -2);
+        const auto sample = EvaluateBoundFin(model.value(), fins[0], .5, 1e-12);
+        ASSERT_TRUE(sample.ok());
+        EXPECT_NEAR(sample.value().curve.position.x, rational ? 5. / 7 : .5,
+                    1e-12);
+        EXPECT_NEAR(sample.value().curve.first_derivative.x,
+                    rational ? 40. / 49 : 1, 1e-12);
+        EXPECT_NEAR(sample.value().uv.u, sample.value().curve.position.x,
+                    1e-12);
+      }
+}
+TEST(ParasolidSplineFinIntervals, InteriorEndpointsRemainExplicit) {
+  for (bool on_surface : {false, true}) {
+    auto f = SplineFace(on_surface);
+    for (auto& n : f.report.nodes)
+      if (n.index == 200) n.fields[0].values = {.25, 0., 0.};
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto automatic = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+    ASSERT_FALSE(automatic.ok());
+    EXPECT_EQ(automatic.error().code, ErrorCode::kUnsupportedFormat);
+    const FinParameterInterval p[]{{NodeId{10}, -.75, 3},
+                                   {NodeId{11}, 3, -.75}};
+    const auto explicit_result =
+        BindBodyFaces(model.value(), NodeId{1}, p, 1e-12);
+    ASSERT_TRUE(explicit_result.ok()) << explicit_result.error().message;
+  }
+}
+TEST(ParasolidSplineFinIntervals,
+     RejectsAmbiguousEndpointsAndUnknownEdgeSense) {
+  for (int bad = 0; bad < 3; ++bad) {
+    auto f = SplineFace(false);
+    if (bad == 0) Set(f, 410, "sense", '?');
+    if (bad == 1) {
+      for (auto& n : f.report.nodes) {
+        if (n.index == 412) n.fields[0].values = {0., 0., 0., 0., 0., 0.};
+        if (n.index == 201) n.fields[0].values = {0., 0., 0.};
+      }
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, bad == 2 ? 1 : 1e-12);
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
+TEST(ParasolidSplineFinIntervals,
+     PreservesAccurateEdgeDirectionAndSourceGeometry) {
+  for (bool reverse_vertices : {false, true}) {
+    auto f = SplineFace(false);
+    Set(f, 410, "sense", '-');
+    if (reverse_vertices) {
+      Set(f, 10, "vertex", 100);
+      Set(f, 11, "vertex", 101);
+      Set(f, 100, "halfedge", 10);
+      Set(f, 101, "halfedge", 11);
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+    if (reverse_vertices) {
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      const auto& fin = result.value().faces[0].loops[0].fins[0];
+      EXPECT_EQ(fin.curve.value, 410);
+      EXPECT_EQ(fin.start, 3);
+      EXPECT_EQ(fin.end, -2);
+    } else {
+      ASSERT_FALSE(result.ok());
+      EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    }
+  }
+}
+TEST(ParasolidSplineFinIntervals, InvalidKnotsAndWeightsDoNotProduceBindings) {
+  for (bool invalid_weight : {false, true}) {
+    auto f = SplineFace(false, true);
+    for (auto& n : f.report.nodes) {
+      if (!invalid_weight && n.index == 413) n.fields[0].values = {3., -2.};
+      if (invalid_weight && n.index == 412) n.fields[0].values.back() = 0.;
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    EXPECT_FALSE(BindBodyFaces(model.value(), NodeId{1}, 1e-12).ok());
+  }
+}
+TEST(ParasolidSplineFinIntervals,
+     RequiresVerticesForAutomaticDomainCorrespondence) {
+  for (bool on_surface : {false, true}) {
+    auto f = SplineFace(on_surface);
+    Set(f, 10, "vertex", 0);
+    Set(f, 11, "vertex", 0);
+    Set(f, 10, "forward", 10);
+    Set(f, 10, "backward", 10);
+    Set(f, 11, "loop", 0);
+    Set(f, 11, "forward", 0);
+    Set(f, 11, "backward", 0);
+    Set(f, 11, "curve", 0);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
+TEST(ParasolidSplineFinIntervals,
+     MapsSpCurvesFromAnotherSurfaceThroughTargetInversion) {
+  auto f = SplineFace(true);
+  f.Add(50, 301,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {0, 1, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 500, "surface", 301);
+  for (auto& n : f.report.nodes)
+    if (n.index == 201) n.fields[0].values = {0., 1., 0.};
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto sample = EvaluateBoundFin(
+      model.value(), result.value().faces[0].loops[0].fins[0], .5, 1e-12);
+  ASSERT_TRUE(sample.ok());
+  EXPECT_NEAR(sample.value().curve.position.y, .5, 1e-12);
+  EXPECT_NEAR(sample.value().uv.u, 0, 1e-12);
+  EXPECT_NEAR(sample.value().uv.v, .5, 1e-12);
+}
 ModelFixture PartialIntervalBody() {
   auto f = Sheet(Face());
   ParameterCurve(f);
+  // The vertex interval [0,1] is strictly inside this curve's natural domain.
+  for (auto& node : f.report.nodes) {
+    if (node.index == 412) node.fields[0].values = {-1., 0., 2., 0.};
+    if (node.index == 413) node.fields[0].values = {-1., 2.};
+  }
   f.Add(137, 500,
         {Pointer("surface", 300, 1006), Pointer("b_curve", 410, 134),
          ByteValue("sense", '+', FieldType::kCharacter)});
@@ -1090,7 +1279,7 @@ TEST(ParasolidPartialIntervals, IsolatedLoopFinsCannotHaveIntervals) {
   EXPECT_EQ(body.error().code, ErrorCode::kInvalidOptions);
 }
 TEST(ParasolidFaceBinding,
-     UsesTransmittedUvAndRejectsAnotherSupportingSurface) {
+     UsesTransmittedUvAndRejectsOffFaceSupportingSurface) {
   for (bool wrong : {false, true}) {
     auto f = Face();
     ParameterCurve(f);
@@ -1100,7 +1289,7 @@ TEST(ParasolidFaceBinding,
            ByteValue("sense", '+', FieldType::kCharacter)});
     if (wrong)
       f.Add(50, 301,
-            {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+            {Numbers("origin", {0, 0, 1}, FieldType::kVector),
              Numbers("normal", {0, 0, 1}, FieldType::kVector),
              Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
              ByteValue("sense", '+', FieldType::kCharacter)});

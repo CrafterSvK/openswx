@@ -65,8 +65,10 @@ within the finite nonnegative source-unit tolerance. Isolated vertices are
 mapped to UV. `EvaluateBoundFin(model, binding, fraction, tolerance)` accepts
 fractions in [0,1], returns position, derivative with respect to that fraction,
 and surface UV. Directed reversal therefore reverses/scales the tangent.
-SP-curves use their transmitted 2D curve and must reference the face's surface;
-other curves use the existing bounded surface inversion. No periodic UV
+SP-curves on the face's surface use their transmitted 2D curve directly.
+When an SP-curve references another surface, its evaluated 3D point is mapped
+to the face by bounded surface inversion, as for other curve types; source UVs
+are not reused across surface IDs. No periodic UV
 continuation, outer/hole classification or inside/outside test is inferred.
 Finite membership checks do not prove agreement at every parameter.
 
@@ -91,6 +93,40 @@ unsupported face uses a vertex-free edge trim. All previous successes are
 preserved. Synthetic tests cover both fin directions and basis senses, closed
 trim branches, invalid stored points, open vertex-free trims and ambiguous
 fin trims. This comparison is independent of the earlier 130-stream selection.
+
+## Full spline domains in face bindings
+
+Automatic binding supports direct NURBS curves and SP-curves when the complete
+natural spline domain's endpoints match the oriented vertices unambiguously
+within the caller's tolerance. For SP-curves the domain comes from the 2D
+NURBS parameter curve, while endpoint matching uses the evaluated 3D curve.
+Both fin directions are supported; known accurate-edge sense must agree with
+the interval. Unknown accurate-edge sense, missing vertices, partial intervals
+and ambiguous/coincident endpoints still require explicit intervals or
+partial overrides.
+
+Axis and control validation inherit the NURBS evaluator's validity/resource
+checks. Domain bounds are expanded knots at `degree` and `control_count`,
+including unclamped axes, rather than the first/last distinct knot. Original
+knot units, homogeneous weights and source geometry are preserved. No curve
+point inversion, periodic wrapping or extra-turn inference is performed.
+All existing sampled membership and topology checks still apply.
+
+SP-curves on another surface keep their original surface reference. Their 3D
+points must invert onto the selected face within the binding tolerance, and
+returned UVs belong to that face. This permits different parameter frames on
+coincident surfaces without treating the source UVs as face UVs. Off-face
+support geometry remains a membership error. Surfaces without supported
+inversion remain unsupported for this mapping.
+
+With the previous explicit intersection solver profile, the 39-stream body
+selection now binds 53 of 57 body occurrences (23 with faces, 30 without).
+All 52 earlier successes remain supported. The added body contains 60 faces
+and 276 fin uses; totals are 531 faces and 2,484 fin uses. Four bodies still
+need unique intersection matches, unresolved fin trim intervals or unsupported
+surface inversion. Synthetic tests cover rational and polynomial curves,
+clamped/unclamped domains, both fin/curve directions, interior and ambiguous
+endpoints, invalid knots/weights and SP mapping between different UV frames.
 
 ## Binding all faces of a body
 
