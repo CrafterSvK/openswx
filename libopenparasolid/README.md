@@ -1951,6 +1951,56 @@ For the standard-library-only target, add
 `-DOPENPARASOLID_BUILD_TOOLS=OFF`. Standalone tests require an installed
 GoogleTest package; the top-level build supplies its existing GoogleTest target.
 
+## Inspecting bound body geometry
+
+The inspector exposes automatic combined body binding with a positive source
+BODY node ID and an explicit finite nonnegative tolerance in source units:
+
+```bash
+parasolid_inspect --body-geometry 1 --binding-tolerance 1e-7 part.x_b
+parasolid_inspect --body-geometry 1 --binding-tolerance 1e-7 --summary part.x_b
+parasolid_inspect --body-geometry 1 --binding-tolerance 1e-7 \
+  --intersection-chart-tolerance 1e-7 --intersection-solve-tolerance 1e-9 part.x_b
+```
+
+This mode enables `--geometry` and sequential parsing. It requires a complete
+ordinary transmit or partition stream. Intersection settings are optional;
+when supplied, both tolerances are required, with nonnegative chart tolerance
+and strictly positive solve tolerance. No additional default tolerance is
+introduced. The C++ API's default topology, face, wire and vertex resource
+limits remain active; the report includes the primary binding limits.
+
+| CLI option | Environment variable |
+|---|---|
+| `--body-geometry ID` | `OPENPARASOLID_BODY_GEOMETRY` |
+| `--binding-tolerance X` | `OPENPARASOLID_BINDING_TOLERANCE` |
+| `--intersection-chart-tolerance X` | `OPENPARASOLID_INTERSECTION_CHART_TOLERANCE` |
+| `--intersection-solve-tolerance X` | `OPENPARASOLID_INTERSECTION_SOLVE_TOLERANCE` |
+
+CLI values override environment values. Binding tolerances without a body
+selection, incomplete solver pairs, nonfinite values and invalid IDs are
+option errors (exit 1). The CLI uses automatic interval inference; selected
+interval overrides are available through the C++ API.
+
+Successful JSON adds `body_geometry` with the selected body ID, tolerance,
+solver settings, limits and counts. Full output also includes the region/shell
+hierarchy and front/back face uses, face loops with directed fin intervals,
+wire intervals and vertex point positions. Curve/surface IDs refer to the
+accompanying full model report. `--summary` omits these arrays while retaining
+counts/settings. The scope is sampled source boundary geometry, with the
+library's finite membership checks and remaining certification limits.
+
+A binding failure sets `body_geometry` to null and adds `body_geometry_error`
+with body ID, error code, source offset and contextual message, returning 2.
+Existing model diagnostics also retain exit 2, even when the selected body
+binds successfully; inspect the body result separately from the global model
+findings. The 57 body queries in the 39-stream private selection reproduce all
+56 API successes and the known unsupported fin trim, including the same
+588 faces, 2,664 fin uses, one wire and 788 vertex points. Synthetic CLI tests
+cover valid/empty and missing bodies, incomplete streams, summaries, invalid
+options, report fields and environment precedence. Private inputs and reports
+remain outside the repository.
+
 ## API
 
 Public headers are under `include/openparasolid/`:

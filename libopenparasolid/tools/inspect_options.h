@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
-#pragma once
+#ifndef OPENPARASOLID_TOOLS_INSPECT_OPTIONS_H_
+#define OPENPARASOLID_TOOLS_INSPECT_OPTIONS_H_
 
 #include <charconv>
+#include <cmath>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <optional>
@@ -11,6 +14,7 @@
 #include <string_view>
 #include <utility>
 
+#include "openparasolid/evaluate.h"
 #include "openparasolid/parser.h"
 #include "openparasolid/schema.h"
 
@@ -21,6 +25,9 @@ struct InspectSettings {
   SchemaLimits limits;
   std::optional<std::filesystem::path> input;
   std::optional<std::filesystem::path> catalog;
+  std::optional<uint32_t> body_geometry;
+  std::optional<double> binding_tolerance;
+  std::optional<IntersectionEvaluationOptions> intersection;
   bool summary = false;
   bool nodes = false;
   bool geometry = false;
@@ -39,6 +46,10 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"summary", "0"},
       {"nodes", "0"},
       {"geometry", "0"},
+      {"body-geometry", ""},
+      {"binding-tolerance", ""},
+      {"intersection-chart-tolerance", ""},
+      {"intersection-solve-tolerance", ""},
       {"schema-catalog", ""},
       {"max-records", std::to_string(settings.inspect.max_records)},
       {"max-fields", std::to_string(settings.limits.max_total_fields)},
@@ -48,6 +59,12 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"summary", "OPENPARASOLID_SUMMARY"},
       {"nodes", "OPENPARASOLID_NODES"},
       {"geometry", "OPENPARASOLID_GEOMETRY"},
+      {"body-geometry", "OPENPARASOLID_BODY_GEOMETRY"},
+      {"binding-tolerance", "OPENPARASOLID_BINDING_TOLERANCE"},
+      {"intersection-chart-tolerance",
+       "OPENPARASOLID_INTERSECTION_CHART_TOLERANCE"},
+      {"intersection-solve-tolerance",
+       "OPENPARASOLID_INTERSECTION_SOLVE_TOLERANCE"},
       {"schema-catalog", "OPENPARASOLID_SCHEMA_CATALOG"},
       {"max-records", "OPENPARASOLID_MAX_RECORDS"},
       {"max-fields", "OPENPARASOLID_MAX_FIELDS"},
@@ -121,6 +138,57 @@ inline Result<InspectSettings> ParseInspectSettings(
         parsed.ptr != text.data() + text.size() || *target == 0)
       return invalid("Invalid positive integer setting: " + std::string(name));
   }
+  if (!raw["body-geometry"].empty()) {
+    uint32_t id = 0;
+    const auto& text = raw["body-geometry"];
+    const auto parsed =
+        std::from_chars(text.data(), text.data() + text.size(), id);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() ||
+        !id)
+      return invalid("Invalid positive body ID");
+    settings.body_geometry = id;
+    settings.geometry = true;
+    if (raw["binding-tolerance"].empty())
+      return invalid("Body geometry requires --binding-tolerance");
+  } else if (!raw["binding-tolerance"].empty() ||
+             !raw["intersection-chart-tolerance"].empty() ||
+             !raw["intersection-solve-tolerance"].empty()) {
+    return invalid("Binding tolerances require --body-geometry");
+  }
+  auto number = [&](const char* name, bool positive) -> Result<double> {
+    double value = 0;
+    const auto& text = raw[name];
+    const auto parsed =
+        std::from_chars(text.data(), text.data() + text.size(), value);
+    if (text.empty() || parsed.ec != std::errc{} ||
+        parsed.ptr != text.data() + text.size() || !std::isfinite(value) ||
+        value < 0 || (positive && value == 0))
+      return Result<double>::Err(
+          {ErrorCode::kInvalidOptions, 0,
+           "Invalid binding tolerance: " + std::string(name)});
+    return Result<double>::Ok(value);
+  };
+  if (settings.body_geometry) {
+    const auto tolerance = number("binding-tolerance", false);
+    if (!tolerance.ok()) return invalid(tolerance.error().message);
+    settings.binding_tolerance = tolerance.value();
+    const bool chart = !raw["intersection-chart-tolerance"].empty();
+    const bool solve = !raw["intersection-solve-tolerance"].empty();
+    if (chart != solve)
+      return invalid(
+          "Intersection binding requires both chart and solve tolerances");
+    if (chart) {
+      const auto chart_tolerance =
+          number("intersection-chart-tolerance", false);
+      const auto solve_tolerance = number("intersection-solve-tolerance", true);
+      if (!chart_tolerance.ok())
+        return invalid(chart_tolerance.error().message);
+      if (!solve_tolerance.ok())
+        return invalid(solve_tolerance.error().message);
+      settings.intersection = IntersectionEvaluationOptions{
+          chart_tolerance.value(), solve_tolerance.value()};
+    }
+  }
   if (!raw["schema-catalog"].empty()) settings.catalog = raw["schema-catalog"];
   settings.nodes =
       settings.nodes || settings.geometry || settings.catalog.has_value();
@@ -132,3 +200,5 @@ inline Result<InspectSettings> ParseInspectSettings(
   return Result<InspectSettings>::Ok(std::move(settings));
 }
 }  // namespace openparasolid::cli
+
+#endif  // OPENPARASOLID_TOOLS_INSPECT_OPTIONS_H_

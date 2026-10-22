@@ -67,5 +67,54 @@ TEST(ParasolidInspectOptions, DefaultsAndExplicitBooleanOverridesAreStable) {
   EXPECT_EQ(result.value().limits.max_values, 1000000);
   EXPECT_EQ(result.value().limits.max_total_fields, 65536);
 }
+TEST(ParasolidInspectOptions, BodyBindingEnablesModelAndRetainsExplicitTolerances) {
+  const auto result = Parse({"--body-geometry=7", "--binding-tolerance", "0",
+                             "--intersection-chart-tolerance=1e-7",
+                             "--intersection-solve-tolerance=1e-9", "part.x_b"});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_TRUE(result.value().nodes);
+  EXPECT_TRUE(result.value().geometry);
+  EXPECT_EQ(result.value().body_geometry, 7);
+  EXPECT_EQ(result.value().binding_tolerance, 0);
+  ASSERT_TRUE(result.value().intersection);
+  EXPECT_EQ(result.value().intersection->chart_tolerance, 1e-7);
+  EXPECT_EQ(result.value().intersection->solve_tolerance, 1e-9);
+}
+TEST(ParasolidInspectOptions, BodySettingsHonorEnvironmentAndCliPrecedence) {
+  const auto result =
+      Parse({"--body-geometry=3", "--binding-tolerance=1e-8", "part.x_b"},
+            {{"OPENPARASOLID_BODY_GEOMETRY", "invalid"},
+             {"OPENPARASOLID_BINDING_TOLERANCE", "nan"},
+             {"OPENPARASOLID_INTERSECTION_CHART_TOLERANCE", "0"},
+             {"OPENPARASOLID_INTERSECTION_SOLVE_TOLERANCE", "1e-9"}});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().body_geometry, 3);
+  EXPECT_EQ(result.value().binding_tolerance, 1e-8);
+  ASSERT_TRUE(result.value().intersection);
+  EXPECT_EQ(result.value().intersection->chart_tolerance, 0);
+}
+TEST(ParasolidInspectOptions,
+     BodyBindingRejectsMissingMismatchedAndInvalidSettings) {
+  EXPECT_FALSE(Parse({"--body-geometry=1", "part.x_b"}).ok());
+  EXPECT_FALSE(Parse({"--binding-tolerance=1e-7", "part.x_b"}).ok());
+  EXPECT_FALSE(Parse({"--body-geometry=1", "--binding-tolerance=0",
+                      "--intersection-chart-tolerance=0", "part.x_b"})
+                   .ok());
+  EXPECT_FALSE(Parse({"--body-geometry=1", "--binding-tolerance=0",
+                      "--intersection-solve-tolerance=1e-9", "part.x_b"})
+                   .ok());
+  for (const char* value : {"nan", "inf", "-1", "1e999", "1x"}) {
+    const std::string option = "--binding-tolerance=" + std::string(value);
+    EXPECT_FALSE(Parse({"--body-geometry=1", option, "part.x_b"}).ok());
+  }
+  for (const char* value : {"0", "-1", "4294967296", "7x"}) {
+    const std::string option = "--body-geometry=" + std::string(value);
+    EXPECT_FALSE(Parse({option, "--binding-tolerance=0", "part.x_b"}).ok());
+  }
+  EXPECT_FALSE(Parse({"--body-geometry=1", "--binding-tolerance=0",
+                      "--intersection-chart-tolerance=0",
+                      "--intersection-solve-tolerance=0", "part.x_b"})
+                   .ok());
+}
 }  // namespace
 }  // namespace openparasolid::cli

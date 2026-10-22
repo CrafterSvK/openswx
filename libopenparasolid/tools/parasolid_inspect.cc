@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "body_report.h"
 #include "inspect_options.h"
 #include "model_report.h"
 #include "openparasolid/parser.h"
@@ -126,7 +127,13 @@ void Usage(std::ostream &output) {
   output
       << "Usage: parasolid_inspect [--summary] [--max-records N] "
          "[--nodes] [--geometry] [--schema-catalog FILE.json] [--max-fields N] "
-         "[--max-values N] [--max-delta-entries N] <file.x_b|file.bin>\n"
+         "[--max-values N] [--max-delta-entries N] "
+         "[--body-geometry ID --binding-tolerance X] "
+         "[--intersection-chart-tolerance X --intersection-solve-tolerance X] "
+         "<file.x_b|file.bin>\n"
+         "Body binding requires a complete transmit/partition stream. "
+         "Tolerances are absolute source units; intersection settings are "
+         "optional.\n"
          "Schema limits require --nodes, --geometry or --schema-catalog.\n"
          "Environment: OPENPARASOLID_<OPTION>, uppercase with underscores.\n"
          "CLI values override environment; boolean flags accept =false.\n";
@@ -204,12 +211,50 @@ int main(int argc, char *argv[]) {
               {"offset", model.error().offset},
               {"message", model.error().message}};
           status = 2;
+          if (settings.body_geometry) {
+            report["body_geometry"] = nullptr;
+            report["body_geometry_error"] = report["model_error"];
+            report["body_geometry_error"]["body"] = *settings.body_geometry;
+          }
         } else {
           report["model"] = openparasolid::cli::ModelReport(
               model.value(), model_options, summary);
           if (!model.value().references_verified() ||
               !model.value().typed_geometry_complete())
             status = 2;
+          if (settings.body_geometry) {
+            report["body_geometry"] = nullptr;
+            openparasolid::BodyGeometryBindingOptions binding_options;
+            binding_options.intersection = settings.intersection;
+            const auto bound = [&]()
+                -> openparasolid::Result<openparasolid::BodyGeometryBinding> {
+              if (!parsed.value().complete ||
+                  (parsed.value().header.kind !=
+                       openparasolid::StreamKind::kTransmit &&
+                   parsed.value().header.kind !=
+                       openparasolid::StreamKind::kPartition))
+                return openparasolid::
+                    Result<openparasolid::BodyGeometryBinding>::Err(
+                        {openparasolid::ErrorCode::kUnsupportedFormat, 0,
+                         "Body binding requires a complete transmit or "
+                         "partition stream"});
+              return openparasolid::BindBodyGeometry(
+                  model.value(), openparasolid::NodeId{*settings.body_geometry},
+                  *settings.binding_tolerance, binding_options);
+            }();
+            if (!bound.ok()) {
+              report["body_geometry_error"] = {
+                  {"body", *settings.body_geometry},
+                  {"code", openparasolid::ToString(bound.error().code)},
+                  {"offset", bound.error().offset},
+                  {"message", bound.error().message}};
+              status = 2;
+            } else {
+              report["body_geometry"] = openparasolid::cli::BodyGeometryReport(
+                  bound.value(), *settings.binding_tolerance, binding_options,
+                  summary);
+            }
+          }
         }
       }
       std::cout << report.dump(2) << '\n';

@@ -10,6 +10,7 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
+#include "../tools/body_report.h"
 #include "../tools/model_report.h"
 #include "model_test_helpers.h"
 #include "test_helpers.h"
@@ -62,6 +63,51 @@ TEST(ParasolidModelReport, RetainsRawBodyTypesWithoutClassifyingOtherNodes) {
   EXPECT_FALSE(cli::ModelReport(model.value(), {}, true).contains("nodes"));
 }
 
+TEST(ParasolidBodyReport, KeepsCountsSettingsAndDirectedBindingData) {
+  BodyGeometryBinding body;
+  body.topology.boundary.body = NodeId{1};
+  body.wires.push_back(
+      {{NodeId{2}, NodeId{100}, NodeId{101}, NodeId{400}}, 1, -1});
+  body.vertices.push_back({NodeId{100}, NodeId{200}, {1, -2, 3}});
+  FaceTrimming face;
+  face.face = NodeId{30};
+  face.surface = NodeId{300};
+  face.face_sense = '-';
+  FaceTrimLoop loop;
+  loop.loop = NodeId{20};
+  FinUse use;
+  use.fin = NodeId{10};
+  use.edge = NodeId{2};
+  use.edge_curve = NodeId{400};
+  use.sense = TopologySense::kReverse;
+  loop.fins.push_back({use, NodeId{30}, NodeId{300}, NodeId{400}, 1, -1});
+  face.loops.push_back(loop);
+  FaceTrimLoop isolated;
+  isolated.loop = NodeId{21};
+  isolated.isolated_vertex = SurfaceParameters{2, 3, 0};
+  face.loops.push_back(isolated);
+  body.faces.push_back(face);
+  BodyGeometryBindingOptions options;
+  options.intersection = IntersectionEvaluationOptions{1e-7, 1e-9};
+  const auto report = cli::BodyGeometryReport(body, 1e-7, options, false);
+  EXPECT_EQ(report["body"], 1);
+  EXPECT_EQ(report["counts"]["faces"], 1);
+  EXPECT_EQ(report["counts"]["loops"], 2);
+  EXPECT_EQ(report["counts"]["fins"], 1);
+  EXPECT_EQ(report["counts"]["wire_edges"], 1);
+  EXPECT_EQ(report["vertices"][0]["position"], json::array({1, -2, 3}));
+  EXPECT_EQ(report["wires"][0]["start"], 1);
+  EXPECT_EQ(report["wires"][0]["end"], -1);
+  EXPECT_EQ(report["faces"][0]["face_sense"], uint64_t{'-'});
+  EXPECT_EQ(report["faces"][0]["loops"][1]["isolated_vertex_uv"]["u"], 2);
+  EXPECT_EQ(report["faces"][0]["loops"][0]["fins"][0]["end"], -1);
+  EXPECT_EQ(report["faces"][0]["loops"][0]["fins"][0]["sense"], "reverse");
+  EXPECT_EQ(report["intersection"]["solve_tolerance"], 1e-9);
+  const auto summary = cli::BodyGeometryReport(body, 1e-7, options, true);
+  EXPECT_EQ(summary["counts"], report["counts"]);
+  EXPECT_FALSE(summary.contains("faces"));
+  EXPECT_FALSE(summary.contains("vertices"));
+}
 std::string Quote(const fs::path& path) {
   std::string result = "'";
   for (char c : path.string())
@@ -102,6 +148,78 @@ class ParasolidInspectCliTest : public testing::Test {
   }
 };
 
+TEST_F(ParasolidInspectCliTest,
+       BodyModeRequiresCompleteStreamsAndReportsFailures) {
+  ASSERT_EQ(Run("--body-geometry 1 --binding-tolerance 1e-7 --summary"), 2);
+  const auto report = Report();
+  EXPECT_TRUE(report["body_geometry"].is_null());
+  EXPECT_EQ(report["body_geometry_error"]["body"], 1);
+  EXPECT_FALSE(
+      report["body_geometry_error"]["message"].get<std::string>().empty());
+  EXPECT_EQ(Run("--body-geometry 1"), 1);
+  EXPECT_EQ(Run("--body-geometry 0 --binding-tolerance 0"), 1);
+}
+TEST_F(ParasolidInspectCliTest,
+       BodyModeBindsCompleteEmptyBodyAndReportsMissingId) {
+  auto bytes = test::Header();
+  test::U16(bytes, 12);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 1);
+  for (int i = 0; i < 5; ++i) test::CompactIndex(bytes, 0);
+  bytes.push_back(2);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  test::ModelFixture fixture;
+  fixture.Add(
+      12, 1,
+      {test::Pointer("owner", 0, 1040), test::Pointer("region", 0, 19),
+       test::Pointer("child", 0, 12), test::Pointer("edge", 0, 16),
+       test::Pointer("vertex", 0, 18), test::ByteValue("body_type", 2)});
+  json fields = json::array();
+  for (const auto& field : fixture.report.schemas[0].definition.fields)
+    fields.push_back(cli::DefinitionJson(field));
+  const auto path = root / "body-catalog.json";
+  json catalog{{"schema_key", "SCH_1234567_12345_13006"},
+               {"source", "synthetic"},
+               {"base_types",
+                {{{"node_type", 12}, {"name", "body"}, {"fields", fields}}}},
+               {"absent_types", json::array()}};
+  std::ofstream(path) << catalog;
+  const auto arguments =
+      "--schema-catalog " + Quote(path) + " --binding-tolerance=0";
+  ASSERT_EQ(Run(arguments + " --body-geometry=1"), 0);
+  EXPECT_EQ(Report()["body_geometry"]["counts"]["vertices"], 0);
+  EXPECT_TRUE(Report()["body_geometry"]["faces"].empty());
+  ASSERT_EQ(Run(arguments + " --body-geometry=1 --summary"), 0);
+  EXPECT_FALSE(Report()["body_geometry"].contains("faces"));
+  ASSERT_EQ(Run(arguments + " --body-geometry=99"), 2);
+  EXPECT_TRUE(Report()["body_geometry"].is_null());
+  EXPECT_EQ(Report()["body_geometry_error"]["body"], 99);
+  // An unrelated untyped curve keeps the model's diagnostic exit status,
+  // while the selected empty body still binds successfully.
+  bytes.resize(bytes.size() - 4);
+  test::U16(bytes, 30);
+  bytes.push_back(255);
+  test::CompactIndex(bytes, 2);
+  test::U16(bytes, 1);
+  test::CompactIndex(bytes, 0);
+  catalog["base_types"].push_back(
+      {{"node_type", 30}, {"name", "untyped_line"}, {"fields", json::array()}});
+  std::ofstream(path) << catalog;
+  {
+    std::ofstream file(root / "input.x_b", std::ios::binary);
+    file.write(reinterpret_cast<const char*>(bytes.data()),
+               static_cast<std::streamsize>(bytes.size()));
+  }
+  ASSERT_EQ(Run(arguments + " --body-geometry=1 --summary"), 2);
+  EXPECT_TRUE(Report()["body_geometry"].is_object());
+  EXPECT_EQ(Report()["model"]["invalid_geometry_count"], 1);
+}
 TEST_F(ParasolidInspectCliTest, WritesCandidateReferencesAndUnknownRanges) {
   ASSERT_EQ(Run(), 0);
   const auto report = Report();
