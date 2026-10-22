@@ -13,6 +13,7 @@
 #include "../tools/body_report.h"
 #include "../tools/boundary_geometry_report.h"
 #include "../tools/model_report.h"
+#include "../tools/schema_report.h"
 #include "../tools/topology_report.h"
 #include "model_test_helpers.h"
 #include "test_helpers.h"
@@ -505,6 +506,93 @@ TEST_F(ParasolidInspectCliTest, NodeModeReportsUnknownMembership) {
   EXPECT_EQ(report["node_count"], 0);
   EXPECT_EQ(report["diagnostics"][0]["node_type"], 14);
   EXPECT_FALSE(report.contains("nodes"));
+}
+
+TEST_F(ParasolidInspectCliTest, CatalogFailuresAreExplicitResults) {
+  const auto path = root / "catalog.json";
+  auto result = cli::LoadCatalog(path);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kIo);
+  for (const auto& text :
+       {std::string("{"), std::string("{}"), std::string("[]")}) {
+    std::ofstream(path) << text;
+    result = cli::LoadCatalog(path);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidSchema);
+  }
+  json catalog{{"schema_key", "SCH_1234567_12345_13006"},
+               {"source", "synthetic"},
+               {"base_types", json::array()},
+               {"absent_types", json::array()}};
+  const auto valid = catalog;
+  for (const auto& invalid : {json(-1), json(32768), json(1.5), json("12")}) {
+    catalog = valid;
+    catalog["base_types"].push_back(
+        {{"node_type", invalid}, {"name", "bad"}, {"fields", json::array()}});
+    std::ofstream(path) << catalog;
+    result = cli::LoadCatalog(path);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidSchema);
+    EXPECT_EQ(Run("--schema-catalog " + Quote(path)), 1);
+  }
+  json type{{"node_type", 12}, {"name", "sample"}, {"fields", json::array()}};
+  json field{{"name", "sample"},
+             {"type", "d"},
+             {"pointer_class", 0},
+             {"elements", 0},
+             {"transmitted", true}};
+  for (const auto& [key, bad_value] : std::vector<std::pair<std::string, json>>{
+           {"type", "?"},
+           {"name", 3},
+           {"pointer_class", 65536},
+           {"elements", uint64_t{UINT32_MAX} + 1},
+           {"transmitted", "true"}}) {
+    auto bad_field = field;
+    bad_field[key] = bad_value;
+    type["fields"] = json::array({bad_field});
+    catalog = valid;
+    catalog["base_types"].push_back(type);
+    std::ofstream(path) << catalog;
+    result = cli::LoadCatalog(path);
+    ASSERT_FALSE(result.ok()) << key;
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidSchema);
+  }
+  for (const auto& invalid : {json(-1), json(32768), json("12")}) {
+    catalog = valid;
+    catalog["absent_types"] = json::array({invalid});
+    std::ofstream(path) << catalog;
+    result = cli::LoadCatalog(path);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidSchema);
+  }
+  std::ofstream(path) << valid;
+  result = cli::LoadCatalog(path);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().schema_key, valid["schema_key"].get<std::string>());
+}
+
+TEST_F(ParasolidInspectCliTest,
+       CatalogNestingBoundsIgnoreEscapedStringContents) {
+  const auto path = root / "catalog.json";
+  json catalog{
+      {"schema_key", "SCH_1234567_12345_13006"},
+      {"source", std::string(1000, '[') + "\\\"" + std::string(1000, '}')},
+      {"base_types", json::array()},
+      {"absent_types", json::array()}};
+  std::ofstream(path) << catalog;
+  const auto result = cli::LoadCatalog(path);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().source, catalog["source"].get<std::string>());
+  // The old callback permits empty containers at depth 64; a leaf there
+  // would be at depth 65. Bound the input before entering recursive JSON code.
+  EXPECT_TRUE(
+      cli::CatalogNestingAllowed(std::string(65, '[') + std::string(65, ']')));
+  EXPECT_FALSE(cli::CatalogNestingAllowed(std::string(65, '[') + "0" +
+                                          std::string(65, ']')));
+  std::ofstream(path) << std::string(100000, '[');
+  const auto deep = cli::LoadCatalog(path);
+  ASSERT_FALSE(deep.ok());
+  EXPECT_EQ(deep.error().code, ErrorCode::kResourceLimit);
 }
 
 TEST_F(ParasolidInspectCliTest,

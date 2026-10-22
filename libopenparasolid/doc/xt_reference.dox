@@ -1,0 +1,151 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 openswx contributors
+
+/**
+@page xt_reference XT reference and API terminology
+
+References in these headers identify the Siemens Parasolid XT Format Reference,
+July 2022 edition. Section numbers and printed page numbers refer to that edition,
+not to a Parasolid SDK release or a promise of support for every documented type.
+The local reading copy is in the workspace directory `xt-doc/pNNN.md`; for example,
+page 96 is `xt-doc/p096.md`. The manual is not bundled with this library.
+
+@section xt_terms Terminology and scope
+
+- `FIN` is the schema node name; the conceptual entity is a halfedge. The PK
+  interface calls it a fin (section 1.1.1). `FinUse` retains that source identity.
+- NodeId stores a decoded stream-local node index (zero is null). It does not
+  represent the persistent node-id/identifier described in section 4.3.13.
+- Natural curve derivatives follow increasing source parameter; natural surface
+  normals follow the cross product of the two parameter derivatives. Curve,
+  surface, face and fin senses have different roles (section 5.2.8).
+- Wireframe edges bound no faces; ring edges have two null endpoint references.
+  An acorn is a shell containing a single isolated vertex.
+- Boundary groups, canonical paths, bound geometry, inversion seeds, resource
+  budgets and solver profiles are library API concepts, not additional XT nodes.
+- Geometric tolerances in the API are explicit caller inputs in source units.
+  They do not automatically adopt BODY resolution fields or certify the
+  manifold-body restrictions in section 4.5.
+- Delta packet inspection and explicit application plans are library contracts.
+  The cited manual does not specify the complete internal PMARK/history wire
+  protocol; no automatic history semantics are claimed.
+
+@section xt_sections Referenced sections
+
+@anchor xt_terminology
+- Section 1.1.1, "Parasolid XT format terminology", p. 7 (`xt-doc/p007.md`).
+@anchor xt_documents
+- Section 1.1.2, "Types of file document", p. 8 (`xt-doc/p008.md`).
+@anchor xt_schema
+- Section 2.1.1, "Schema", p. 12 (`xt-doc/p012.md`).
+@anchor xt_embedding
+- Section 2.1.2, "Embedded schemas", p. 13 (`xt-doc/p013.md`).
+@anchor xt_compression
+- Section 2.1.3, "Space compression", p. 14 (`xt-doc/p014.md`).
+@anchor xt_fields
+- Section 2.1.4, "Field types", p. 14 (`xt-doc/p014.md`).
+@anchor xt_pointers
+- Section 2.1.4.2, "Pointer classes", p. 16 (`xt-doc/p016.md`).
+@anchor xt_variable
+- Section 2.1.4.3, "Variable-length nodes", p. 16 (`xt-doc/p016.md`).
+@anchor xt_indices
+- Section 2.1.4.4, "Unresolved indices", p. 17 (`xt-doc/p017.md`).
+@anchor xt_header
+- Section 3.1, "Common header", p. 19 (`xt-doc/p019.md`).
+@anchor xt_binary
+- Section 3.3, "Binary", p. 22 (`xt-doc/p022.md`).
+@anchor xt_topology
+- Section 4.1, "Topology", p. 25 (`xt-doc/p025.md`).
+@anchor xt_resolution
+- Section 4.2.1, "Linear and angular resolution", p. 26 (`xt-doc/p026.md`).
+@anchor xt_body
+- Section 4.3.3, "Body", p. 27 (`xt-doc/p027.md`).
+@anchor xt_region
+- Section 4.3.4, "Region", p. 27 (`xt-doc/p027.md`).
+@anchor xt_shell
+- Section 4.3.5, "Shell", p. 28 (`xt-doc/p028.md`).
+@anchor xt_face
+- Section 4.3.6, "Face", p. 28 (`xt-doc/p028.md`).
+@anchor xt_loop
+- Section 4.3.7, "Loop", p. 28 (`xt-doc/p028.md`).
+@anchor xt_halfedge
+- Section 4.3.8, "Halfedge", p. 29 (`xt-doc/p029.md`).
+@anchor xt_edge
+- Section 4.3.9, "Edge", p. 29 (`xt-doc/p029.md`).
+@anchor xt_vertex
+- Section 4.3.10, "Vertex", p. 30 (`xt-doc/p030.md`).
+@anchor xt_identifiers
+- Section 4.3.13, "Identifiers", p. 31 (`xt-doc/p031.md`).
+@anchor xt_manifold
+- Section 4.5, "Representation of manifold bodies", p. 31 (`xt-doc/p031.md`).
+@anchor xt_underlying
+- Section 5.1, "Underlying types", p. 33 (`xt-doc/p033.md`).
+@anchor xt_curves
+- Section 5.2.1, "Curves", p. 34 (`xt-doc/p034.md`).
+@anchor xt_line
+- Section 5.2.1.1, "Line", p. 35 (`xt-doc/p035.md`).
+@anchor xt_circle
+- Section 5.2.1.2, "Circle", p. 36 (`xt-doc/p036.md`).
+@anchor xt_ellipse
+- Section 5.2.1.3, "Ellipse", p. 37 (`xt-doc/p037.md`).
+@anchor xt_bcurve
+- Section 5.2.1.4, "B_CURVE (B-spline curve)", p. 38 (`xt-doc/p038.md`).
+@anchor xt_intersection
+- Section 5.2.1.5, "Intersection", p. 44 (`xt-doc/p044.md`).
+@anchor xt_trim
+- Section 5.2.1.6, "Trimmed_curve", p. 49 (`xt-doc/p049.md`).
+@anchor xt_spcurve
+- Section 5.2.1.8, "SP_CURVE", p. 51 (`xt-doc/p051.md`).
+@anchor xt_surfaces
+- Section 5.2.2, "Surfaces", p. 53 (`xt-doc/p053.md`).
+@anchor xt_plane
+- Section 5.2.2.1, "Plane", p. 53 (`xt-doc/p053.md`).
+@anchor xt_cylinder
+- Section 5.2.2.2, "Cylinder", p. 54 (`xt-doc/p054.md`).
+@anchor xt_cone
+- Section 5.2.2.3, "Cone", p. 56 (`xt-doc/p056.md`).
+@anchor xt_sphere
+- Section 5.2.2.4, "Sphere", p. 57 (`xt-doc/p057.md`).
+@anchor xt_torus
+- Section 5.2.2.5, "Torus", p. 58 (`xt-doc/p058.md`).
+@anchor xt_offset
+- Section 5.2.2.8, "Offset_surf", p. 62 (`xt-doc/p062.md`).
+@anchor xt_bsurface
+- Section 5.2.2.9, "B_surface", p. 63 (`xt-doc/p063.md`).
+@anchor xt_swept
+- Section 5.2.2.10, "Swept_surf", p. 67 (`xt-doc/p067.md`).
+@anchor xt_spun
+- Section 5.2.2.11, "Spun_surf", p. 68 (`xt-doc/p068.md`).
+@anchor xt_point
+- Section 5.2.5, "Point", p. 77 (`xt-doc/p077.md`).
+@anchor xt_senses
+- Section 5.2.8, "Curve, surface and lattice senses", p. 82 (`xt-doc/p082.md`).
+@anchor xt_bodyschema
+- Section 5.3.4, "Body", p. 88 (`xt-doc/p088.md`).
+@anchor xt_attachment
+- Section 5.3.4.1, "Attaching geometry to topology", p. 92 (`xt-doc/p092.md`).
+@anchor xt_regionschema
+- Section 5.3.5, "Region", p. 93 (`xt-doc/p093.md`).
+@anchor xt_shellschema
+- Section 5.3.6, "Shell", p. 94 (`xt-doc/p094.md`).
+@anchor xt_faceschema
+- Section 5.3.7, "Face", p. 94 (`xt-doc/p094.md`).
+@anchor xt_loopschema
+- Section 5.3.8, "Loop", p. 95 (`xt-doc/p095.md`).
+@anchor xt_isolated
+- Section 5.3.8.1, "Isolated loops", p. 96 (`xt-doc/p096.md`).
+@anchor xt_fin
+- Section 5.3.9, "Fin", p. 96 (`xt-doc/p096.md`).
+@anchor xt_dummy
+- Section 5.3.9.1, "Dummy fins", p. 96 (`xt-doc/p096.md`).
+@anchor xt_vertexchain
+- Section 5.3.9.2, "Fin chain at a vertex", p. 97 (`xt-doc/p097.md`).
+@anchor xt_vertexschema
+- Section 5.3.10, "Vertex", p. 97 (`xt-doc/p097.md`).
+@anchor xt_edgeschema
+- Section 5.3.11, "Edge", p. 98 (`xt-doc/p098.md`).
+@anchor xt_nodetypes
+- Section 6.1, "Node types", p. 117 (`xt-doc/p117.md`).
+@anchor xt_classes
+- Section 6.2, "Node classes", p. 119 (`xt-doc/p119.md`).
+*/

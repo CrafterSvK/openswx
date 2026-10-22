@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
 
-#pragma once
+/**
+ * @file
+ * @brief Build-time library version; independent of XT schema versions.
+ * @see @ref xt_schema "XT 2.1.1: Schema (p. 12)"
+ */
+#ifndef OPENPARASOLID_VERSION_H_
+#define OPENPARASOLID_VERSION_H_
 
+/// Library release string, independent of modeller and schema version keys.
 #define OPENPARASOLID_VERSION_STRING "@PROJECT_VERSION@"
+
+#endif  // OPENPARASOLID_VERSION_H_

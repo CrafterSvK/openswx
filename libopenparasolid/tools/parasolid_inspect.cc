@@ -177,8 +177,17 @@ int main(int argc, char *argv[]) {
   if (nodes) {
     try {
       std::optional<openparasolid::SchemaCatalog> catalog;
-      if (catalog_path)
-        catalog = openparasolid::cli::LoadCatalog(*catalog_path);
+      if (catalog_path) {
+        auto loaded = openparasolid::cli::LoadCatalog(*catalog_path);
+        if (!loaded.ok()) {
+          const auto &error = loaded.error();
+          std::cerr << "Error: " << openparasolid::ToString(error.code)
+                    << " at byte " << error.offset << ": " << error.message
+                    << '\n';
+          return 1;
+        }
+        catalog = std::move(loaded).value();
+      }
       const auto parsed = openparasolid::SchemaParser::ParseFile(
           *input, catalog ? &*catalog : nullptr, limits);
       if (!parsed.ok()) {

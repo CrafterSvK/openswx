@@ -6,6 +6,10 @@ Parasolid transmit streams. Licensed under [MIT](LICENSE).
 The library depends only on the C++ standard library. The CLI uses
 nlohmann/json, and the tests use GoogleTest. SolidWorks containers and
 compression belong to `libopenswx`; this library reads the extracted bytes.
+Core binary decoding propagates explicit `Result` errors, preserving source
+byte offsets and completed report prefixes. GCC/Clang builds enforce this with
+`-fno-exceptions` on the library target. The CLI translates third-party JSON
+exceptions at its catalog-loading boundary.
 
 The [model builder](MODEL.md) adds an owned reference graph and typed analytic/
 NURBS data for complete partition and transmit streams. Use
@@ -14,6 +18,28 @@ Geometry mode and existing options also support `OPENPARASOLID_*` environment
 settings, with command-line precedence. Integrated body incidence validation,
 face parameter binding and explicit-plan delta application are described below. Automatic delta-history resolution and
 full geometric BRep certification remain separate work.
+
+## Public API documentation
+
+Public headers contain Doxygen contracts for parameters, ownership, errors,
+source units, senses and resource limits. References name the section, title and
+printed page in the **Parasolid XT Format Reference, July 2022**. The generated
+"XT reference and API terminology" page distinguishes schema terms such as
+`FIN`/halfedge from library concepts such as bound boundary paths and solver
+profiles. `NodeId` is a decoded stream-local index, not a persistent identifier.
+The reference manual itself is not bundled with this MIT-licensed library.
+
+Generate the HTML documentation with Doxygen (no Graphviz dependency):
+
+```sh
+cd libopenparasolid
+doxygen Doxyfile
+```
+
+Open `../build/openparasolid-docs/html/index.html`. The configuration checks
+undocumented public members, enum values and invalid documentation references;
+any warning fails generation. Doxygen is optional and is not a library build
+dependency.
 
 ## Integrated body validation and face binding
 

@@ -1,5 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
+/**
+ * @file
+ * @brief Bounded evaluation and inversion of source geometry.
+ * @see @ref xt_curves "XT 5.2.1: Curves (p. 34)", @ref xt_surfaces "XT 5.2.2:
+ * Surfaces (p. 53)", @ref xt_senses "XT 5.2.8: Curve, surface and lattice
+ * senses (p. 82)", @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
+ */
 #ifndef OPENPARASOLID_EVALUATE_H_
 #define OPENPARASOLID_EVALUATE_H_
 
@@ -11,7 +18,13 @@
 
 namespace openparasolid {
 
+/// @brief Curve position and natural parameter derivative in source
+/// coordinates.
+///
+/// @see @ref xt_curves "XT 5.2.1: Curves (p. 34)", @ref xt_senses "XT 5.2.8:
+/// Curve, surface and lattice senses (p. 82)"
 struct CurveEvaluation {
+  /// Position in source coordinates and source length units.
   Vector3 position;
   /// Natural derivative dP/dt, not an oriented or normalized tangent.
   Vector3 first_derivative;
@@ -29,6 +42,16 @@ struct CurveEvaluation {
 /// distinct knots, multiplicities and expanded knots (each separately).
 /// Invalid parameters/data, nonfinite results and unsupported payloads return
 /// explicit errors (offset zero, since payloads have no source byte offset).
+///
+/// @see @ref xt_curves "XT 5.2.1: Curves (p. 34)", @ref xt_senses "XT 5.2.8:
+/// Curve, surface and lattice senses (p. 82)", @ref xt_trim "XT 5.2.1.6:
+/// Trimmed_curve (p. 49)", @ref xt_spcurve "XT 5.2.1.8: SP_CURVE (p. 51)"
+///
+/// @param geometry Typed source-coordinate geometry payload.
+/// @param parameter Finite natural source parameter, or the documented
+/// piecewise path parameter.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
     const GeometryPayload& geometry, double parameter);
 
@@ -44,14 +67,33 @@ struct CurveEvaluation {
 /// endpoint order; the natural derivative is not reversed or scaled. Stored
 /// endpoint points and periodic span legality are not certified. Inherited
 /// parameter/data/ resource checks remain in force.
+///
+/// @see @ref xt_curves "XT 5.2.1: Curves (p. 34)", @ref xt_senses "XT 5.2.8:
+/// Curve, surface and lattice senses (p. 82)", @ref xt_trim "XT 5.2.1.6:
+/// Trimmed_curve (p. 49)", @ref xt_spcurve "XT 5.2.1.8: SP_CURVE (p. 51)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param curve Stream-local curve identity to evaluate.
+/// @param parameter Finite natural source parameter, or the documented
+/// piecewise path parameter.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(const Model& model,
                                                     NodeId curve,
                                                     double parameter);
 
+/// @brief Surface position and natural partial derivatives in source
+/// coordinates.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)", @ref xt_senses
+/// "XT 5.2.8: Curve, surface and lattice senses (p. 82)"
 struct SurfaceEvaluation {
+  /// Position in source coordinates and source length units.
   Vector3 position;
   /// Natural partial derivatives, without normalization or sense reversal.
   Vector3 u_derivative;
+  /// Natural partial derivative dP/dv; not normalized or sense-reversed.
   Vector3 v_derivative;
 };
 
@@ -68,6 +110,17 @@ struct SurfaceEvaluation {
 /// u*n_v + v. Each knot axis follows EvaluateCurve's domain, derivative-side
 /// and resource rules; the shared control net is limited to 1,000,000 scalars.
 /// Errors follow EvaluateCurve.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)", @ref xt_senses
+/// "XT 5.2.8: Curve, surface and lattice senses (p. 82)", @ref xt_spun
+/// "XT 5.2.2.11: Spun_surf (p. 68)", @ref xt_swept "XT 5.2.2.10: Swept_surf (p.
+/// 67)", @ref xt_offset "XT 5.2.2.8: Offset_surf (p. 62)"
+///
+/// @param geometry Typed source-coordinate geometry payload.
+/// @param u Natural source U parameter; angular coordinates use radians.
+/// @param v Natural source V parameter; angular coordinates use radians.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<SurfaceEvaluation> EvaluateSurface(
     const GeometryPayload& geometry, double u, double v);
 
@@ -85,6 +138,19 @@ struct SurfaceEvaluation {
 /// retained, not applied or certified. Missing/wrong profiles are invalid
 /// records; unsupported dependencies remain explicit errors. No recursive
 /// profile graphs are evaluated.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)", @ref xt_senses
+/// "XT 5.2.8: Curve, surface and lattice senses (p. 82)", @ref xt_spun
+/// "XT 5.2.2.11: Spun_surf (p. 68)", @ref xt_swept "XT 5.2.2.10: Swept_surf (p.
+/// 67)", @ref xt_offset "XT 5.2.2.8: Offset_surf (p. 62)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param surface Stream-local surface identity to evaluate.
+/// @param u Natural source U parameter; angular coordinates use radians.
+/// @param v Natural source V parameter; angular coordinates use radians.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<SurfaceEvaluation> EvaluateSurface(const Model& model,
                                                         NodeId surface,
                                                         double u, double v);
@@ -95,18 +161,38 @@ struct SurfaceEvaluation {
 /// Inherits EvaluateSurface's domain and resource checks. Zero or numerically
 /// unresolvable cross products return kInvalidRecord; unknown surface sense
 /// returns kUnsupportedFormat. No normal is invented at singular parameters.
+///
+/// @see @ref xt_senses "XT 5.2.8: Curve, surface and lattice senses (p. 82)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param surface Stream-local surface identity to evaluate.
+/// @param u Natural source U parameter; angular coordinates use radians.
+/// @param v Natural source V parameter; angular coordinates use radians.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<Vector3> EvaluateSurfaceNormal(const Model& model,
-                                                   NodeId surface,
-                                                   double u, double v);
+                                                    NodeId surface, double u,
+                                                    double v);
 
+/// @brief Recovered natural UV parameters and measured 3D membership residual.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
 struct SurfaceParameters {
+  /// Natural U parameter in the source surface parameterization.
   double u = 0;
+  /// Natural V parameter in the source surface parameterization.
   double v = 0;
   /// Distance to the point returned by EvaluateSurface at these parameters.
   double residual = 0;
 };
+/// @brief Caller-selected initial UV pair for bounded inversion.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
 struct SurfaceParameterSeed {
+  /// Natural U parameter in the source surface parameterization.
   double u = 0;
+  /// Natural V parameter in the source surface parameterization.
   double v = 0;
 };
 
@@ -128,6 +214,15 @@ struct SurfaceParameterSeed {
 /// validation/evaluation work units. Exhaustion returns kResourceLimit. A
 /// failed local search is not proof that the point has no preimage; unique
 /// roots are not guaranteed.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
+///
+/// @param geometry Typed source-coordinate geometry payload.
+/// @param point Point in source coordinates to test for surface membership.
+/// @param tolerance Finite nonnegative absolute 3D membership tolerance in
+/// source length units.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const GeometryPayload& geometry, Vector3 point, double tolerance);
 /// The model overload also inverts circular SPUN_SURF rings whose profile
@@ -142,23 +237,63 @@ struct SurfaceParameterSeed {
 /// principal branch, and v is signed source sweep displacement. At most two
 /// model surface evaluations validate (0,0) and the recovered point, with no
 /// implicit tolerance. Other swept profiles remain unsupported.
-[[nodiscard]] Result<SurfaceParameters> InvertSurface(
-    const Model& model, NodeId surface, Vector3 point, double tolerance);
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param surface Stream-local surface identity to evaluate.
+/// @param point Point in source coordinates to test for surface membership.
+/// @param tolerance Finite nonnegative absolute 3D membership tolerance in
+/// source length units.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
+[[nodiscard]] Result<SurfaceParameters> InvertSurface(const Model& model,
+                                                      NodeId surface,
+                                                      Vector3 point,
+                                                      double tolerance);
 
 /// Supplies a preferred starting UV pair for bounded NURBS or model-based
-/// circular spun inversion. Spun seeds are clamped to stored profile bounds. Both
-/// coordinates must be finite and, for NURBS, inside the defined knot domain.
-/// Other deterministic starts are tried if local iteration fails. Analytic
-/// surfaces and analytic sweeps validate the finite seed and use their direct
-/// inversion formulas.
-/// No closest-point, unique-root or periodic-continuation guarantee is made.
+/// circular spun inversion. Spun seeds are clamped to stored profile bounds.
+/// Both coordinates must be finite and, for NURBS, inside the defined knot
+/// domain. Other deterministic starts are tried if local iteration fails.
+/// Analytic surfaces and analytic sweeps validate the finite seed and use their
+/// direct inversion formulas. No closest-point, unique-root or
+/// periodic-continuation guarantee is made.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
+///
+/// @param geometry Typed source-coordinate geometry payload.
+/// @param point Point in source coordinates to test for surface membership.
+/// @param tolerance Finite nonnegative absolute 3D membership tolerance in
+/// source length units.
+/// @param seed Finite preferred starting UV pair for bounded inversion.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const GeometryPayload& geometry, Vector3 point, double tolerance,
     SurfaceParameterSeed seed);
+/// @brief Recovers UV parameters with the supplied seed and membership
+/// tolerance.
+///
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param surface Stream-local surface identity to evaluate.
+/// @param point Point in source coordinates to test for surface membership.
+/// @param tolerance Finite nonnegative absolute 3D membership tolerance in
+/// source length units.
+/// @param seed Finite preferred starting UV pair for bounded inversion.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const Model& model, NodeId surface, Vector3 point, double tolerance,
     SurfaceParameterSeed seed);
 
+/// @brief Reconstructed chart parameters and per-chord projection scales.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
 struct IntersectionChartParameters {
   /// One strictly increasing parameter per chart position.
   std::vector<double> parameters;
@@ -178,14 +313,28 @@ struct IntersectionChartParameters {
 /// oversized charts kResourceLimit, invalid data/results kInvalidRecord.
 /// Does not find surface parameters/tangents, check curve membership or error
 /// estimates, extend to terminators, or evaluate between chart positions.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
+///
+/// @param chart Stored intersection chart to parameterize.
+/// @param tangents One finite nonzero tangent per chart position, oriented in
+/// chart order.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<IntersectionChartParameters> ParameterizeIntersectionChart(
     const IntersectionChart& chart, std::span<const Vector3> tangents);
 
+/// @brief Chart samples with recovered UV pairs, tangents and parameterization.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
 struct IntersectionChartEvaluation {
-  /// Natural parameters and measured residual for each stored surface, per point.
+  /// Natural parameters and measured residual for each stored surface, per
+  /// point.
   std::vector<std::array<SurfaceParameters, 2>> surface_parameters;
-  /// Unit N0 x N1 directions in stored surface order, without curve sense flips.
+  /// Unit N0 x N1 directions in stored surface order, without curve sense
+  /// flips.
   std::vector<Vector3> tangents;
+  /// Reconstructed natural chart parameters and per-chord scales.
   IntersectionChartParameters parameterization;
 };
 
@@ -205,13 +354,28 @@ struct IntersectionChartEvaluation {
 /// Does not unwrap trims, evaluate between chart points or extend to
 /// terminators. Auxiliary UV data/error estimates, curve/face senses and
 /// placement are not applied. The source model and chart are not modified.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param curve Stream-local curve identity to evaluate.
+/// @param tolerance Finite nonnegative absolute 3D membership tolerance in
+/// source length units.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
     const Model& model, NodeId curve, double tolerance);
 
+/// @brief Explicit caller tolerances and regularity thresholds for local
+/// intersection solves.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
 struct IntersectionEvaluationOptions {
   /// Nonnegative absolute membership tolerance for the stored chart points.
   double chart_tolerance = 0;
-  /// Positive absolute residual tolerance for interior coincidence/plane solves.
+  /// Positive absolute residual tolerance for interior coincidence/plane
+  /// solves.
   double solve_tolerance = 0;
   /// Nonnegative absolute tolerance in original curve parameter units. Allows
   /// snapping just outside outer chart endpoints; zero retains strict bounds.
@@ -235,6 +399,20 @@ struct IntersectionEvaluationOptions {
 /// no terminator extension. Stored trim endpoints and branch topology are not
 /// certified. The overload without
 /// options retains its unsupported result for intersections.
+///
+/// @see @ref xt_curves "XT 5.2.1: Curves (p. 34)", @ref xt_senses "XT 5.2.8:
+/// Curve, surface and lattice senses (p. 82)", @ref xt_trim "XT 5.2.1.6:
+/// Trimmed_curve (p. 49)", @ref xt_spcurve "XT 5.2.1.8: SP_CURVE (p. 51)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param curve Stream-local curve identity to evaluate.
+/// @param parameter Finite natural source parameter, or the documented
+/// piecewise path parameter.
+/// @param options Per-call settings and resource limits; see the associated
+/// options type.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<CurveEvaluation> EvaluateCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);
@@ -268,10 +446,25 @@ struct IntersectionEvaluationOptions {
 /// No terminator extension, trim unwrapping, global branch certification or
 /// inversion of other surface kinds is provided. EvaluateCurve without options
 /// retains its unsupported result for intersections.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param curve Stream-local curve identity to evaluate.
+/// @param parameter Finite natural source parameter, or the documented
+/// piecewise path parameter.
+/// @param options Per-call settings and resource limits; see the associated
+/// options type.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<CurveEvaluation> EvaluateIntersectionCurve(
     const Model& model, NodeId curve, double parameter,
     const IntersectionEvaluationOptions& options);
 
+/// @brief Local regularity measures; no global accuracy or branch certificate.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
 struct IntersectionCurveDiagnostics {
   /// Sine of the angle between the unit normals, in (0,1]. Near zero means
   /// the supporting surfaces are nearly tangent.
@@ -280,8 +473,13 @@ struct IntersectionCurveDiagnostics {
   /// amplifies the chart's natural derivative scale.
   double tangent_chord_projection = 0;
 };
+/// @brief Intersection sample and its local regularity diagnostics.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
 struct IntersectionCurveEvaluation {
+  /// Natural intersection position and dP/dt sample.
   CurveEvaluation curve;
+  /// Local regularity measures computed at this intersection sample.
   IntersectionCurveDiagnostics diagnostics;
 };
 
@@ -292,6 +490,18 @@ struct IntersectionCurveEvaluation {
 /// at chart knots the returned position remains the stored chart point.
 /// Neither the measures nor passing the minimums certify position/derivative
 /// accuracy, chart-wide regularity, a Jacobian condition bound or topology.
+///
+/// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
+///
+/// @param model Source model providing stream-local identities and typed
+/// geometry.
+/// @param curve Stream-local curve identity to evaluate.
+/// @param parameter Finite natural source parameter, or the documented
+/// piecewise path parameter.
+/// @param options Per-call settings and resource limits; see the associated
+/// options type.
+/// @return The requested value on success, or an explicit ParseError on
+/// failure.
 [[nodiscard]] Result<IntersectionCurveEvaluation>
 EvaluateIntersectionCurveWithDiagnostics(
     const Model& model, NodeId curve, double parameter,

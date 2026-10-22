@@ -27,7 +27,7 @@ target_include_directories(openparasolid
     $<BUILD_INTERFACE:${OPENPARASOLID_GENERATED_INCLUDE_DIR}>
     $<INSTALL_INTERFACE:include>)
 target_compile_options(openparasolid PRIVATE
-  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Wconversion -Wshadow>
+  $<$<CXX_COMPILER_ID:GNU,Clang>:-Wall -Wextra -Wpedantic -Wconversion -Wshadow -fno-exceptions>
   $<$<CXX_COMPILER_ID:MSVC>:/W4 /permissive- /utf-8>)
 
 if(OPENPARASOLID_BUILD_TOOLS)
@@ -44,7 +44,7 @@ if(BUILD_TESTING)
   if(NOT TARGET GTest::gtest_main)
     find_package(GTest REQUIRED)
   endif()
-  add_executable(libopenparasolid_tests tests/evaluate_test.cc tests/model_evaluate_test.cc tests/trimmed_curve_test.cc tests/spun_surface_test.cc tests/swept_surface_test.cc tests/normal_evaluate_test.cc tests/chart_parameterize_test.cc tests/surface_invert_test.cc tests/nurbs_invert_test.cc tests/intersection_chart_test.cc tests/intersection_evaluate_test.cc tests/intersection_model_test.cc tests/nurbs_evaluate_test.cc tests/surface_evaluate_test.cc tests/nurbs_surface_evaluate_test.cc tests/model_test.cc tests/topology_test.cc tests/edge_topology_test.cc tests/vertex_topology_test.cc tests/brep_reconstruction_test.cc tests/shell_topology_test.cc tests/region_topology_test.cc tests/body_topology_test.cc tests/model_spline_test.cc tests/header_test.cc tests/inspector_test.cc tests/schema_test.cc tests/delta_test.cc tests/delta_packets_test.cc tests/delta_boundary_test.cc tests/delta_status_test.cc tests/embedded_intersection_test.cc tests/attribute_definition_test.cc tests/geometry_test.cc tests/spline_test.cc tests/procedural_test.cc)
+  add_executable(libopenparasolid_tests tests/binary_reader_test.cc tests/evaluate_test.cc tests/model_evaluate_test.cc tests/trimmed_curve_test.cc tests/spun_surface_test.cc tests/swept_surface_test.cc tests/normal_evaluate_test.cc tests/chart_parameterize_test.cc tests/surface_invert_test.cc tests/nurbs_invert_test.cc tests/intersection_chart_test.cc tests/intersection_evaluate_test.cc tests/intersection_model_test.cc tests/nurbs_evaluate_test.cc tests/surface_evaluate_test.cc tests/nurbs_surface_evaluate_test.cc tests/model_test.cc tests/topology_test.cc tests/edge_topology_test.cc tests/vertex_topology_test.cc tests/brep_reconstruction_test.cc tests/shell_topology_test.cc tests/region_topology_test.cc tests/body_topology_test.cc tests/model_spline_test.cc tests/header_test.cc tests/inspector_test.cc tests/schema_test.cc tests/delta_test.cc tests/delta_packets_test.cc tests/delta_boundary_test.cc tests/delta_status_test.cc tests/embedded_intersection_test.cc tests/attribute_definition_test.cc tests/geometry_test.cc tests/spline_test.cc tests/procedural_test.cc)
   target_link_libraries(libopenparasolid_tests PRIVATE openparasolid GTest::gtest_main)
   if(OPENPARASOLID_BUILD_TOOLS AND UNIX)
     target_sources(libopenparasolid_tests PRIVATE tests/cli_test.cc tests/inspect_options_test.cc)

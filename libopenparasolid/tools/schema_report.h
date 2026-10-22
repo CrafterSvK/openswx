@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
 
-#pragma once
+#ifndef OPENPARASOLID_TOOLS_SCHEMA_REPORT_H_
+#define OPENPARASOLID_TOOLS_SCHEMA_REPORT_H_
 
 #include <bit>
 #include <cmath>
@@ -9,70 +10,123 @@
 #include <iomanip>
 #include <nlohmann/json.hpp>
 #include <sstream>
-#include <stdexcept>
+#include <string_view>
 
 #include "openparasolid/schema.h"
 #include "openparasolid/version.h"
 
 namespace openparasolid::cli {
 using nlohmann::json;
-inline uint64_t Unsigned(const json& object, const char* name,
-                         uint64_t maximum) {
-  const auto& v = object.at(name);
-  if (!v.is_number_unsigned() || v.get<uint64_t>() > maximum)
-    throw std::runtime_error(std::string("Invalid catalog integer: ") + name);
-  return v.get<uint64_t>();
+inline Result<uint64_t> Unsigned(const json& object, const char* name,
+                                 uint64_t maximum) {
+  const auto& value = object.at(name);
+  if (!value.is_number_unsigned() || value.get<uint64_t>() > maximum)
+    return Result<uint64_t>::Err(
+        {ErrorCode::kInvalidSchema, 0,
+         std::string("Invalid catalog integer: ") + name});
+  return Result<uint64_t>::Ok(value.get<uint64_t>());
 }
-inline SchemaCatalog LoadCatalog(const std::filesystem::path& path) {
+// Check nesting before entering the recursive third-party JSON parser. Ignore
+// braces inside strings, including escaped quotes and escaped backslashes.
+inline bool CatalogNestingAllowed(std::string_view bytes) {
+  unsigned depth = 0;
+  bool in_string = false;
+  bool escaped = false;
+  for (char ch : bytes) {
+    if (in_string) {
+      if (escaped)
+        escaped = false;
+      else if (ch == '\\')
+        escaped = true;
+      else if (ch == '"')
+        in_string = false;
+      continue;
+    }
+    if (ch == '}' || ch == ']') {
+      if (depth != 0) --depth;
+      continue;
+    }
+    if (ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n') continue;
+    // Container starts at depth 64 are allowed only when empty, matching the
+    // JSON callback's depth rule for leaf events as well as container events.
+    if (depth > 64) return false;
+    if (ch == '"')
+      in_string = true;
+    else if (ch == '{' || ch == '[')
+      ++depth;
+  }
+  return true;
+}
+inline Result<SchemaCatalog> LoadCatalog(const std::filesystem::path& path) {
+  using Return = Result<SchemaCatalog>;
   std::ifstream file(path, std::ios::binary | std::ios::ate);
-  if (!file || file.tellg() < 0 || file.tellg() > 4 * 1024 * 1024)
-    throw std::runtime_error("Cannot read schema catalog (maximum 4 MiB)");
+  if (!file || file.tellg() < 0)
+    return Return::Err({ErrorCode::kIo, 0, "Cannot read schema catalog"});
+  if (file.tellg() > 4 * 1024 * 1024)
+    return Return::Err({ErrorCode::kResourceLimit, 0,
+                        "Cannot read schema catalog (maximum 4 MiB)"});
   const auto length = static_cast<std::size_t>(file.tellg());
   std::string bytes(length, '\0');
   file.seekg(0);
   if (!file.read(bytes.data(), static_cast<std::streamsize>(length)))
-    throw std::runtime_error("Cannot read schema catalog");
-  const auto data =
-      json::parse(bytes, [](int depth, json::parse_event_t, json&) {
-        if (depth > 64)
-          throw std::runtime_error("Catalog JSON nesting limit exceeded");
-        return true;
-      });
-  SchemaCatalog result;
-  result.schema_key = data.at("schema_key").get<std::string>();
-  result.source = data.at("source").get<std::string>();
-  if (!data.at("base_types").is_array() || !data.at("absent_types").is_array())
-    throw std::runtime_error("Catalog types must be arrays");
-  for (const auto& t : data.at("base_types")) {
-    TypeDefinition type;
-    type.node_type = static_cast<uint16_t>(Unsigned(t, "node_type", 32767));
-    type.name = t.at("name").get<std::string>();
-    type.description = t.value("description", std::string{});
-    if (!t.at("fields").is_array())
-      throw std::runtime_error("Catalog fields must be an array");
-    for (const auto& f : t.at("fields")) {
-      const auto code = f.at("type").get<std::string>();
-      const auto kind =
-          code.size() == 1 ? FieldTypeFromCode(code.front()) : std::nullopt;
-      if (!kind) throw std::runtime_error("Invalid catalog field codec");
-      FieldDefinition field;
-      field.name = f.at("name").get<std::string>();
-      field.type = *kind;
-      field.pointer_class =
-          static_cast<uint16_t>(Unsigned(f, "pointer_class", 65535));
-      field.elements =
-          static_cast<uint32_t>(Unsigned(f, "elements", UINT32_MAX));
-      field.transmitted = f.at("transmitted").get<bool>();
-      type.fields.push_back(std::move(field));
+    return Return::Err({ErrorCode::kIo, 0, "Cannot read schema catalog"});
+  if (!CatalogNestingAllowed(bytes))
+    return Return::Err(
+        {ErrorCode::kResourceLimit, 0, "Catalog JSON nesting limit exceeded"});
+  // JSON decoding is an infrastructure boundary. Translate only exceptions
+  // raised by the third-party library; our own validation returns Result.
+  try {
+    const auto data = json::parse(bytes);
+    SchemaCatalog result;
+    result.schema_key = data.at("schema_key").get<std::string>();
+    result.source = data.at("source").get<std::string>();
+    if (!data.at("base_types").is_array() ||
+        !data.at("absent_types").is_array())
+      return Return::Err(
+          {ErrorCode::kInvalidSchema, 0, "Catalog types must be arrays"});
+    for (const auto& type_json : data.at("base_types")) {
+      TypeDefinition type;
+      const auto node_type = Unsigned(type_json, "node_type", 32767);
+      if (!node_type.ok()) return Return::Err(node_type.error());
+      type.node_type = static_cast<uint16_t>(node_type.value());
+      type.name = type_json.at("name").get<std::string>();
+      type.description = type_json.value("description", std::string{});
+      if (!type_json.at("fields").is_array())
+        return Return::Err(
+            {ErrorCode::kInvalidSchema, 0, "Catalog fields must be an array"});
+      for (const auto& field_json : type_json.at("fields")) {
+        const auto code = field_json.at("type").get<std::string>();
+        const auto kind =
+            code.size() == 1 ? FieldTypeFromCode(code.front()) : std::nullopt;
+        if (!kind)
+          return Return::Err(
+              {ErrorCode::kInvalidSchema, 0, "Invalid catalog field codec"});
+        FieldDefinition field;
+        field.name = field_json.at("name").get<std::string>();
+        field.type = *kind;
+        const auto pointer_class = Unsigned(field_json, "pointer_class", 65535);
+        if (!pointer_class.ok()) return Return::Err(pointer_class.error());
+        field.pointer_class = static_cast<uint16_t>(pointer_class.value());
+        const auto elements = Unsigned(field_json, "elements", UINT32_MAX);
+        if (!elements.ok()) return Return::Err(elements.error());
+        field.elements = static_cast<uint32_t>(elements.value());
+        field.transmitted = field_json.at("transmitted").get<bool>();
+        type.fields.push_back(std::move(field));
+      }
+      result.base_types.push_back(std::move(type));
     }
-    result.base_types.push_back(std::move(type));
+    for (const auto& type : data.at("absent_types")) {
+      if (!type.is_number_unsigned() || type.get<uint64_t>() > 32767)
+        return Return::Err(
+            {ErrorCode::kInvalidSchema, 0, "Invalid absent catalog type"});
+      result.absent_types.push_back(type.get<uint16_t>());
+    }
+    return Return::Ok(std::move(result));
+  } catch (const json::exception& error) {
+    return Return::Err(
+        {ErrorCode::kInvalidSchema, 0,
+         std::string("Invalid schema catalog: ") + error.what()});
   }
-  for (const auto& t : data.at("absent_types")) {
-    if (!t.is_number_unsigned() || t.get<uint64_t>() > 32767)
-      throw std::runtime_error("Invalid absent catalog type");
-    result.absent_types.push_back(t.get<uint16_t>());
-  }
-  return result;
 }
 inline json DefinitionJson(const FieldDefinition& f) {
   return {{"name", f.name},
@@ -239,3 +293,5 @@ inline json SchemaReport(const SchemaParseReport& r,
   return out;
 }
 }  // namespace openparasolid::cli
+
+#endif  // OPENPARASOLID_TOOLS_SCHEMA_REPORT_H_
