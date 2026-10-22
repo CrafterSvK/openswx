@@ -93,6 +93,47 @@ TEST(ParasolidSurfaceInvert, SignedConeSlopeKeepsTheWriterAxialConvention) {
     EXPECT_EQ(beyond.error().code, ErrorCode::kInvalidRecord);
   }
 }
+TEST(ParasolidSurfaceInvert, ConeApexRoundingUsesOnlyTheRequestedTolerance) {
+  for (double radius : {.1, 1e-200, 1e200}) {
+    for (double sine : {-.6, .6}) {
+      const GeometryPayload cone =
+          ConeGeometry{{}, {0, 0, 1}, radius, sine, .8, {1, 0, 0}};
+      const double outside = std::nextafter(
+          -radius / (sine / .8),
+          std::copysign(std::numeric_limits<double>::infinity(), -sine));
+      ASSERT_FALSE(EvaluateSurface(cone, 0, outside).ok());
+      const Vector3 point{0, 0, outside};
+      const auto strict = InvertSurface(cone, point, 0);
+      ASSERT_FALSE(strict.ok());
+      EXPECT_EQ(strict.error().code, ErrorCode::kInvalidRecord);
+      const double tolerance = radius * 1e-12;
+      const auto result = InvertSurface(cone, point, tolerance);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      const auto sample =
+          EvaluateSurface(cone, result.value().u, result.value().v);
+      ASSERT_TRUE(sample.ok());
+      EXPECT_LE(result.value().residual, tolerance);
+      EXPECT_GT(result.value().residual, 0);
+      EXPECT_EQ(result.value().u, 0);
+      EXPECT_FALSE(
+          InvertSurface(cone, point, result.value().residual / 2).ok());
+    }
+  }
+}
+TEST(ParasolidSurfaceInvert, ConeBoundaryFallbackRejectsDistantPoints) {
+  for (double sine : {-.6, .6}) {
+    const GeometryPayload cone =
+        ConeGeometry{{}, {0, 0, 1}, 0, sine, .8, {1, 0, 0}};
+    const Vector3 point{0, 0, sine > 0 ? -.01 : .01};
+    const auto rejected = InvertSurface(cone, point, .009);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidRecord);
+    const auto accepted = InvertSurface(cone, point, .01);
+    ASSERT_TRUE(accepted.ok());
+    EXPECT_EQ(accepted.value().v, 0);
+    EXPECT_EQ(accepted.value().residual, .01);
+  }
+}
 TEST(ParasolidSurfaceInvert, PolesAndApexHaveDeterministicUndefinedAzimuth) {
   const GeometryPayload sphere = SphereGeometry{{}, 2, {0, 0, 1}, {1, 0, 0}};
   for (double z : {-2., 2.}) {

@@ -116,8 +116,10 @@ struct SurfaceParameterSeed {
 /// to be within tolerance; this is not a general closest-point projection.
 /// Angular parameters use atan2's principal branch; an undefined azimuth is
 /// represented by zero. Sphere poles and cone/torus singularities may yield
-/// parameters while the normal remains undefined. The torus's principal sheet
-/// is retained. Source frames, senses and units are not changed. Invalid
+/// parameters while the normal remains undefined. An axial cone candidate
+/// beyond the apex also tries the nearest representable apex parameter on the
+/// valid side, subject to the same absolute 3D tolerance. The torus's principal
+/// sheet is retained. Source frames, senses and units are not changed. Invalid
 /// request values return kInvalidOptions, nonmatching points or invalid
 /// geometry/results kInvalidRecord, other geometry kinds kUnsupportedFormat.
 /// Inherits the forward evaluator's validity/domain checks. No implicit

@@ -66,14 +66,13 @@ Synthetic regressions cover missing owner lists and incidence, both face
 sides, source loops, directed/reversed intervals, UV curves, mismatched
 surfaces, oriented conic arcs and closed/vertex-free periodic edges. All 163
 bodies in the existing 130-stream selection pass the integrated topology
-validation. At tolerance 1e-7, automatic binding succeeds for 4,475 of 4,540
+validation. At tolerance 1e-7, automatic binding succeeds for 4,505 of 4,540
 selected faces whose curves are lines, conics or trims of those curves and whose
-surfaces are supported analytics. These contain 21,190 fin uses, including
-6,083 direct conic uses (1,169 closed/vertex-free). The remaining 65 faces report
-30 surface-inversion domain failures, 21 curves requiring explicit endpoints
-and 14 ambiguous/nonmatching source trims. This is selected coverage,
-not evidence that all procedural surfaces or arbitrary parameter branches
-are supported. Private inputs and comparison tools stay outside the repo.
+surfaces are supported analytics. These contain 21,227 fin uses, including
+6,118 direct conic uses (1,197 closed/vertex-free). The remaining 35 faces report
+21 curves requiring explicit endpoints and 14 ambiguous/nonmatching source
+trims. This is selected coverage, not evidence that all procedural surfaces
+or arbitrary parameter branches are supported. Private inputs and comparison tools stay outside the repo.
 
 ## Analytic offset surfaces
 
@@ -995,6 +994,15 @@ and torus meridian angles use the principal `atan2` branch; spherical latitude
 lies in `[-pi/2, pi/2]`. Undefined azimuth is represented by zero. Recovering
 parameters at a sphere pole or cone/torus singularity does not imply that a
 parametric normal exists there.
+
+For cones, an axial candidate beyond the apex also tries the nearest
+representable apex parameter on the valid side of the source domain. This
+requires at most three parameter checks, with no domain extension or implicit
+geometric tolerance. The resulting 3D residual must still satisfy the original caller tolerance, including zero.
+This handles rounded isolated apex vertices in face loops and preserves
+rejection of points farther than the requested tolerance. Regressions cover
+both slope signs, radii from 1e-200 to 1e200 and integrated face binding. All
+30 cone-domain failures in the selected face corpus now bind successfully.
 
 Ring, apple, lemon and horn tori retain the forward evaluator's principal
 sheet. An angular overshoot within eight double-precision epsilons times

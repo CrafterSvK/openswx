@@ -166,6 +166,36 @@ TEST(ParasolidFaceBinding, AutomaticallyBindsClosedAndVertexFreeConics) {
     }
   }
 }
+TEST(ParasolidFaceBinding, BindsIsolatedConeApexWithinExplicitTolerance) {
+  auto f = ConicFace(false);
+  Set(f, 30, "surface", 301);
+  f.Add(
+      52, 301,
+      {Numbers("origin", {2, -3, 0}, FieldType::kVector),
+       Numbers("axis", {0, 0, 1}, FieldType::kVector),
+       Numbers("x_axis", {1, 0, 0}, FieldType::kVector), Numbers("radius", {3}),
+       Numbers("sin_half_angle", {.6}), Numbers("cos_half_angle", {.8}),
+       ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 20, "next", 21);
+  f.Add(15, 21,
+        {Pointer("face", 30, 14), Pointer("halfedge", 12, 17),
+         Pointer("next", 0, 15)});
+  Fin(f, 12, 102, 0, 21, 12);
+  Set(f, 12, "edge", 0);
+  Vertex(f, 102, 12, 0, 0, 202);
+  const double outside = std::nextafter(-4., -5.);
+  f.Add(29, 202, {Numbers("position", {2, -3, outside}, FieldType::kVector)});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().loops.size(), 2);
+  ASSERT_TRUE(result.value().loops[1].isolated_vertex.has_value());
+  const auto& uv = *result.value().loops[1].isolated_vertex;
+  EXPECT_NEAR(uv.v, -4, 1e-14);
+  EXPECT_GT(uv.residual, 0);
+  EXPECT_LE(uv.residual, 1e-12);
+}
 TEST(ParasolidFaceBinding, RejectsAmbiguousOrInvalidAutomaticConics) {
   for (int bad = 0; bad < 6; ++bad) {
     auto f = ConicFace(false);

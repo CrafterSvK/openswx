@@ -70,6 +70,26 @@ bool Representable(long double value) {
   return std::isfinite(value) &&
          std::abs(value) <= std::numeric_limits<double>::max();
 }
+// The mathematical apex need not have an exactly representable v. Choose the
+// nearest representable parameter on the valid side; the caller still checks
+// the resulting 3D point against its original absolute tolerance.
+std::optional<double> ConeApexParameter(const ConeGeometry& cone) {
+  const long double slope =
+      static_cast<long double>(cone.sin_half_angle) / cone.cos_half_angle;
+  const long double apex = -static_cast<long double>(cone.radius) / slope;
+  if (!Representable(apex)) return std::nullopt;
+  double v = static_cast<double>(apex);
+  constexpr int kMaxRoundingSteps = 3;
+  for (int step = 0; step < kMaxRoundingSteps; ++step) {
+    if (std::fma(static_cast<long double>(v), slope,
+                 static_cast<long double>(cone.radius)) >= 0)
+      return v;
+    v = std::nextafter(v, std::copysign(std::numeric_limits<double>::infinity(),
+                                        cone.sin_half_angle));
+    if (!std::isfinite(v)) return std::nullopt;
+  }
+  return std::nullopt;
+}
 }  // namespace
 
 Result<SurfaceParameters> InvertSurface(const GeometryPayload& geometry,
@@ -121,8 +141,17 @@ Result<SurfaceParameters> InvertSurface(const GeometryPayload& geometry,
         Invalid("Surface inversion parameters are not representable"));
   }
   const double result_u = static_cast<double>(u);
-  const double result_v = static_cast<double>(v);
-  const auto sample = EvaluateSurface(geometry, result_u, result_v);
+  double result_v = static_cast<double>(v);
+  auto sample = EvaluateSurface(geometry, result_u, result_v);
+  if (!sample.ok() && sample.error().code == ErrorCode::kInvalidOptions) {
+    if (const auto* cone = std::get_if<ConeGeometry>(&geometry)) {
+      const auto apex = ConeApexParameter(*cone);
+      if (apex) {
+        result_v = *apex;
+        sample = EvaluateSurface(geometry, result_u, result_v);
+      }
+    }
+  }
   if (!sample.ok()) {
     if (sample.error().code == ErrorCode::kInvalidOptions)
       return Result<SurfaceParameters>::Err(Invalid(
