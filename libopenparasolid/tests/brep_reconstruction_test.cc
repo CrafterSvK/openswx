@@ -781,6 +781,199 @@ ModelFixture TwoWireBody(ModelFixture f = Wire()) {
   f.Add(29, 203, {Numbers("position", {3, 0, 0}, FieldType::kVector)});
   return f;
 }
+ModelFixture MixedGeometryBody() {
+  auto f = TwoWireBody(Face());
+  Set(f, 1, "body_type", 6);
+  Set(f, 1, "edge", 2);
+  Set(f, 2, "owner", 1);
+  Set(f, 2, "next", 0);
+  Set(f, 3, "previous", 0);
+  Set(f, 6, "edge", 3);
+  Set(f, 6, "face", 30);
+  Set(f, 6, "front_face", 30);
+  return f;
+}
+ModelFixture AcornBody() {
+  auto f = Wire();
+  std::erase_if(f.report.nodes, [](const auto& n) {
+    return n.index == 2 || n.index == 10 || n.index == 11 || n.index == 101;
+  });
+  Set(f, 6, "edge", 0);
+  Set(f, 6, "vertex", 100);
+  Set(f, 100, "owner", 6);
+  Set(f, 100, "halfedge", 0);
+  Set(f, 100, "next", 0);
+  for (auto& node : f.report.nodes)
+    if (node.index == 200) node.fields[0].values = {1., -2., 3.};
+  return f;
+}
+TEST(ParasolidBodyGeometryBinding, CombinesFacesWiresAndSortedVertexPoints) {
+  const auto result = [] {
+    const auto f = MixedGeometryBody();
+    const auto model = ModelBuilder::Build(f.report);
+    if (!model.ok()) return Result<BodyGeometryBinding>::Err(model.error());
+    return BindBodyGeometry(model.value(), NodeId{1}, 0);
+  }();
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().faces.size(), 1);
+  EXPECT_EQ(result.value().faces[0].face.value, 30);
+  ASSERT_EQ(result.value().wires.size(), 1);
+  EXPECT_EQ(result.value().wires[0].use.edge.value, 3);
+  ASSERT_EQ(result.value().vertices.size(), 4);
+  EXPECT_EQ(result.value().topology.edges.size(), 2);
+  EXPECT_EQ(
+      result.value().topology.boundary.regions[0].shells[0].face_uses.size(),
+      2);
+  for (std::size_t i = 0; i < 4; ++i) {
+    EXPECT_EQ(result.value().vertices[i].vertex.value, 100 + i);
+    EXPECT_EQ(result.value().vertices[i].point.value, 200 + i);
+    EXPECT_EQ(result.value().vertices[i].position.x, i);
+  }
+}
+TEST(ParasolidBodyGeometryBinding, AcornsRequireTypedPointGeometry) {
+  for (bool invalid : {false, true}) {
+    auto f = AcornBody();
+    if (invalid)
+      for (auto& node : f.report.nodes)
+        if (node.index == 200)
+          node.fields[0].values = {std::numeric_limits<double>::quiet_NaN(), 0.,
+                                   0.};
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    EXPECT_TRUE(BindBodyFaces(model.value(), NodeId{1}, 0).ok());
+    EXPECT_TRUE(BindBodyWires(model.value(), NodeId{1}, 0).ok());
+    const auto result = BindBodyGeometry(model.value(), NodeId{1}, 0);
+    if (invalid) {
+      ASSERT_FALSE(result.ok());
+      EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+      EXPECT_NE(result.error().message.find("vertex 100"), std::string::npos);
+    } else {
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_TRUE(result.value().faces.empty());
+      EXPECT_TRUE(result.value().wires.empty());
+      ASSERT_EQ(result.value().vertices.size(), 1);
+      EXPECT_EQ(result.value().vertices[0].vertex.value, 100);
+      EXPECT_EQ(result.value().vertices[0].position.x, 1);
+      EXPECT_EQ(result.value().vertices[0].position.y, -2);
+      EXPECT_EQ(result.value().vertices[0].position.z, 3);
+    }
+  }
+}
+TEST(ParasolidBodyGeometryBinding, AppliesBothOverrideNamespaces) {
+  const auto f = MixedGeometryBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval fins[]{{NodeId{10}, 0, 1}};
+  const WireParameterInterval wires[]{{NodeId{3}, 2, 3}};
+  const auto result =
+      BindBodyGeometryWithOverrides(model.value(), NodeId{1}, fins, wires, 0);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().faces[0].loops[0].fins[0].end, 1);
+  EXPECT_EQ(result.value().wires[0].start, 2);
+  EXPECT_EQ(result.value().wires[0].end, 3);
+  const FinParameterInterval wire_fin[]{{NodeId{12}, 2, 3}};
+  const auto foreign_fin =
+      BindBodyGeometryWithOverrides(model.value(), NodeId{1}, wire_fin, {}, 0);
+  ASSERT_FALSE(foreign_fin.ok());
+  EXPECT_EQ(foreign_fin.error().code, ErrorCode::kInvalidOptions);
+  const WireParameterInterval face_edge[]{{NodeId{2}, 0, 1}};
+  const auto foreign_wire =
+      BindBodyGeometryWithOverrides(model.value(), NodeId{1}, {}, face_edge, 0);
+  ASSERT_FALSE(foreign_wire.ok());
+  EXPECT_EQ(foreign_wire.error().code, ErrorCode::kInvalidOptions);
+}
+TEST(ParasolidBodyGeometryBinding, RejectsLateWireFailureAtomically) {
+  auto f = MixedGeometryBody();
+  Set(f, 3, "curve", 0);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  EXPECT_TRUE(BindBodyFaces(model.value(), NodeId{1}, 0).ok());
+  const auto result = BindBodyGeometry(model.value(), NodeId{1}, 0);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("wire edge 3"), std::string::npos);
+}
+TEST(ParasolidBodyGeometryBinding,
+     SharedSolverSettingsAreOwnedByBothCurvePaths) {
+  for (bool face : {false, true}) {
+    const auto f = face ? Sheet(IntersectionFace(false, true))
+                        : WireFromFace(IntersectionFace(false, true));
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    BodyGeometryBindingOptions options;
+    options.intersection = IntersectionEvaluationOptions{1e-12, 1e-12};
+    const auto result =
+        BindBodyGeometry(model.value(), NodeId{1}, 1e-12, options);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    options.intersection.reset();
+    if (face) {
+      const auto sample = EvaluateBoundFin(
+          model.value(), result.value().faces[0].loops[0].fins[0], .5, 1e-12);
+      ASSERT_TRUE(sample.ok());
+      EXPECT_NEAR(sample.value().curve.position.x, std::sqrt(.5), 1e-12);
+    } else {
+      const auto sample =
+          EvaluateBoundWire(model.value(), result.value().wires[0], .5);
+      ASSERT_TRUE(sample.ok());
+      EXPECT_NEAR(sample.value().position.x, std::sqrt(.5), 1e-12);
+    }
+  }
+}
+TEST(ParasolidBodyGeometryBinding, EnforcesAggregateGeometryBudgets) {
+  for (int limited = 0; limited < 4; ++limited) {
+    const auto f = limited == 0   ? TwoFaceBody()
+                   : limited == 2 ? TwoWireBody()
+                                  : MixedGeometryBody();
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    BodyGeometryBindingOptions options;
+    if (limited == 0) options.max_faces = 1;
+    if (limited == 1) options.max_fins = 1;
+    if (limited == 2) options.max_wire_edges = 1;
+    if (limited == 3) options.max_vertices = 3;
+    const auto result =
+        BindBodyGeometry(model.value(), NodeId{1}, 1e-12, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  }
+}
+TEST(ParasolidBodyGeometryBinding, OverrideBudgetsApplyBeforeModelLookup) {
+  const auto f = MixedGeometryBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  BodyGeometryBindingOptions options;
+  options.max_fins = 1;
+  options.max_wire_edges = 1;
+  const FinParameterInterval fins[]{{NodeId{10}, 0, 1}, {NodeId{11}, 1, 0}};
+  const WireParameterInterval wires[]{{NodeId{2}, 0, 1}, {NodeId{3}, 2, 3}};
+  const auto fin_limit = BindBodyGeometryWithOverrides(
+      model.value(), NodeId{99}, fins, {}, 0, options);
+  ASSERT_FALSE(fin_limit.ok());
+  EXPECT_EQ(fin_limit.error().code, ErrorCode::kResourceLimit);
+  const auto wire_limit = BindBodyGeometryWithOverrides(
+      model.value(), NodeId{99}, {}, wires, 0, options);
+  ASSERT_FALSE(wire_limit.ok());
+  EXPECT_EQ(wire_limit.error().code, ErrorCode::kResourceLimit);
+}
+TEST(ParasolidBodyGeometryBinding, ValidatesAllOptionsBeforeTopologyWork) {
+  const auto f = AcornBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (int bad = 0; bad < 8; ++bad) {
+    BodyGeometryBindingOptions options;
+    if (bad == 0) options.max_faces = 0;
+    if (bad == 1) options.max_fins = 0;
+    if (bad == 2) options.max_wire_edges = 0;
+    if (bad == 3) options.max_vertices = 0;
+    if (bad == 4) options.face.max_loops = 0;
+    if (bad == 5) options.face.max_fins = 0;
+    if (bad == 6) options.intersection = IntersectionEvaluationOptions{};
+    const auto result =
+        BindBodyGeometry(model.value(), NodeId{99}, bad == 7 ? -1 : 0, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+}
 TEST(ParasolidAutomaticWireBinding, ConicArcsPreserveDirectedSeamBranches) {
   for (bool ellipse : {false, true}) {
     for (bool negative : {false, true}) {

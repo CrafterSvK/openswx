@@ -205,5 +205,44 @@ struct BodyWireBinding {
 // does not revalidate topology, endpoints or closure after binding.
 [[nodiscard]] Result<CurveEvaluation> EvaluateBoundWire(
     const Model& model, const BoundWireGeometry& wire, double fraction);
+struct BoundBodyVertex {
+  NodeId vertex;
+  NodeId point;
+  Vector3 position;
+};
+struct BodyGeometryBindingOptions {
+  BodyValidationOptions topology;
+  FaceTraversalOptions face;
+  std::optional<IntersectionEvaluationOptions> intersection;
+  uint64_t max_faces = 10000;
+  uint64_t max_fins = 100000;
+  uint64_t max_wire_edges = 100000;
+  uint64_t max_vertices = 100000;
+};
+struct BodyGeometryBinding {
+  ValidatedBodyTopology topology;
+  // Sorted by face, wire edge and vertex ID respectively. Source hierarchy,
+  // face sides and incidence remain in the single owned topology object.
+  std::vector<FaceTrimming> faces;
+  std::vector<BoundWireGeometry> wires;
+  std::vector<BoundBodyVertex> vertices;
+};
+// Atomically combines face binding, wire binding and every selected vertex's
+// typed point, including acorns. One tolerance and solver profile apply to
+// both curve paths. Options and positive limits are checked even for empty
+// bodies. Results own their data. Uses the existing bounded face/wire queries,
+// including two topology validation passes with the same per-pass limits.
+// Does not certify global geometric membership, manifoldness or volume.
+[[nodiscard]] Result<BodyGeometryBinding> BindBodyGeometry(
+    const Model& model, NodeId body, double tolerance,
+    const BodyGeometryBindingOptions& options = {});
+// Caller-selected fin and wire intervals replace automatic inference only for
+// those entities. Keeps both queries' direction, domain and membership checks;
+// foreign/duplicate intervals are rejected. No partial result on any failure.
+[[nodiscard]] Result<BodyGeometryBinding> BindBodyGeometryWithOverrides(
+    const Model& model, NodeId body,
+    std::span<const FinParameterInterval> fin_overrides,
+    std::span<const WireParameterInterval> wire_overrides, double tolerance,
+    const BodyGeometryBindingOptions& options = {});
 }  // namespace openparasolid
 #endif  // OPENPARASOLID_BREP_H_

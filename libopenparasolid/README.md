@@ -265,6 +265,53 @@ Face-binding results remain at 56 of 57 successful occurrences; wire binding
 does not resolve the remaining ambiguous fin trim. Private CAD and comparison programs remain
 outside the repository.
 
+## Combined body geometry binding
+
+`BindBodyGeometry(model, body, tolerance, options)` combines face-loop bindings,
+shell wire bindings and every selected vertex's typed point geometry in one
+atomic `BodyGeometryBinding`. The result has a single owned
+`ValidatedBodyTopology`, `faces` sorted by face ID, `wires` sorted by edge ID
+and `vertices` sorted by vertex ID. Each `BoundBodyVertex` retains the vertex
+ID, point ID and original finite position, including shell-owned isolated
+(acorn) points. Curve/surface IDs still refer to the model for subsequent
+`EvaluateBoundFin` and `EvaluateBoundWire` calls.
+
+The automatic path shares existing interval inference and membership checks.
+`BindBodyGeometryWithOverrides` accepts separate spans of fin and wire
+intervals; only supplied entities override inference. Face-owned edges cannot
+be supplied as wires, and wire dummy fins cannot be supplied as face fins.
+Both override paths retain direction, domain, endpoint and closure checks.
+Any topology, face, wire or vertex failure returns no partial body. In
+particular, an acorn with unavailable typed point data is now an explicit
+failure, even if separate face/wire queries have empty geometry results.
+
+`BodyGeometryBindingOptions` supplies shared topology options, face traversal
+options, one optional intersection solver profile and positive limits:
+`max_faces` (10,000), `max_fins`, `max_wire_edges` and `max_vertices` (100,000
+each). The same finite nonnegative tolerance and owned solver settings apply
+to both curve paths. Options and interval-count limits are checked before
+model traversal. The implementation composes the existing bounded face/wire
+queries, performing at most two full topology validations with the same
+per-pass limits; only one topology is retained in the result. The vertex
+limit is checked before allocating the typed point output.
+
+```cpp
+auto geometry = BindBodyGeometry(model, body, tolerance, options);
+auto selected = BindBodyGeometryWithOverrides(
+    model, body, fin_intervals, wire_intervals, tolerance, options);
+```
+
+The result is a checked source boundary binding, without tessellation. It does
+not certify all-parameter geometric membership, manifoldness, orientation of
+closed volumes or positive volume. Synthetic regressions cover mixed
+face/wire bodies, owned sorted vertex data, acorns and missing point payloads,
+both override namespaces, late wire failure, shared solver settings and all
+aggregate/option limits. The 39-stream private corpus binds 56 of 57 body
+occurrences through this combined API: 588 faces, 2,664 fin uses, one wire
+edge and 788 vertex points. The remaining failure is the known closed
+tolerant fin without an inferred interval. Previous face-binding results are
+unchanged; private CAD inputs and comparison programs remain outside the repo.
+
 ## Partial fin intervals
 
 `BindFaceTrimmingWithOverrides` and `BindBodyFacesWithOverrides` accept a span
