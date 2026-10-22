@@ -896,6 +896,135 @@ TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 6);
 }
+TEST(OpenSwStep, ExportsConvexCurvedHolesWithPolygonalAndCircularOuterBounds) {
+  for (const bool two : {false, true})
+    for (const bool mixed : {false, true})
+      for (const bool first : {false, true})
+        for (const bool concave : {false, true}) {
+          const auto f = test::ConvexCurvedHoles(two, mixed, first, concave);
+          for (const auto& source : {f, test::RotateAndTranslate(f)}) {
+            const auto result = Export(source);
+            ASSERT_TRUE(result.ok()) << result.error().message;
+            EXPECT_EQ(result.value().statistics.faces, 1);
+            EXPECT_EQ(result.value().statistics.edges,
+                      (concave ? 8 : 4) + (two ? 16 : 8) + (mixed ? 5 : 0));
+            CheckReferences(result.value());
+          }
+        }
+  const auto circle = Export(test::CircularOuterCurvedHole());
+  ASSERT_TRUE(circle.ok()) << circle.error().message;
+  EXPECT_EQ(circle.value().statistics.faces, 1);
+  EXPECT_EQ(circle.value().statistics.edges, 9);
+  EXPECT_EQ(circle.value().statistics.vertices, 9);
+}
+TEST(OpenSwStep, ExportsRoundedThroughBoresWithoutReplacingCurvedBoundaries) {
+  for (const auto& source :
+       {test::RoundedBorePrism(),
+        test::RotateAndTranslate(test::RoundedBorePrism())}) {
+    const auto result = Export(source);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    EXPECT_EQ(result.value().statistics.faces, 14);
+    EXPECT_EQ(result.value().statistics.edges, 36);
+    EXPECT_EQ(result.value().statistics.vertices, 24);
+  }
+}
+TEST(OpenSwStep, BoundsCompleteCurvedHoleArcsIncludingMajorAndPeriodicSpans) {
+  for (const bool major : {false, true})
+    for (const bool phase : {false, true}) {
+      const auto result = Export(test::CircularSegmentHole(major, phase));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.edges, 6);
+      EXPECT_EQ(result.value().statistics.vertices, 6);
+    }
+  // Endpoints fit inside this square, but the major arc extends to (-1,-1).
+  auto escaped = test::PlanarFace(
+      {{-.1, -.1, 0}, {1.1, -.1, 0}, {1.1, 1.1, 0}, {-.1, 1.1, 0}},
+      {{0, 1, 2, 3}});
+  test::AppendFaceLoops(escaped,
+                        test::ClockwiseHole(test::MajorCircularSegment()), 300,
+                        false, 10000);
+  const auto result = Export(escaped);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("envelopes cannot certify"),
+            std::string::npos);
+}
+TEST(OpenSwStep, RejectsUncertifiedCurvedHoleEnvelopeSeparation) {
+  for (const auto translation : {Vector3{2, 0, 0}, Vector3{4, 0, 0},
+                                 Vector3{.5, .5, 0}, Vector3{20, 0, 0}}) {
+    auto f = test::ConvexCurvedHoles();
+    test::AppendFaceLoops(
+        f, test::TranslateProfile(test::RoundedRectangle(true), translation),
+        300, false, 20000);
+    const auto result = Export(f);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(result.error().message.find("envelopes cannot certify"),
+              std::string::npos);
+  }
+  // The circles are disjoint, but the inner circle's enclosing rectangle
+  // cannot fit inside the outer disk. This conservative case stays unsupported.
+  test::ConicLoopSpec outer;
+  outer.major = 1.2;
+  auto close = test::ConicSheet({outer});
+  test::AppendFaceLoops(close, test::ClockwiseHole(test::SplitCircle()), 300,
+                        false, 10000);
+  const auto result = Export(close);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("envelopes cannot certify"),
+            std::string::npos);
+  auto mixed = test::ConvexCurvedHoles();
+  test::ConicLoopSpec disk;
+  disk.center = {2, 1.5, 0};
+  disk.major = .25;
+  disk.reverse_fin = true;
+  test::AddConicFaceLoops(mixed, 300, {disk}, false, false, 20000);
+  const auto nested = Export(mixed);
+  ASSERT_FALSE(nested.ok());
+  EXPECT_EQ(nested.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, BoundsCurvedHoleEnvelopeWorkAndPreservesSourceErrors) {
+  auto options = Options();
+  options.max_polygon_checks = 30;
+  const auto f = test::CircularSegmentHole();
+  ASSERT_TRUE(Export(f, options).ok());
+  options.max_polygon_checks = 29;
+  const auto limited = Export(f, options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  auto miswound = test::ConvexCurvedHoles();
+  // Change only the effective face normal; the original outer polygon is
+  // then miswound and must not become an accepted envelope-based export.
+  test::Set(miswound, 300, "sense", '-');
+  ASSERT_FALSE(Export(miswound).ok());
+  auto elliptic = test::PlanarFace(
+      {{-3, -3, 0}, {3, -3, 0}, {3, 3, 0}, {-3, 3, 0}}, {{0, 1, 2, 3}});
+  test::AppendFaceLoops(elliptic, test::ClockwiseHole(test::HalfEllipse()), 300,
+                        false, 10000);
+  const auto unsupported = Export(elliptic);
+  ASSERT_FALSE(unsupported.ok());
+  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+  const auto bytes =
+      test::Serialize(test::ConvexCurvedHoles(true, true, true, true));
+  const auto parsed =
+      ExportParasolid(bytes.bytes, NodeId{1}, Options(), &bytes.catalog);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().statistics.faces, 1);
+}
+TEST(OpenSwStep, LocatesAnalyticArcExtremaWithoutLargePhaseCancellation) {
+  for (const double start : {0., 7 * std::numbers::pi / 4, 1e12, -1e12}) {
+    const long double mid = static_cast<long double>(start) + .5;
+    const auto a = std::cos(mid), b = std::sin(mid);
+    EXPECT_NEAR(internal::MaximumArcProjection(a, b, start, start + 1), 1,
+                1e-15);
+    EXPECT_NEAR(internal::MaximumArcProjection(a, b, start + 1, start), 1,
+                1e-15);
+    EXPECT_NEAR(internal::MaximumArcProjection(-a, -b, start, start + 1),
+                -std::cos(.5L), 1e-15);
+  }
+}
 TEST(OpenSwStep, ExportsPolygonAndMixedHolesInConvexCurvedContours) {
   for (const bool mixed : {false, true})
     for (const bool concave : {false, true})

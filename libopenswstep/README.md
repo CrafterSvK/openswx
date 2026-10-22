@@ -17,6 +17,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
+| Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
 | Planar annular sectors with two concentric circular arcs and two radial lines | Exact single-loop `ADVANCED_FACE`, including nonconvex major sectors and analytic source-curve area |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
@@ -142,10 +143,33 @@ Source loop order is retained even when polygonal or circular holes come first.
 Net area subtracts both hole types. Closed supported mixtures include sector
 solids with polygonal through bores and unchanged analytic outer mantles.
 
-Elliptic outer arcs with holes, elliptical or multi-edge curved holes and
-nonconvex curved contours with holes remain unsupported. Existing hole-free
-elliptic contours and separate polygon/full-circle boundary subsets retain
-their established checks.
+A polygonal or complete one-edge circular outer bound may also contain
+convex multi-edge `LINE`/`CIRCLE` holes, alongside polygonal and full-circle
+holes. The curved hole must wind against the effective face normal. The
+existing convexity and exact source-curve area checks validate each complete
+hole contour. Analytic directed-arc extrema produce enclosing rectangles in
+the face frame, expanded for source tolerance and coordinate roundoff. These
+rectangles certify strict containment and separation using the established
+polygon/full-circle checks. The original outer loops and other holes are
+validated before testing the additional envelopes.
+
+Envelopes are used only for validation. They are never serialized and their
+areas are never subtracted from the face: net area uses each original curved
+contour's analytic integral. This preserves rounded slots, major circular
+segments, split-circle holes and their source vertices/edges, including
+parameter-seam crossings. Closed supported shells can therefore include
+prisms with rounded through bores. Original loop order and outer-bound identity
+remain intact. One shared check is charged for every curved edge's extrema,
+in addition to its convex corner check. The original mixed-boundary checks
+and the envelope-augmented checks both consume the same shared budget.
+
+The envelope test is conservative: geometrically disjoint holes may have
+overlapping rectangles, or a valid curved hole's rectangle may leave its outer
+boundary. Such cases return an explicit unsupported-format error rather than
+claiming a validity certificate. Curved outer contours with multi-edge curved
+holes, nonconvex curved holes, elliptic curved holes and elliptic outer arcs
+with holes remain unsupported. Existing hole-free elliptic contours and
+separate polygon/full-circle boundary subsets retain their established checks.
 
 The separate single-edge conic-loop subset requires a complete circle or
 ellipse per loop. The exporter checks the maximum plane residual over the entire analytic curve, not
@@ -260,8 +284,8 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, other nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
-multi-edge curved holes,
-elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
+uncertified curved-hole envelopes, curved outer contours with curved holes,
+nonconvex/elliptic curved holes, elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -321,7 +345,9 @@ and polygon checks. The shared polygon budget counts nonadjacent segments within
 each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Convex line/arc contours consume one check per corner.
 Circular containment and hole-pair comparisons consume one check each from the
-same budget. Convex curved contours with circular holes consume one additional
+same budget. Convex curved-hole envelopes consume one check per edge plus
+one per convex corner; both original and envelope-augmented mixed-boundary
+validation passes share this budget. Convex curved contours with circular holes consume one additional
 check per circular-hole/outer-edge pair, polygon-vertex/outer-edge pair and
 circular-hole pair. Mixed polygon/circle
 boundaries also consume one check per
@@ -362,7 +388,8 @@ SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
 bands/patches, closed cylinder sectors, conical frustums/patches/sectors, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
 contours, polygonal/circular holes in LINE/CIRCLE contours, cylindrical and
-polygonal through bores in curved caps, invalid
+polygonal through bores in curved caps, rounded through bores, convex curved
+hole envelopes, invalid
 topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -384,17 +411,17 @@ Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 49 export successfully, including nineteen face-bearing
-bodies with 196 faces; 30 successes contain only wire/point geometry. All 49
-generated documents pass OCCT import and B-rep validity checks. The other eight
-return unsupported-format errors. Polygonal/mixed holes in convex curved
-contours preserve all 49 prior successes. Remaining private faces include
-multi-edge curved holes and nonconvex contours beyond this subset.
+extracted streams: 50 export successfully, including twenty face-bearing
+bodies with 250 faces; 30 successes contain only wire/point geometry. All 50
+generated documents pass OCCT import and B-rep validity checks. The other seven
+return unsupported-format errors. Convex curved-hole support adds one complete
+body with 54 faces and 148 edges, preserving all 49 previous successes.
 
-Synthetic OCCT round trips independently check polygonal/mixed curved-hole
-areas and circular/polygonal cylinder-sector through-bore volumes, as well as
-annular and conical sectors, major arcs, inward sheets, loop order, translated frames and parameter-seam
-crossings. Existing hole-free convex profiles retain their behavior and budget.
+Synthetic OCCT round trips independently check convex curved-hole and
+polygonal/mixed curved-hole areas, circular/polygonal cylinder-sector
+through-bore volumes and rounded through bores. They also check annular and
+conical sectors, major arcs, inward sheets, loop order, translated frames and
+parameter-seam crossings. Existing hole-free convex profiles retain their behavior and budget.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.

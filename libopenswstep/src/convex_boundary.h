@@ -17,6 +17,10 @@ struct PlanarCurve {
   double start;
   double end;
 };
+// Maximum of a*cos(t)+b*sin(t) over a directed interval of at most one turn.
+// Callers validate finite coefficients and endpoints before using this helper.
+[[nodiscard]] long double MaximumArcProjection(long double a, long double b,
+                                               double start, double end);
 struct ConvexBoundary {
   long double area;
   openparasolid::Vector3 reference_point;

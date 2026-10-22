@@ -14,6 +14,7 @@
 #include "cone_patch.h"
 #include "conic_boundary.h"
 #include "convex_boundary.h"
+#include "curved_hole.h"
 #include "cylinder_patch.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
@@ -25,6 +26,22 @@ namespace {
 using namespace openparasolid;
 Vector3 Difference(Vector3 a, Vector3 b) {
   return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+bool IsCircularHole(std::span<const PlanarCurve> curves,
+                    const PlaneGeometry& plane, bool natural_sense) {
+  bool circular = false;
+  for (const auto& curve : curves) {
+    if (std::holds_alternative<LineGeometry>(*curve.geometry)) continue;
+    const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
+    if (!circle) return false;
+    circular = true;
+    const auto& a = circle->normal;
+    const auto& b = plane.normal;
+    const auto alignment = a.x * b.x + a.y * b.y + a.z * b.z;
+    if ((curve.end - curve.start) * alignment * (natural_sense ? 1 : -1) >= 0)
+      return false;
+  }
+  return circular;
 }
 struct FaceData {
   const FaceTrimming* source = nullptr;
@@ -337,16 +354,17 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
-  std::optional<std::size_t> outer_index;
+  std::vector<std::size_t> circle_indices, polygon_indices, curved_indices;
+  std::vector<std::vector<PlanarCurve>> curved_loops;
   std::vector<ConicBoundary> holes;
   std::vector<std::vector<Vector3>> polygons;
-  std::vector<PlanarCurve> curves;
   for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
     const auto& loop = face.source->loops[i];
     if (loop.fins.size() == 1) {
       const auto hole = ReadConicLoop(face.source->face, loop);
       if (!hole.ok()) return Result<bool>::Err(hole.error());
       holes.push_back(hole.value());
+      circle_indices.push_back(i);
       continue;
     }
     if (loop.isolated_vertex || loop.fins.empty())
@@ -376,12 +394,8 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
           {faces_.size(), fin.use.sense == TopologySense::kForward});
     }
     if (curved) {
-      if (outer_index)
-        return Result<bool>::Err(Error(
-            face.source->face, ErrorCode::kUnsupportedFormat,
-            "Curved planar faces require exactly one curved outer contour"));
-      outer_index = i;
-      curves = std::move(candidate);
+      curved_indices.push_back(i);
+      curved_loops.push_back(std::move(candidate));
     } else {
       std::vector<Vector3> polygon;
       for (const auto& fin : loop.fins) {
@@ -393,11 +407,37 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
         polygon.push_back(point->second);
       }
       polygons.push_back(std::move(polygon));
+      polygon_indices.push_back(i);
     }
   }
-  if (!outer_index)
-    return Result<bool>::Err(Error(face.source->face, ErrorCode::kInvalidRecord,
-                                   "Curved planar face has no outer contour"));
+  const bool inward =
+      !curved_loops.empty() &&
+      std::all_of(
+          curved_loops.begin(), curved_loops.end(), [&face](const auto& loop) {
+            return IsCircularHole(loop, *face.plane, face.natural_sense);
+          });
+  if (inward && face.source->loops.size() > 1) {
+    const auto region = ValidateConvexCurvedHoles(
+        curved_loops, polygons, holes, *face.plane, face.natural_sense,
+        options_.tolerance, polygon_checks_remaining_);
+    if (!region.ok())
+      return Result<bool>::Err(Error(face.source->face, region.error().code,
+                                     region.error().message.c_str()));
+    face.outer_loop = region.value().circular_outer
+                          ? circle_indices[region.value().outer_loop]
+                          : polygon_indices[region.value().outer_loop];
+    face.planar_area = region.value().area;
+    face.reference_point =
+        polygons.empty() ? holes.front().center : polygons.front().front();
+    return Result<bool>::Ok(true);
+  }
+  if (curved_loops.size() != 1)
+    return Result<bool>::Err(Error(face.source->face,
+                                   ErrorCode::kUnsupportedFormat,
+                                   "Curved planar faces require one curved "
+                                   "outer contour or convex curved holes"));
+  const auto outer_index = curved_indices.front();
+  const auto& curves = curved_loops.front();
   if (!holes.empty() || !polygons.empty()) {
     const auto boundary = ValidateConvexPlanarHoles(
         curves, polygons, holes, *face.plane, face.natural_sense,
@@ -407,7 +447,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                                      boundary.error().message.c_str()));
     face.planar_area = boundary.value().area;
     face.reference_point = boundary.value().reference_point;
-    face.outer_loop = *outer_index;
+    face.outer_loop = outer_index;
     return Result<bool>::Ok(true);
   }
   bool reverse_circle = false;
@@ -430,7 +470,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                                      boundary.error().message.c_str()));
     face.planar_area = boundary.value().area;
     face.reference_point = boundary.value().reference_point;
-    face.outer_loop = *outer_index;
+    face.outer_loop = outer_index;
     return Result<bool>::Ok(true);
   }
   const auto boundary =
@@ -441,7 +481,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                                    boundary.error().message.c_str()));
   face.planar_area = boundary.value().area;
   face.reference_point = boundary.value().reference_point;
-  face.outer_loop = *outer_index;
+  face.outer_loop = outer_index;
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareRuledPatchFace(FaceData& face) {

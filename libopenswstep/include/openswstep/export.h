@@ -44,8 +44,9 @@ struct ExportOptions {
   uint64_t max_output_bytes = 128u * 1024u * 1024u;
   /// Shared boundary-check budget across the selected body: segment,
   /// containment, separation, convex corners, curved hole/edge and polygon
-  /// vertex/edge pairs, cut pairs and spherical cap selections. Each
-  /// cylindrical/conical patch or annular sector consumes five checks.
+  /// vertex/edge pairs, curved-hole extrema, cut pairs and spherical cap
+  /// selections. Each cylindrical/conical patch or annular sector consumes five
+  /// checks.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -103,10 +104,17 @@ struct StepDocument {
 /// and interiors. Shared polygon/disk checks exclude intersections and nesting.
 /// Each circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair
 /// consumes one check, alongside polygon segment/containment comparisons.
-/// Planar annular sectors support
-/// two concentric circular arcs joined by two radial lines, including major
-/// sectors. Other nonconvex planar curved contours, holes in elliptic/nonconvex
-/// curved contours, multi-edge curved holes, other
+/// Polygonal or complete circular outer bounds also support convex multi-edge
+/// LINE/CIRCLE holes. Analytic, inflated enclosing rectangles conservatively
+/// certify containment and separation; only original curves and analytic areas
+/// are exported. Uncertified envelopes return unsupported-format errors, even
+/// for some valid close contours. Each curved edge consumes one extrema check
+/// plus its corner check; original and envelope-augmented mixed-boundary checks
+/// both share the budget. Planar annular sectors support two concentric
+/// circular arcs joined by two radial lines, including major sectors. Other
+/// nonconvex planar curved contours, holes in elliptic/nonconvex curved
+/// contours, curved outer contours with multi-edge curved holes,
+/// nonconvex/elliptic curved holes, uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, apex
 /// loops, explicit seam fins, horn/apple/lemon tori and elliptical holes remain
 /// unsupported. Sheet orientation is propagated across shared edges. Solid

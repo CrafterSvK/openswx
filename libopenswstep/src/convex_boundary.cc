@@ -156,17 +156,23 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
 }
 // Maximum of A*cos(t)+B*sin(t) on a directed interval no longer than 2*pi.
 // The endpoints and at most one interior maximum cover the entire arc.
-long double ArcMaximum(long double a, long double b, double start, double end) {
+}  // namespace
+long double MaximumArcProjection(long double a, long double b, double start,
+                                 double end) {
   const long double first = start, last = end;
   auto maximum = std::max(a * std::cos(first) + b * std::sin(first),
                           a * std::cos(last) + b * std::sin(last));
-  const auto peak = std::atan2(b, a);
-  constexpr auto kTurn = 2 * std::numbers::pi_v<long double>;
-  auto offset = std::fmod(last > first ? peak - first : first - peak, kTurn);
-  if (offset < 0) offset += kTurn;
+  // Rotate coefficients by the start phase before locating the peak. Avoid
+  // subtracting a huge absolute parameter from atan2's small principal angle.
+  const auto c = std::cos(first), s = std::sin(first);
+  const auto along = a * c + b * s;
+  const auto across = b * c - a * s;
+  auto offset = std::atan2(last > first ? across : -across, along);
+  if (offset < 0) offset += 2 * std::numbers::pi_v<long double>;
   if (offset <= std::abs(last - first)) maximum = std::hypot(a, b);
   return maximum;
 }
+namespace {
 Result<long double> DiskClearance(const PlanarCurve& curve, Vector3 center,
                                   const Frame& frame) {
   using Return = Result<long double>;
@@ -187,8 +193,8 @@ Result<long double> DiskClearance(const PlanarCurve& curve, Vector3 center,
     const Point2 nc{sign * ry.y, -sign * ry.x};
     const Point2 ns{-sign * rx.y, sign * rx.x};
     const auto maximum =
-        ArcMaximum(d.x * nc.x + d.y * nc.y, d.x * ns.x + d.y * ns.y,
-                   curve.start, curve.end);
+        MaximumArcProjection(d.x * nc.x + d.y * nc.y, d.x * ns.x + d.y * ns.y,
+                             curve.start, curve.end);
     const auto aa = nc.x * nc.x + nc.y * nc.y;
     const auto bb = ns.x * ns.x + ns.y * ns.y;
     const auto ab = nc.x * ns.x + nc.y * ns.y;

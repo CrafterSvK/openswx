@@ -510,12 +510,10 @@ inline uint32_t PointerValue(const ModelFixture& f, uint32_t id,
   }
   return 0;
 }
-// Append isolated conic source loops to a face while retaining source chains.
-// Each call uses a disjoint offset for the borrowed ConicSheet identities.
-inline void AddConicFaceLoops(ModelFixture& f, uint32_t face,
-                              const std::vector<ConicLoopSpec>& specs,
-                              bool named_seams = false, bool hole_first = false,
-                              uint32_t offset = 10000) {
+// Append donor FACE 300's source loops and exact curve/vertex graph.
+// Each call uses a disjoint offset for all imported node identities.
+inline void AppendFaceLoops(ModelFixture& f, const ModelFixture& donor,
+                            uint32_t face, bool hole_first, uint32_t offset) {
   uint32_t last_edge = 0, last_vertex = 0;
   for (const auto& node : f.report.nodes) {
     if (node.node_type == 16 && !PointerValue(f, node.index, "next"))
@@ -526,14 +524,17 @@ inline void AddConicFaceLoops(ModelFixture& f, uint32_t face,
   const auto first_loop = PointerValue(f, face, "loop");
   auto last_loop = first_loop;
   while (const auto next = PointerValue(f, last_loop, "next")) last_loop = next;
-  const auto conics = ConicSheet(specs, named_seams);
-  for (const auto& node : conics.report.nodes) {
+  const auto imported_loop = PointerValue(donor, 300, "loop") + offset;
+  auto imported_last = imported_loop - offset;
+  while (const auto next = PointerValue(donor, imported_last, "next"))
+    imported_last = next;
+  for (const auto& node : donor.report.nodes) {
     if (node.node_type != 15 && node.node_type != 16 && node.node_type != 17 &&
-        node.node_type != 18 && node.node_type != 29 && node.node_type != 31 &&
-        node.node_type != 32)
+        node.node_type != 18 && node.node_type != 29 && node.node_type != 30 &&
+        node.node_type != 31 && node.node_type != 32)
       continue;
     const auto& definitions =
-        conics.report.schemas[node.schema_index].definition.fields;
+        donor.report.schemas[node.schema_index].definition.fields;
     std::vector<ModelField> fields;
     for (std::size_t i = 0; i < definitions.size(); ++i) {
       auto values = node.fields[i].values;
@@ -548,19 +549,27 @@ inline void AddConicFaceLoops(ModelFixture& f, uint32_t face,
     }
     f.Add(node.node_type, node.index + offset, std::move(fields));
   }
-  Set(f, last_edge, "next", 100 + offset);
-  Set(f, 100 + offset, "previous", last_edge);
-  if (named_seams) {
-    Set(f, last_vertex, "next", 200 + offset);
-    Set(f, 200 + offset, "previous", last_vertex);
+  const auto edge = PointerValue(donor, 1, "edge") + offset;
+  Set(f, last_edge, "next", edge);
+  Set(f, edge, "previous", last_edge);
+  if (const auto vertex = PointerValue(donor, 1, "vertex")) {
+    if (last_vertex)
+      Set(f, last_vertex, "next", vertex + offset);
+    else
+      Set(f, 1, "vertex", vertex + offset);
+    Set(f, vertex + offset, "previous", last_vertex);
   }
   if (hole_first) {
-    Set(f, face, "loop", 600 + offset);
-    Set(f, 600 + offset + static_cast<uint32_t>(specs.size()) - 1, "next",
-        first_loop);
-  } else {
-    Set(f, last_loop, "next", 600 + offset);
-  }
+    Set(f, face, "loop", imported_loop);
+    Set(f, imported_last + offset, "next", first_loop);
+  } else
+    Set(f, last_loop, "next", imported_loop);
+}
+inline void AddConicFaceLoops(ModelFixture& f, uint32_t face,
+                              const std::vector<ConicLoopSpec>& specs,
+                              bool named_seams = false, bool hole_first = false,
+                              uint32_t offset = 10000) {
+  AppendFaceLoops(f, ConicSheet(specs, named_seams), face, hole_first, offset);
 }
 inline ModelFixture PolygonCircularHoles(bool polygon_hole = false,
                                          bool hole_first = false,
@@ -1610,6 +1619,156 @@ inline ModelFixture CubeWithCircularBore(bool named_seams = false) {
 }
 inline ModelFixture CylinderSectorWithBore(bool named_seams = false) {
   return WithAxialBore(CylinderSector(), {.4, .4, 0}, .1, 2, 304, named_seams);
+}
+inline ModelFixture TranslateProfile(ModelFixture f, Vector3 offset) {
+  for (auto& node : f.report.nodes) {
+    const auto& definitions =
+        f.report.schemas[node.schema_index].definition.fields;
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+      const auto& field = definitions[i];
+      if (field.type != FieldType::kVector ||
+          (field.name != "position" && field.name != "origin" &&
+           field.name != "center"))
+        continue;
+      node.fields[i].values = {
+          std::get<double>(node.fields[i].values[0]) + offset.x,
+          std::get<double>(node.fields[i].values[1]) + offset.y,
+          std::get<double>(node.fields[i].values[2]) + offset.z};
+    }
+  }
+  return f;
+}
+inline ModelFixture ClockwiseHole(ModelFixture f) {
+  const auto loop = PointerValue(f, 300, "loop");
+  const auto first = PointerValue(f, loop, "halfedge");
+  std::vector<uint32_t> fins;
+  auto fin = first;
+  do {
+    fins.push_back(fin);
+    fin = PointerValue(f, fin, "forward");
+  } while (fin != first);
+  std::vector<uint32_t> reversed;
+  for (const auto old : fins) {
+    reversed.push_back(PointerValue(f, old, "other"));
+    for (const char* field : {"loop", "forward", "backward"})
+      Set(f, old, field, 0);
+  }
+  std::reverse(reversed.begin(), reversed.end());
+  Set(f, loop, "halfedge", reversed.front());
+  Set(f, 300, "sense", '-');
+  for (std::size_t i = 0; i < reversed.size(); ++i) {
+    Set(f, reversed[i], "loop", loop);
+    Set(f, reversed[i], "forward", reversed[(i + 1) % reversed.size()]);
+    Set(f, reversed[i], "backward",
+        reversed[(i + reversed.size() - 1) % reversed.size()]);
+  }
+  return f;
+}
+inline ModelFixture ConvexCurvedHoles(bool two_holes = false,
+                                      bool mixed = false,
+                                      bool hole_first = false,
+                                      bool concave = false) {
+  std::vector<Vector3> points{{-2, -2, 0}, {12, -2, 0}, {12, 6, 0}, {-2, 6, 0}};
+  std::vector<unsigned> outer{0, 1, 2, 3};
+  if (concave) {
+    points = {{-2, -2, 0}, {12, -2, 0}, {12, 6, 0}, {8, 6, 0},
+              {8, 5.5, 0}, {6, 5.5, 0}, {6, 6, 0},  {-2, 6, 0}};
+    outer = {0, 1, 2, 3, 4, 5, 6, 7};
+  }
+  std::vector<std::vector<unsigned>> loops{outer};
+  if (mixed) {
+    const auto n = static_cast<unsigned>(points.size());
+    points.insert(points.end(),
+                  {{4.5, 4, 0}, {4.5, 5, 0}, {5.5, 5, 0}, {5.5, 4, 0}});
+    loops.push_back({n, n + 1, n + 2, n + 3});
+  }
+  auto f = PlanarFace(points, loops, hole_first);
+  AppendFaceLoops(f, RoundedRectangle(true), 300, hole_first, 10000);
+  if (two_holes)
+    AppendFaceLoops(f, TranslateProfile(RoundedRectangle(true), {6, 0, 0}), 300,
+                    hole_first, 20000);
+  if (mixed) {
+    ConicLoopSpec circle;
+    circle.center = {5, 1.5, 0};
+    circle.major = .25;
+    circle.reverse_fin = true;
+    AddConicFaceLoops(f, 300, {circle}, true, hole_first, 30000);
+  }
+  return f;
+}
+inline ModelFixture CircularOuterCurvedHole() {
+  ConicLoopSpec outer;
+  outer.center = {4, 1.5, 0};
+  outer.major = 10;
+  auto f = ConicSheet({outer});
+  AppendFaceLoops(f, RoundedRectangle(true), 300, true, 10000);
+  return f;
+}
+inline ModelFixture CircularSegmentHole(bool major = false,
+                                        bool phase = false) {
+  auto f = PlanarFace({{-2, -2, 0}, {2, -2, 0}, {2, 2, 0}, {-2, 2, 0}},
+                      {{0, 1, 2, 3}});
+  auto hole = major ? MajorCircularSegment() : HalfDisk();
+  if (phase) hole = RotateLineProfile(std::move(hole), 7 * std::acos(-1.) / 4);
+  AppendFaceLoops(f, ClockwiseHole(std::move(hole)), 300, true, 10000);
+  return f;
+}
+inline ModelFixture RoundedBorePrism() {
+  const std::vector<Vector3> bottom{
+      {-2, -2, 0}, {6, -2, 0}, {6, 5, 0}, {-2, 5, 0}, {1, 0, 0}, {3, 0, 0},
+      {4, 1, 0},   {4, 2, 0},  {3, 3, 0}, {1, 3, 0},  {0, 2, 0}, {0, 1, 0}};
+  auto points = bottom;
+  for (auto point : bottom) {
+    point.z = 2;
+    points.push_back(point);
+  }
+  std::vector<std::vector<unsigned>> polygons{{0, 3, 2, 1},
+                                              {4, 5, 6, 7, 8, 9, 10, 11},
+                                              {12, 13, 14, 15},
+                                              {23, 22, 21, 20, 19, 18, 17, 16}};
+  for (unsigned i = 0; i < 4; ++i) {
+    const auto j = (i + 1) % 4;
+    polygons.push_back({i, j, j + 12, i + 12});
+  }
+  for (unsigned i = 0; i < 8; ++i) {
+    const auto j = (i + 1) % 8;
+    polygons.push_back({i + 4, i + 16, j + 16, j + 4});
+  }
+  auto f = Polyhedron(points, polygons, true);
+  MergeFaceLoops(f, {{0, 1}, {2, 3}});
+  struct Arc {
+    unsigned i;
+    Vector3 center;
+  };
+  for (const auto arc : {Arc{1, {3, 1, 0}}, Arc{3, {3, 2, 0}},
+                         Arc{5, {1, 2, 0}}, Arc{7, {1, 1, 0}}}) {
+    for (const unsigned base : {4u, 16u}) {
+      const auto a = base + arc.i, b = base + (arc.i + 1) % 8;
+      std::vector<uint32_t> curves;
+      for (const auto& node : f.report.nodes) {
+        if (node.node_type != 16) continue;
+        const auto fin = PointerValue(f, node.index, "halfedge");
+        const auto other = PointerValue(f, fin, "other");
+        if (PointerValue(f, other, "vertex") == 200 + std::min(a, b) &&
+            PointerValue(f, fin, "vertex") == 200 + std::max(a, b))
+          curves.push_back(PointerValue(f, node.index, "curve"));
+      }
+      auto center = arc.center;
+      center.z = base == 4 ? 0 : 2;
+      for (const auto curve : curves)
+        CircleBasis(f, curve, center, 1, a < b ? '+' : '-');
+    }
+    const auto surface = 708 + arc.i;
+    RemoveNode(f, surface);
+    f.Add(
+        51, surface,
+        {Numbers("origin", {arc.center.x, arc.center.y, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+    Set(f, 308 + arc.i, "sense", '-');
+  }
+  return f;
 }
 struct Serialized {
   std::vector<uint8_t> bytes;
