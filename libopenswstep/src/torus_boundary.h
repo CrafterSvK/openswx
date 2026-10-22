@@ -18,6 +18,13 @@ struct TorusBand {
     std::span<const ConicBoundary> loops,
     const openparasolid::TorusGeometry& torus, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
+// Combines a bound, closed loop of monotone arcs on one supporting circle.
+// Source endpoint closure/incidence is the binding's responsibility. The result
+// is a validation-only full-circle cut; serialization retains each source arc.
+// One shared comparison is consumed per arc.
+[[nodiscard]] openparasolid::Result<ConicBoundary> CombineCircularCut(
+    std::span<const ConicBoundary> arcs, double tolerance,
+    uint64_t& remaining_checks);
 // Returns six times the oriented divergence contribution relative to origin.
 // The normal is the torus's natural outward normal; caller applies face sense.
 [[nodiscard]] long double TorusBandVolume6(

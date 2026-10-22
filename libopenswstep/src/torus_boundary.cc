@@ -30,6 +30,63 @@ Vector3 Cross(Vector3 a, Vector3 b) {
   return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 }  // namespace
+Result<ConicBoundary> CombineCircularCut(std::span<const ConicBoundary> arcs,
+                                         double tolerance,
+                                         uint64_t& remaining_checks) {
+  using Return = Result<ConicBoundary>;
+  if (!std::isfinite(tolerance) || tolerance <= 0)
+    return Return::Err({ErrorCode::kInvalidOptions, 0,
+                        "Circular cut tolerance must be positive and finite"});
+  if (arcs.empty()) return Return::Err(Invalid("Circular cut has no arcs"));
+  const auto& first = arcs.front();
+  long double winding = 0;
+  int direction = 0;
+  constexpr double kFullTurn = 2 * std::numbers::pi;
+  for (const auto& arc : arcs) {
+    if (!remaining_checks)
+      return Return::Err(
+          {ErrorCode::kResourceLimit, 0, "Circular cut arc limit exceeded"});
+    --remaining_checks;
+    if (!arc.circle)
+      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                          "Split torus cuts require CIRCLE arcs"});
+    const auto span = static_cast<long double>(arc.end) - arc.start;
+    const auto alignment = Dot(arc.normal, first.normal);
+    const auto tilt =
+        std::hypot(Dot(arc.x_axis, first.normal),
+                   Dot(Cross(arc.normal, arc.x_axis), first.normal));
+    const auto displacement =
+        std::hypot(static_cast<long double>(arc.center.x) - first.center.x,
+                   static_cast<long double>(arc.center.y) - first.center.y,
+                   static_cast<long double>(arc.center.z) - first.center.z);
+    const auto error = displacement +
+                       std::abs(arc.major_radius - first.major_radius) +
+                       2 * arc.major_radius * tilt;
+    if (!std::isfinite(arc.major_radius) || arc.major_radius <= tolerance ||
+        !std::isfinite(alignment) || std::abs(alignment) < 1 - 1e-10L ||
+        !std::isfinite(error) || error > tolerance)
+      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                          "Split torus cut arcs need one supporting circle"});
+    if (!std::isfinite(span) || std::abs(span) > kFullTurn ||
+        std::abs(span) * arc.major_radius <= tolerance)
+      return Return::Err(
+          Invalid("Circular cut arc interval is degenerate or repeated"));
+    const auto directed_span = alignment > 0 ? span : -span;
+    const int sign = directed_span > 0 ? 1 : -1;
+    if (direction && sign != direction)
+      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                          "Circular cut arc winding must be monotone"});
+    direction = sign;
+    winding += directed_span;
+  }
+  if (std::abs(std::abs(winding) - kFullTurn) > 1e-12L)
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Circular cut arcs must span one complete turn"});
+  auto result = first;
+  result.start = 0;
+  result.end = direction * kFullTurn;
+  return Return::Ok(result);
+}
 Result<TorusBand> ValidateTorusLoops(std::span<const ConicBoundary> loops,
                                      const openparasolid::TorusGeometry& torus,
                                      bool natural_sense, double tolerance,

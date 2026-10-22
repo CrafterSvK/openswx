@@ -20,6 +20,14 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 MINOR_ARC_SEGMENT = 25 / 2 * (2 * math.asin(.2) - math.sin(2 * math.asin(.2)))
 CASES = {
+    "spun-torus": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
+    "spun-torus-profile": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
+    "spun-torus-axis": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
+    "spun-torus-translated": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
+    "spun-torus-inward": (2,3,1,0,"area",3*math.pi**2+2*math.pi),
+    "split-torus": (8,9,3,1,"volume",TOROIDAL_SOLID_VOLUME),
+    "split-spun-torus": (8,9,3,1,"volume",TOROIDAL_SOLID_VOLUME),
+    "split-spun-torus-translated": (8,9,3,1,"volume",TOROIDAL_SOLID_VOLUME),
     "profiled-cylinder": (2,3,3,1,"volume",18*math.pi),
     "profiled-cylinder-seams": (2,3,3,1,"volume",18*math.pi),
     "profiled-cylinder-two-cuts": (2,3,3,1,"volume",18*math.pi),

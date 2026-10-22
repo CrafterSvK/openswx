@@ -47,8 +47,9 @@ struct ExportOptions {
   /// vertex/edge pairs, curved-hole extrema, cut pairs and spherical cap
   /// selections. Each cylindrical/conical patch or annular sector consumes five
   /// checks. Profiled cylinder bands consume one check per edge and one per
-  /// cut pair. Concave minor-arc contours share chord-polygon, join-cone and
-  /// nonadjacent envelope checks, including a preceding convex attempt.
+  /// cut pair. Split torus cuts consume one check per arc in addition to the
+  /// cut-pair check. Concave minor-arc contours share chord-polygon, join-cone
+  /// and nonadjacent envelope checks, including a preceding convex attempt.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -102,7 +103,12 @@ struct StepDocument {
 /// band, away from the poles. Winding selects either cap, including caps larger
 /// than a hemisphere. Regular ring TORUS bands use two coaxial full-circle
 /// cuts; winding selects the meridian interval, including its periodic seam and
-/// complementary band. Planar faces also support a single convex
+/// complementary band. Each complete cut can also comprise monotone arcs on
+/// one supporting circle, retaining the individual source edges. Unbounded
+/// SPUN_SURF circular generators in an axial meridian plane of a regular ring
+/// torus use the equivalent TOROIDAL_SURFACE with corrected normal orientation.
+/// Bounded generators, tilted/skew circle planes and other generators remain
+/// unsupported. Planar faces also support a single convex
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
 /// two-edge segments/lenses. Convex LINE/CIRCLE outer contours also support
 /// polygonal and complete circular holes. Circles and polygon vertices are
@@ -137,7 +143,8 @@ struct StepDocument {
 /// validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
 /// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
-/// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus), 5.2.8 (senses)
+/// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus),
+/// 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (senses)
 /// and 5.3.4.1 (geometry attachment).
 /// @param model Borrowed model with stream-local node identities.
 /// @param body Explicit BODY identity in this model.

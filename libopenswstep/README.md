@@ -29,7 +29,8 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
 | Partial CONE patches with two circular arcs and two straight cone generators | Exact `CONICAL_SURFACE` with one four-edge outer bound, including expanding/narrowing sectors |
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
-| Regular ring TORUS bands between two full coaxial circles | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
+| Regular ring TORUS bands between two full coaxial circles, including split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
+| SPUN_SURF with an unbounded circular generator in an axial meridian plane of a regular ring torus | Equivalent analytic `TOROIDAL_SURFACE`, preserving source normal orientation and boundary edges |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
 Coordinates remain in the source frame. **The caller must specify metres or
@@ -311,6 +312,28 @@ toroidal band. Closed supported mixtures of planar caps, cylindrical/conical
 mantles and toroidal bands retain shared source boundaries. As with the other
 surface types, the checks do not certify intersections between separate faces.
 
+Circular `SPUN_SURF` generators in an axial meridian plane of a regular ring
+torus export as an equivalent analytic `TOROIDAL_SURFACE`. The center is the
+generator-center projection onto the rotation axis; its radial distance and the
+generator radius are the major and minor torus radii. The whole circle plane
+must agree with the axial meridian plane within frame and displacement bounds.
+The `du x dv` orientation is compared with the canonical outward torus normal;
+reversed generator normals and rotation axes can invert it. Source surface and
+face senses are then applied separately. Generator sense metadata does not
+reverse its evaluated parameterization. Auxiliary source `x_axis`, endpoint and
+internal `scale` metadata are not evaluation transforms, matching the reader.
+Explicit generator parameter bounds remain unsupported to avoid enlarging the
+source surface domain. Skew/tilted circle planes, noncircular generators and
+horn/apple/lemon surfaces also remain unsupported.
+
+Each of a torus band's two circular cuts can comprise multiple monotone
+`CIRCLE` arcs on one supporting circle. Binding establishes endpoint incidence
+and closure; analytic center/radius/plane comparisons certify their common
+support, and signed spans must make exactly one revolution without reversals.
+Only the validation cut is combined: STEP keeps every source edge and vertex.
+Each arc consumes one shared comparison in addition to the band's cut-pair
+check. Fin-specific curves still require explicit shared-edge/pcurve mapping.
+
 These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
@@ -461,9 +484,12 @@ unsupported-format errors. Their first remaining geometry obstacles are:
 | --- | --- |
 | 2 | Implicit plane/cone intersection curves and faces trimmed by them |
 | 2 | NURBS surfaces and implicit intersections with analytic surfaces |
-| 2 | Fin-specific curves and rotational surfaces; one also needs unresolved trim intervals |
+| 2 | Fin-specific SP_CURVE mappings and shared tolerant edges; one also needs unresolved trim intervals |
 
-Resolving those intervals alone does not make the final two bodies exportable.
+Circular spun-torus recognition covers six rotational supporting surfaces in
+those last two bodies, including both source normal orientations. The complete
+body count remains 51/57: fin-specific curves still block their export. Resolving
+trim intervals alone does not make them exportable.
 These counts describe this private regression selection, not general format
 coverage. No private source files or generated exports are stored here.
 
@@ -484,7 +510,7 @@ Run `doxygen Doxyfile` from this directory to generate public API HTML at
 
 - Siemens *Parasolid XT Format Reference*, July 2022: sections 4.3.3–4.3.10
   (body through vertex), 5.2.1.1–5.2.1.3 (line/circle/ellipse),
-  5.2.2.1–5.2.2.3 (plane/cylinder/cone), 5.2.2.5 (torus), 5.2.8 (curve/surface senses) and 5.3.4.1 (attaching geometry to topology).
+  5.2.2.1–5.2.2.3 (plane/cylinder/cone), 5.2.2.5 (torus), 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (curve/surface senses) and 5.3.4.1 (attaching geometry to topology).
   The local reading copy is in the workspace's `xt-doc`; it is not bundled here.
 - [STEP toroidal-surface attributes](https://www.steptools.com/docs/stp_aim/html/t_toroidal_surface.html).
 - [STEP conical-surface attributes](https://www.steptools.com/docs/stp_aim/html/t_conical_surface.html).

@@ -18,6 +18,8 @@
 #include "../src/cone_patch.h"
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
+#include "../src/spun_torus.h"
+#include "../src/torus_boundary.h"
 #include "fixtures.h"
 
 namespace openswstep {
@@ -717,6 +719,156 @@ TEST(OpenSwStep, ExportsExactToroidalBandsAndClosedSolids) {
     EXPECT_EQ(result.value().statistics.faces, 1);
     EXPECT_EQ(result.value().statistics.solids, 0);
   }
+}
+TEST(OpenSwStep, ExportsCircularSpunSurfacesWithCorrectNormals) {
+  for (bool reverse_profile : {false, true})
+    for (bool reverse_axis : {false, true}) {
+      for (const auto& fixture :
+           {test::SpunToroidalBand(test::ToroidalBand(), reverse_profile,
+                                   reverse_axis),
+            test::SpunToroidalBand(test::ToroidalBand(true, true),
+                                   reverse_profile, reverse_axis),
+            test::SpunToroidalBand(test::InwardToroidalBand(), reverse_profile,
+                                   reverse_axis),
+            test::RotateAndTranslate(test::SpunToroidalBand(
+                test::ToroidalBand(), reverse_profile, reverse_axis))}) {
+        const auto result = Export(fixture);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_NE(result.value().text.find("=TOROIDAL_SURFACE("),
+                  std::string::npos);
+        EXPECT_EQ(result.value().statistics.edges, 2);
+        CheckReferences(result.value());
+      }
+    }
+  const auto fixture = test::Serialize(test::SpunToroidalBand());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
+}
+TEST(OpenSwStep, RecognizesSpunTorusFramesIndependentlyOfParameterPhase) {
+  const auto canonical_model = ModelBuilder::Build(test::ToroidalBand().report);
+  ASSERT_TRUE(canonical_model.ok());
+  for (const bool reversed : {false, true}) {
+    const auto fixture = test::SpunToroidalBand(test::ToroidalBand(), reversed);
+    const auto model = ModelBuilder::Build(fixture.report);
+    ASSERT_TRUE(model.ok());
+    const auto& objects = model.value().geometry();
+    const SpunSurfaceGeometry* spun = nullptr;
+    const CircleGeometry* profile = nullptr;
+    for (const auto& object : objects) {
+      if (object.source.value == 702)
+        spun = std::get_if<SpunSurfaceGeometry>(&object.payload);
+      if (object.source.value == 9000)
+        profile = std::get_if<CircleGeometry>(&object.payload);
+    }
+    ASSERT_NE(spun, nullptr);
+    ASSERT_NE(profile, nullptr);
+    const auto result = internal::RecognizeSpunTorus(*spun, *profile, 1e-7);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    const auto& torus = result.value().geometry;
+    EXPECT_EQ(result.value().same_normal, !reversed);
+    EXPECT_DOUBLE_EQ(torus.major_radius, 3);
+    for (double u : {0., .7, 2.1, 4.8})
+      for (double v : {0., .6, 3.2}) {
+        const auto sample = EvaluateSurface(model.value(), NodeId{702}, u, v);
+        ASSERT_TRUE(sample.ok());
+        const auto inverse = InvertSurface(GeometryPayload{torus},
+                                           sample.value().position, 1e-10);
+        ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+        const auto n = EvaluateSurfaceNormal(model.value(), NodeId{702}, u, v);
+        ASSERT_TRUE(n.ok());
+        const auto canonical =
+            EvaluateSurfaceNormal(canonical_model.value(), NodeId{702},
+                                  inverse.value().u, inverse.value().v);
+        ASSERT_TRUE(canonical.ok());
+        EXPECT_NEAR(n.value().x, canonical.value().x, 1e-12);
+        EXPECT_NEAR(n.value().y, canonical.value().y, 1e-12);
+        EXPECT_NEAR(n.value().z, canonical.value().z, 1e-12);
+      }
+  }
+}
+TEST(OpenSwStep, RejectsNonmeridionalAndBoundedSpunProfiles) {
+  SpunSurfaceGeometry spun;
+  spun.axis = {0, 0, 1};
+  CircleGeometry circle{{3, 0, 0}, {0, 1, 0}, {1, 0, 0}, 1};
+  const auto require_unsupported = [&](const SpunSurfaceGeometry& s,
+                                       const CircleGeometry& c) {
+    const auto result = internal::RecognizeSpunTorus(s, c, 1e-7);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  };
+  spun.start_parameter = 0.;
+  require_unsupported(spun, circle);
+  spun.start_parameter.reset();
+  spun.end_parameter = 7.;
+  require_unsupported(spun, circle);
+  spun.end_parameter.reset();
+  auto bad = circle;
+  bad.normal = {0, 0, 1};
+  require_unsupported(spun, bad);
+  bad = circle;
+  bad.center = {3, 1, 0};
+  require_unsupported(spun, bad);
+  for (double radius : {3., 4.}) {
+    bad = circle;
+    bad.radius = radius;
+    require_unsupported(spun, bad);
+  }
+  auto axis = spun;
+  axis.axis.z = 2;
+  EXPECT_FALSE(internal::RecognizeSpunTorus(axis, circle, 1e-7).ok());
+  EXPECT_FALSE(internal::RecognizeSpunTorus(spun, circle, 0).ok());
+}
+TEST(OpenSwStep, PreservesSplitCircularTorusCutsAndSourceTopology) {
+  for (const auto& fixture : {test::SplitToroidalBand(),
+                              test::SpunToroidalBand(test::SplitToroidalBand()),
+                              test::RotateAndTranslate(test::SpunToroidalBand(
+                                  test::SplitToroidalBand()))}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 3);
+    EXPECT_EQ(result.value().statistics.edges, 8);
+    EXPECT_EQ(result.value().statistics.vertices, 8);
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    CheckReferences(result.value());
+  }
+  auto options = Options();
+  options.max_polygon_checks = 17;
+  EXPECT_TRUE(Export(test::SplitToroidalBand(), options).ok());
+  options.max_polygon_checks = 16;
+  const auto limited = Export(test::SplitToroidalBand(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsUncertifiedSplitCircularCuts) {
+  const double pi = std::numbers::pi;
+  std::vector<internal::ConicBoundary> arcs{
+      {{0, 0, 0}, {0, 0, 1}, {1, 0, 0}, 3, 3, 0, pi, true},
+      {{0, 0, 0}, {0, 0, 1}, {1, 0, 0}, 3, 3, pi, 2 * pi, true}};
+  uint64_t remaining = 2;
+  auto result = internal::CombineCircularCut(arcs, 1e-7, remaining);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(remaining, 0);
+  auto invalid = arcs;
+  invalid[1].end = 0;
+  remaining = 2;
+  EXPECT_FALSE(internal::CombineCircularCut(invalid, 1e-7, remaining).ok());
+  invalid = arcs;
+  invalid[1].major_radius += 1e-5;
+  remaining = 2;
+  EXPECT_FALSE(internal::CombineCircularCut(invalid, 1e-7, remaining).ok());
+  invalid = arcs;
+  invalid[1].end = 1.5 * pi;
+  remaining = 2;
+  EXPECT_FALSE(internal::CombineCircularCut(invalid, 1e-7, remaining).ok());
+  // Reversing a circle's normal and interval preserves its geometric direction.
+  invalid = arcs;
+  invalid[1].normal.z = -1;
+  invalid[1].start = pi;
+  invalid[1].end = 0;
+  remaining = 2;
+  EXPECT_TRUE(internal::CombineCircularCut(invalid, 1e-7, remaining).ok());
 }
 TEST(OpenSwStep, HandlesToroidalCutOrderAndReversedAxes) {
   for (const auto& f :

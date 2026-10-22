@@ -3,6 +3,7 @@
 #ifndef OPENSWSTEP_TESTS_FIXTURES_H_
 #define OPENSWSTEP_TESTS_FIXTURES_H_
 #include <algorithm>
+#include <bit>
 #include <cmath>
 #include <map>
 #include <set>
@@ -353,16 +354,20 @@ inline ModelFixture RotateAndTranslate(ModelFixture f) {
   for (auto& node : f.report.nodes) {
     if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
         node.node_type != 32 && node.node_type != 50 && node.node_type != 51 &&
-        node.node_type != 52 && node.node_type != 53 && node.node_type != 54)
+        node.node_type != 52 && node.node_type != 53 && node.node_type != 54 &&
+        node.node_type != 68)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
     for (std::size_t i = 0; i < definitions.size(); ++i) {
       if (definitions[i].type != FieldType::kVector) continue;
       const auto old = node.fields[i].values;
-      const bool point = definitions[i].name == "position" ||
-                         definitions[i].name == "origin" ||
-                         definitions[i].name == "center";
+      if (!std::holds_alternative<double>(old[0])) continue;
+      const bool point =
+          definitions[i].name == "position" ||
+          definitions[i].name == "origin" || definitions[i].name == "center" ||
+          definitions[i].name == "base" || definitions[i].name == "start" ||
+          definitions[i].name == "end";
       node.fields[i].values = {std::get<double>(old[1]) + (point ? 1e6 : 0),
                                std::get<double>(old[2]) + (point ? -2e6 : 0),
                                std::get<double>(old[0]) + (point ? 3e6 : 0)};
@@ -1943,6 +1948,74 @@ inline ModelFixture SteppedCylinderBand() {
          ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
+inline ModelFixture SpunToroidalBand(ModelFixture f = ToroidalBand(),
+                                     bool reverse_profile = false,
+                                     bool reverse_axis = false) {
+  RemoveNode(f, 702);
+  const auto null_vector = [](const char* name) -> ModelField {
+    return {{name, FieldType::kVector},
+            {std::monostate{}, std::monostate{}, std::monostate{}}};
+  };
+  const auto null_number = [](const char* name) -> ModelField {
+    return {{name, FieldType::kDouble}, {std::monostate{}}};
+  };
+  f.Add(68, 702,
+        {Pointer("profile", 9000, 1008),
+         Numbers("base", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, reverse_axis ? -1. : 1.}, FieldType::kVector),
+         null_vector("start"), null_vector("end"), null_vector("x_axis"),
+         null_number("start_param"), null_number("end_param"),
+         null_number("scale"),
+         ByteValue("sense", reverse_profile != reverse_axis ? '-' : '+',
+                   FieldType::kCharacter)});
+  f.Add(
+      31, 9000,
+      {Numbers("center", {3, 0, 0}, FieldType::kVector),
+       Numbers("normal", {0, reverse_profile ? -1. : 1., 0},
+               FieldType::kVector),
+       Numbers("x_axis", {1, 0, 0}, FieldType::kVector), Numbers("radius", {1}),
+       ByteValue("sense", '-', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture SplitToroidalBand() {
+  auto f = Polyhedron({{4, 0, 0},
+                       {0, 4, 0},
+                       {-4, 0, 0},
+                       {0, -4, 0},
+                       {3, 0, 1},
+                       {0, 3, 1},
+                       {-3, 0, 1},
+                       {0, -3, 1}},
+                      {{0, 3, 2, 1}, {4, 5, 6, 7}, {0, 1, 2, 3}, {4, 7, 6, 5}},
+                      true);
+  MergeFaceLoops(f, {{2, 3}});
+  struct Replacement {
+    uint32_t curve;
+    unsigned first, last;
+  };
+  std::vector<Replacement> replacements;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    replacements.push_back({PointerValue(f, node.index, "curve"),
+                            PointerValue(f, other, "vertex") - 200,
+                            PointerValue(f, fin, "vertex") - 200});
+  }
+  for (const auto& edge : replacements) {
+    const bool upper = edge.first >= 4;
+    CircleBasis(f, edge.curve, {0, 0, upper ? 1. : 0.}, upper ? 3 : 4,
+                edge.last - edge.first == 3 ? '-' : '+');
+  }
+  RemoveNode(f, 702);
+  f.Add(54, 702,
+        {Numbers("center", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector),
+         Numbers("major_radius", {3}), Numbers("minor_radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
 inline ModelFixture ConcaveMinorArcFace(double bottom = 0, double radius = 5) {
   auto f = Polyhedron({{0, bottom, 0},
                        {4, bottom, 0},
@@ -1983,7 +2056,9 @@ inline Serialized Serialize(const ModelFixture& f) {
         else if (type == FieldType::kByte || type == FieldType::kCharacter)
           out.bytes.push_back(static_cast<uint8_t>(std::get<uint64_t>(value)));
         else
-          F64(out.bytes, std::get<double>(value));
+          F64(out.bytes, std::holds_alternative<std::monostate>(value)
+                             ? std::bit_cast<double>(0xc2bc928f996e0000ULL)
+                             : std::get<double>(value));
       }
     }
   }

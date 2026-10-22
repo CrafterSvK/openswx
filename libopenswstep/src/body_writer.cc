@@ -19,6 +19,7 @@
 #include "cylinder_patch.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
+#include "spun_torus.h"
 #include "step_writer.h"
 #include "torus_boundary.h"
 
@@ -50,7 +51,7 @@ struct FaceData {
   const PlaneGeometry* plane = nullptr;
   const CylinderGeometry* cylinder = nullptr;
   const ConeGeometry* cone = nullptr;
-  const TorusGeometry* torus = nullptr;
+  std::optional<TorusGeometry> torus;
   const SphereGeometry* sphere = nullptr;
   bool natural_sense = true;
   std::vector<std::vector<Vector3>> polygons;
@@ -280,6 +281,40 @@ Result<std::vector<ConicBoundary>> BodyWriter::ConicLoops(
   using Return = Result<std::vector<ConicBoundary>>;
   std::vector<ConicBoundary> loops;
   for (const auto& loop : face.source->loops) {
+    if (face.torus && !loop.isolated_vertex && loop.fins.size() > 1) {
+      std::vector<ConicBoundary> arcs;
+      std::set<uint32_t> vertices;
+      for (const auto& fin : loop.fins) {
+        if (fin.use.fin_curve.value)
+          return Return::Err(Error(
+              fin.use.fin, ErrorCode::kUnsupportedFormat,
+              "Tolerant fin curves need an explicit STEP pcurve mapping"));
+        if (!fin.use.start_vertex.value || !fin.use.end_vertex.value ||
+            !vertices.insert(fin.use.start_vertex.value).second)
+          return Return::Err(
+              Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
+                    "Split torus cuts need distinct non-null vertices"));
+        const auto basis = Basis(fin.curve);
+        if (!basis.ok()) return Return::Err(basis.error());
+        const auto* circle =
+            std::get_if<CircleGeometry>(&basis.value()->payload);
+        if (!circle)
+          return Return::Err(Error(fin.curve, ErrorCode::kUnsupportedFormat,
+                                   "Split torus cuts require CIRCLE arcs"));
+        arcs.push_back({circle->center, circle->normal, circle->x_axis,
+                        circle->radius, circle->radius, fin.start, fin.end,
+                        true});
+        uses_[fin.use.edge.value].push_back(
+            {faces_.size(), fin.use.sense == TopologySense::kForward});
+      }
+      const auto cut = CombineCircularCut(arcs, options_.tolerance,
+                                          polygon_checks_remaining_);
+      if (!cut.ok())
+        return Return::Err(Error(face.source->face, cut.error().code,
+                                 cut.error().message.c_str()));
+      loops.push_back(cut.value());
+      continue;
+    }
     const auto conic = ReadConicLoop(face.source->face, loop);
     if (!conic.ok()) return Return::Err(conic.error());
     loops.push_back(conic.value());
@@ -590,7 +625,25 @@ Result<bool> BodyWriter::PrepareFaces() {
     const auto* cone = std::get_if<ConeGeometry>(&surface.value()->payload);
     const auto* torus = std::get_if<TorusGeometry>(&surface.value()->payload);
     const auto* sphere = std::get_if<SphereGeometry>(&surface.value()->payload);
-    if (!plane && !cylinder && !cone && !torus && !sphere)
+    std::optional<SpunTorus> spun_torus;
+    if (const auto* spun =
+            std::get_if<SpunSurfaceGeometry>(&surface.value()->payload)) {
+      const auto profile = Geometry(spun->profile);
+      if (!profile.ok()) return Result<bool>::Err(profile.error());
+      const auto* circle =
+          std::get_if<CircleGeometry>(&profile.value()->payload);
+      if (!circle)
+        return Result<bool>::Err(
+            Error(source.face, ErrorCode::kUnsupportedFormat,
+                  "Spun torus export requires a CIRCLE generator"));
+      const auto recognized =
+          RecognizeSpunTorus(*spun, *circle, options_.tolerance);
+      if (!recognized.ok())
+        return Result<bool>::Err(Error(source.face, recognized.error().code,
+                                       recognized.error().message.c_str()));
+      spun_torus = recognized.value();
+    }
+    if (!plane && !cylinder && !cone && !torus && !sphere && !spun_torus)
       return Result<bool>::Err(
           Error(source.face, ErrorCode::kUnsupportedFormat,
                 "Face export requires PLANE/CYLINDER/CONE/SPHERE "
@@ -606,9 +659,12 @@ Result<bool> BodyWriter::PrepareFaces() {
     face.plane = plane;
     face.cylinder = cylinder;
     face.cone = cone;
-    face.torus = torus;
+    if (torus) face.torus = *torus;
+    if (spun_torus) face.torus = spun_torus->geometry;
     face.sphere = sphere;
     face.natural_sense = source.face_sense == surface.value()->sense;
+    if (spun_torus && !spun_torus->same_normal)
+      face.natural_sense = !face.natural_sense;
     const bool all_conic =
         std::all_of(source.loops.begin(), source.loops.end(),
                     [](const auto& loop) { return loop.fins.size() == 1; });
@@ -633,7 +689,7 @@ Result<bool> BodyWriter::PrepareFaces() {
       faces_.push_back(std::move(face));
       continue;
     }
-    if (cylinder || cone || torus || sphere || all_conic) {
+    if (cylinder || cone || face.torus || sphere || all_conic) {
       const auto conic = PrepareConicFace(face);
       if (!conic.ok()) return conic;
       faces_.push_back(std::move(face));
