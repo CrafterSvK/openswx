@@ -652,6 +652,22 @@ TEST(ParasolidShellIncidence, ClassifiesBoundaryGroupsByRecordedVertexDegrees) {
     EXPECT_EQ(component.branched_boundaries, 1);
     const auto& groups = component.boundary_groups;
     ASSERT_EQ(groups.size(), 6);
+    for (const auto& group : groups) {
+      if (group.kind == BoundaryGroupKind::kBranched) {
+        EXPECT_TRUE(group.path.empty());
+        continue;
+      }
+      ASSERT_EQ(group.path.size(), group.edges.size());
+      for (std::size_t i = 1; i < group.path.size(); ++i)
+        EXPECT_EQ(group.path[i - 1].end_vertex, group.path[i].start_vertex);
+      if (group.kind == BoundaryGroupKind::kCycle)
+        EXPECT_EQ(group.path.front().start_vertex, group.path.back().end_vertex);
+      else {
+        EXPECT_EQ(group.path.front().start_vertex, group.end_vertices.front());
+        EXPECT_EQ(group.path.back().end_vertex, group.end_vertices.back());
+      }
+    }
+
     EXPECT_EQ(groups[0].kind, BoundaryGroupKind::kCycle);
     EXPECT_EQ(groups[0].edges, (std::vector<NodeId>{{10}, {11}, {12}}));
     EXPECT_EQ(groups[1].kind, BoundaryGroupKind::kChain);
@@ -666,6 +682,14 @@ TEST(ParasolidShellIncidence, ClassifiesBoundaryGroupsByRecordedVertexDegrees) {
     EXPECT_EQ(groups[4].vertices, (std::vector<NodeId>{{11}}));
     EXPECT_EQ(groups[5].kind, BoundaryGroupKind::kCycle);
     EXPECT_EQ(groups[5].vertices, (std::vector<NodeId>{{12}, {13}}));
+    EXPECT_EQ(groups[3].path[0].sense, TopologySense::kForward);
+    EXPECT_EQ(groups[3].path[0].start_vertex, NodeId{});
+    EXPECT_EQ(groups[4].path[0].sense, TopologySense::kForward);
+    EXPECT_EQ(groups[5].path[0].edge, NodeId{60});
+    EXPECT_EQ(groups[5].path[0].sense, TopologySense::kForward);
+    EXPECT_EQ(groups[5].path[1].edge, NodeId{61});
+    EXPECT_EQ(groups[5].path[1].sense, TopologySense::kReverse);
+
     std::reverse(fins.begin(), fins.end());
   }
 }
@@ -695,6 +719,66 @@ TEST(ParasolidShellIncidence, RejectsPartiallyMissingBoundaryVertices) {
   const auto result = AnalyzeShellEdgeIncidence(shell);
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+}
+TEST(ParasolidShellIncidence, OrdersChainsIndependentlyOfFinAndEdgeIdOrder) {
+  ShellBoundary shell;
+  ComponentFace(shell, 1, {30, 10, 20});
+  auto& fins = shell.faces[0].loops[0].fins;
+  fins[0].start_vertex = NodeId{2};
+  fins[0].end_vertex = NodeId{1};
+  fins[1].start_vertex = NodeId{2};
+  fins[1].end_vertex = NodeId{3};
+  fins[1].sense = TopologySense::kReverse;
+  fins[2].start_vertex = NodeId{3};
+  fins[2].end_vertex = NodeId{4};
+  for (int order = 0; order < 3; ++order) {
+    const auto result = AnalyzeShellEdgeIncidence(shell);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    const auto& path = result.value().components[0].boundary_groups[0].path;
+    ASSERT_EQ(path.size(), 3);
+    const std::array<uint32_t, 3> edge_ids{30, 10, 20};
+    for (std::size_t i = 0; i < path.size(); ++i) {
+      EXPECT_EQ(path[i].edge, NodeId{edge_ids[i]});
+      EXPECT_EQ(path[i].fin, NodeId{static_cast<uint32_t>(i + 1)});
+      EXPECT_EQ(path[i].start_vertex, NodeId{static_cast<uint32_t>(i + 1)});
+      EXPECT_EQ(path[i].end_vertex, NodeId{static_cast<uint32_t>(i + 2)});
+      EXPECT_EQ(path[i].sense,
+                i < 2 ? TopologySense::kReverse : TopologySense::kForward);
+    }
+    std::reverse(fins.begin(), fins.end());
+    if (order == 1)
+      for (auto& fin : fins) {
+        std::swap(fin.start_vertex, fin.end_vertex);
+        fin.sense = fin.sense == TopologySense::kForward
+                        ? TopologySense::kReverse
+                        : TopologySense::kForward;
+      }
+  }
+}
+TEST(ParasolidShellIncidence, TracesLongChainsWithinExactBudgets) {
+  ShellBoundary shell;
+  FaceBoundary face;
+  face.face = NodeId{1};
+  LoopBoundary loop;
+  constexpr uint32_t kEdges = 2048;
+  for (uint32_t i = 0; i < kEdges; ++i) {
+    FinUse fin;
+    fin.fin = NodeId{i + 1};
+    fin.edge = NodeId{kEdges - i};
+    fin.start_vertex = NodeId{i + 1};
+    fin.end_vertex = NodeId{i + 2};
+    loop.fins.push_back(fin);
+  }
+  face.loops.push_back(std::move(loop));
+  shell.faces.push_back(std::move(face));
+  const auto result = AnalyzeShellEdgeIncidence(shell, {1, 1, kEdges, kEdges});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& path = result.value().components[0].boundary_groups[0].path;
+  ASSERT_EQ(path.size(), kEdges);
+  EXPECT_EQ(path.front().edge, NodeId{kEdges});
+  EXPECT_EQ(path.back().edge, NodeId{1});
+  EXPECT_EQ(path.front().start_vertex, NodeId{1});
+  EXPECT_EQ(path.back().end_vertex, NodeId{kEdges + 1});
 }
 }  // namespace
 }  // namespace openparasolid

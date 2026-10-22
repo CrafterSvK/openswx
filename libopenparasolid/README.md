@@ -2199,6 +2199,56 @@ and degree count verifies every group in all 57 private body reports. Their
 groups. Previous incidence counts and geometry outcomes remain unchanged.
 Private inputs, scripts and generated reports remain outside the repository.
 
+## Ordered boundary paths
+
+Each unbranched `ShellBoundaryGroup` now also owns a `path`, while its existing
+membership arrays remain sorted ID sets. A `BoundaryPathEdge` records the edge
+ID, unique source boundary fin ID, directed start/end vertex IDs and sense
+relative to the natural source edge direction.
+
+Chains start at their smaller degree-one endpoint. Cycles start with their
+smallest edge ID, traversed from that edge's smaller vertex. Self-loops and
+vertex-free rings use forward sense; a vertex-free ring has a single path
+entry with null start/end vertices. Each edge occurs exactly once and adjacent
+entries share a recorded vertex. Cycles return to their starting vertex.
+Branched groups retain an empty path, avoiding an arbitrary branch choice.
+Source fin ordering does not affect the canonical result.
+
+Full `--body-topology` output adds `path` to each boundary group:
+
+```json
+{
+  "edge": 30,
+  "fin": 60,
+  "start_vertex": 10,
+  "end_vertex": 20,
+  "sense": "reverse"
+}
+```
+
+These are entries in walking order. Sense describes the natural topological
+edge direction, rather than the boundary fin's own traversal direction; compare
+it with the source fin sense before reusing a directed fin interval. Fin IDs
+remain available for matching existing face geometry bindings. No curve
+parameters, UV continuation, face/region orientation or hole classification
+are inferred. A canonical graph walk does not certify geometric closure or a
+valid solid. Summary counts and CLI statuses are unchanged.
+
+The walk uses cached natural edge endpoints, fixed endpoint adjacency and a
+visited-edge set, with at most one path step per unbranched boundary edge.
+It retains the existing resource budgets, atomic errors and standard-library
+core. No recursion, source topology re-read, curve evaluations, new settings
+or dependencies are introduced. Public fields are appended after existing
+members.
+
+Tests cover source-order changes, reverse fin senses, graph continuity,
+parallel edges, self-loops, vertex-free rings, branched groups and a 2,048-edge
+chain at exact limits. Full JSON tests check source fin IDs and natural sense.
+Independent checks across all 57 private body reports verify all nine cycle
+paths and their 30 edge steps against source natural edge endpoints and fin
+IDs. Earlier incidence, grouping and geometry outcomes remain unchanged.
+Private inputs, scripts and reports remain outside the repository.
+
 ## Inspecting validated body topology
 
 ```bash

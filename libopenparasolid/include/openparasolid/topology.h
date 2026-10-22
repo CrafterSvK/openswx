@@ -235,6 +235,14 @@ struct ShellEdgeUseCount {
   uint64_t reverse_fins = 0;
 };
 enum class BoundaryGroupKind { kCycle, kChain, kBranched };
+struct BoundaryPathEdge {
+  NodeId edge;
+  NodeId fin;
+  NodeId start_vertex;
+  NodeId end_vertex;
+  // Relative to the natural edge direction, not the source fin or face side.
+  TopologySense sense = TopologySense::kForward;
+};
 struct ShellBoundaryGroup {
   BoundaryGroupKind kind = BoundaryGroupKind::kCycle;
   // All IDs sorted; groups are ordered by smallest edge ID. Ring edges with
@@ -243,6 +251,9 @@ struct ShellBoundaryGroup {
   std::vector<NodeId> vertices;
   std::vector<NodeId> end_vertices;
   std::vector<NodeId> branch_vertices;
+  // Canonical graph walk for chains/cycles; empty for branched groups. No
+  // inference of face orientation, parameter intervals or geometric closure.
+  std::vector<BoundaryPathEdge> path;
 };
 struct ShellFaceComponent {
   // Sorted source face IDs; components are ordered by their smallest face ID.
@@ -295,7 +306,10 @@ struct ShellEdgeIncidenceOptions {
 // Vertex degree two gives a cycle; degree one gives chain ends; degree above
 // two gives a branched group. Self-loops contribute degree two. A partially
 // missing endpoint pair is invalid. These are unordered graph diagnostics,
-// not oriented paths or geometric closure checks. Existing budgets apply.
+// not face-oriented paths or geometric closure checks. Chains additionally
+// retain a walk from the smaller endpoint; cycles start with the smallest edge
+// from its smaller vertex. Vertex-free rings and self-loops use forward sense.
+// Branched groups have no path. Existing budgets bound path work/storage.
 // Does not revalidate connectivity, orient face sides or compare geometry.
 // Paired edges alone do not certify manifold vertices, geometric connectedness,
 // shell closure, hole orientation or volume. Empty/wire/acorn shells have no

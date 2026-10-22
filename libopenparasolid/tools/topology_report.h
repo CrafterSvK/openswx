@@ -33,11 +33,21 @@ inline json BoundaryGroupReport(const ShellBoundaryGroup& group) {
   const char* kind = group.kind == BoundaryGroupKind::kCycle   ? "cycle"
                      : group.kind == BoundaryGroupKind::kChain ? "chain"
                                                                : "branched";
+  json path = json::array();
+  for (const auto& edge : group.path)
+    path.push_back(
+        {{"edge", edge.edge.value},
+         {"fin", edge.fin.value},
+         {"start_vertex", edge.start_vertex.value},
+         {"end_vertex", edge.end_vertex.value},
+         {"sense",
+          edge.sense == TopologySense::kForward ? "forward" : "reverse"}});
   return {{"kind", kind},
           {"edges", ids(group.edges)},
           {"vertices", ids(group.vertices)},
           {"end_vertices", ids(group.end_vertices)},
-          {"branch_vertices", ids(group.branch_vertices)}};
+          {"branch_vertices", ids(group.branch_vertices)},
+          {"path", std::move(path)}};
 }
 inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
                                  bool summary) {

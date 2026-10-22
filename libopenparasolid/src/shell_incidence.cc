@@ -42,27 +42,84 @@ class DisjointSets {
 };
 struct BoundaryEdge {
   NodeId edge;
+  NodeId fin;
   NodeId start;
   NodeId end;
 };
+struct BoundaryVertex {
+  std::size_t first_edge;
+  uint64_t degree = 0;
+  std::size_t second_edge = 0;
+};
+Result<std::vector<BoundaryPathEdge>> TraceBoundaryPath(
+    const ShellBoundaryGroup& group, std::span<const BoundaryEdge> edges,
+    const std::unordered_map<uint32_t, std::size_t>& edge_indices,
+    const std::unordered_map<uint32_t, BoundaryVertex>& vertices) {
+  std::vector<BoundaryPathEdge> path;
+  if (group.kind == BoundaryGroupKind::kBranched)
+    return Result<std::vector<BoundaryPathEdge>>::Ok(std::move(path));
+  auto fail = [] {
+    return Result<std::vector<BoundaryPathEdge>>::Err(
+        {ErrorCode::kInvalidRecord, 0,
+         "Boundary path does not cover its group"});
+  };
+  if (group.edges.empty() || (group.kind == BoundaryGroupKind::kChain &&
+                              group.end_vertices.size() != 2))
+    return fail();
+  const auto first = edge_indices.find(group.edges.front().value);
+  if (first == edge_indices.end()) return fail();
+  NodeId current =
+      group.kind == BoundaryGroupKind::kChain
+          ? group.end_vertices.front()
+          : std::min(edges[first->second].start, edges[first->second].end);
+  const NodeId start = current;
+  std::unordered_set<std::size_t> visited;
+  path.reserve(group.edges.size());
+  for (std::size_t step = 0; step < group.edges.size(); ++step) {
+    std::size_t index = first->second;
+    if (step != 0 || group.kind == BoundaryGroupKind::kChain) {
+      const auto vertex = vertices.find(current.value);
+      if (vertex == vertices.end()) return fail();
+      index = vertex->second.first_edge;
+      if (visited.contains(index)) {
+        if (vertex->second.degree != 2) return fail();
+        index = vertex->second.second_edge;
+      }
+    }
+    if (!visited.insert(index).second) return fail();
+    const auto& edge = edges[index];
+    const bool forward = current == edge.start;
+    if (!forward && current != edge.end) return fail();
+    const NodeId next = forward ? edge.end : edge.start;
+    path.push_back(
+        {edge.edge, edge.fin, current, next,
+         forward ? TopologySense::kForward : TopologySense::kReverse});
+    current = next;
+  }
+  const NodeId target = group.kind == BoundaryGroupKind::kChain
+                            ? group.end_vertices.back()
+                            : start;
+  if (current != target) return fail();
+  return Result<std::vector<BoundaryPathEdge>>::Ok(std::move(path));
+}
 Result<std::vector<ShellBoundaryGroup>> GroupBoundaryEdges(
     std::span<const BoundaryEdge> edges) {
-  struct Vertex {
-    std::size_t first_edge;
-    uint64_t degree = 0;
-  };
   DisjointSets sets(edges.size());
-  std::unordered_map<uint32_t, Vertex> vertices;
+  std::unordered_map<uint32_t, BoundaryVertex> vertices;
+  std::unordered_map<uint32_t, std::size_t> edge_indices;
   for (std::size_t i = 0; i < edges.size(); ++i) {
     const auto& edge = edges[i];
+    edge_indices.emplace(edge.edge.value, i);
     if ((edge.start.value == 0) != (edge.end.value == 0))
       return Result<std::vector<ShellBoundaryGroup>>::Err(
           {ErrorCode::kInvalidRecord, 0,
            "Partially missing boundary edge vertices"});
     if (!edge.start.value) continue;
     for (const auto vertex : {edge.start, edge.end}) {
-      auto [entry, inserted] = vertices.try_emplace(vertex.value, Vertex{i});
+      auto [entry, inserted] =
+          vertices.try_emplace(vertex.value, BoundaryVertex{i});
       if (!inserted) sets.Join(i, entry->second.first_edge);
+      if (entry->second.degree == 1) entry->second.second_edge = i;
       ++entry->second.degree;
     }
   }
@@ -94,6 +151,12 @@ Result<std::vector<ShellBoundaryGroup>> GroupBoundaryEdges(
     std::sort(group.end_vertices.begin(), group.end_vertices.end());
     std::sort(group.branch_vertices.begin(), group.branch_vertices.end());
   }
+  for (auto& group : result) {
+    auto path = TraceBoundaryPath(group, edges, edge_indices, vertices);
+    if (!path.ok())
+      return Result<std::vector<ShellBoundaryGroup>>::Err(path.error());
+    group.path = std::move(path).value();
+  }
   std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
     return a.edges.front() < b.edges.front();
   });
@@ -117,6 +180,7 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
     std::size_t first_face;
     NodeId start;
     NodeId end;
+    NodeId fin;
   };
   std::unordered_map<uint32_t, EdgeState> edges;
   std::unordered_set<uint32_t> face_ids;
@@ -159,11 +223,15 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
           if (edges.size() == options.max_edges)
             return fail(ErrorCode::kResourceLimit,
                         "Shell incidence edge limit");
+          const bool forward = fin.sense == TopologySense::kForward;
           found = edges
-                      .emplace(fin.edge.value, EdgeState{{fin.edge},
-                                                         face_index,
-                                                         fin.start_vertex,
-                                                         fin.end_vertex})
+                      .emplace(
+                          fin.edge.value,
+                          EdgeState{{fin.edge},
+                                    face_index,
+                                    forward ? fin.start_vertex : fin.end_vertex,
+                                    forward ? fin.end_vertex : fin.start_vertex,
+                                    fin.fin})
                       .first;
         }
         components.Join(face_index, found->second.first_face);
@@ -204,7 +272,7 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
       ++result.boundary_edges;
       ++component.boundary_edges;
       boundary_edges[group_indices[components.Find(state.first_face)]]
-          .push_back({NodeId{id}, state.start, state.end});
+          .push_back({NodeId{id}, state.fin, state.start, state.end});
     } else if (uses == 2) {
       ++result.paired_edges;
       ++component.paired_edges;

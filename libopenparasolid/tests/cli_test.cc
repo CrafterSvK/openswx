@@ -190,6 +190,12 @@ TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
   EXPECT_EQ(component["boundary_groups"][0]["edges"], json::array({8}));
   EXPECT_EQ(component["boundary_groups"][0]["end_vertices"],
             json::array({9, 10}));
+  EXPECT_EQ(component["boundary_groups"][0]["path"],
+            (json::array({{{"edge", 8},
+                           {"fin", 7},
+                           {"start_vertex", 9},
+                           {"end_vertex", 10},
+                           {"sense", "reverse"}}})));
   EXPECT_EQ(report["shell_edge_incidence"]["boundary_chains"], 1);
   EXPECT_FALSE(summary["shell_edge_incidence"].contains("components"));
   EXPECT_EQ(report["shell_edge_incidence"]["isolated_loops"], 1);
