@@ -175,6 +175,63 @@ Result<FinParameterInterval> ConicInterval(const Model& model,
   return Result<FinParameterInterval>::Ok(
       {use.fin, start.value(), start.value() + span});
 }
+struct ChartRecoveryBudget {
+  uint32_t evaluations = 64;
+  uint64_t point_visits = 1000000;
+};
+Result<double> RecoverChartParameter(
+    const Model& model, const GeometryObject& curve,
+    const IntersectionChartEvaluation& chart, Vector3 point, double tolerance,
+    const IntersectionEvaluationOptions& options, ChartRecoveryBudget& budget) {
+  const auto& positions =
+      std::get<IntersectionCurveGeometry>(curve.payload).chart.positions;
+  const auto& parameters = chart.parameterization.parameters;
+  std::optional<double> match;
+  std::unordered_set<double> visited;
+  for (std::size_t i = 0; i + 1 < positions.size(); ++i) {
+    const auto a = positions[i], b = positions[i + 1];
+    const long double dx = static_cast<long double>(b.x) - a.x;
+    const long double dy = static_cast<long double>(b.y) - a.y;
+    const long double dz = static_cast<long double>(b.z) - a.z;
+    const long double length = std::hypot(dx, dy, dz);
+    if (!(length > 0) || !std::isfinite(length))
+      return Result<double>::Err(Error("Unrepresentable chart chord length"));
+    const long double projection =
+        ((static_cast<long double>(point.x) - a.x) / length) * (dx / length) +
+        ((static_cast<long double>(point.y) - a.y) / length) * (dy / length) +
+        ((static_cast<long double>(point.z) - a.z) / length) * (dz / length);
+    if (!std::isfinite(projection))
+      return Result<double>::Err(
+          Error("Unrepresentable chart chord projection"));
+    if (projection < 0 || projection > 1) continue;
+    // The existing solver's chord-normal plane is linear in the original
+    // chart parameter. Project only to recover that plane, then verify the
+    // actual solved 3D curve point rather than interpolating curve geometry.
+    const double parameter = std::lerp(parameters[i], parameters[i + 1],
+                                       static_cast<double>(projection));
+    if (!visited.insert(parameter).second) continue;
+    if (!budget.evaluations || positions.size() > budget.point_visits)
+      return Result<double>::Err(
+          Error("Intersection parameter recovery work limit", 0,
+                ErrorCode::kResourceLimit));
+    --budget.evaluations;
+    budget.point_visits -= positions.size();
+    const auto sample =
+        EvaluateIntersectionCurve(model, curve.source, parameter, options);
+    if (!sample.ok()) return Result<double>::Err(sample.error());
+    if (Distance(point, sample.value().position) > tolerance) continue;
+    if (match && *match != parameter)
+      return Result<double>::Err(
+          Error("Ambiguous solved intersection parameter", 0,
+                ErrorCode::kUnsupportedFormat));
+    match = parameter;
+  }
+  if (!match)
+    return Result<double>::Err(
+        Error("No verified intersection parameter inside chart chords", 0,
+              ErrorCode::kUnsupportedFormat));
+  return Result<double>::Ok(*match);
+}
 Result<FinParameterInterval> ChartInterval(
     const Model& model, const GeometryObject& curve, const FinUse& use,
     double tolerance,
@@ -219,13 +276,31 @@ Result<FinParameterInterval> ChartInterval(
       last = i;
     }
   }
-  if (!first || !last || first == last)
-    return Result<FinParameterInterval>::Err(
-        Error("Intersection endpoints need distinct unique chart matches", 0,
-              ErrorCode::kUnsupportedFormat));
   const auto& parameters = chart.value().parameterization.parameters;
-  const FinParameterInterval interval{use.fin, parameters[*first],
-                                      parameters[*last]};
+  ChartRecoveryBudget budget;
+  if (positions.size() > budget.point_visits)
+    return Result<FinParameterInterval>::Err(
+        Error("Intersection parameter recovery chart limit", 0,
+              ErrorCode::kResourceLimit));
+  budget.point_visits -= positions.size();  // The initial chart preparation.
+  const auto first_parameter =
+      first ? Result<double>::Ok(parameters[*first])
+            : RecoverChartParameter(model, curve, chart.value(), start.value(),
+                                    tolerance, *intersection, budget);
+  if (!first_parameter.ok())
+    return Result<FinParameterInterval>::Err(first_parameter.error());
+  const auto last_parameter =
+      last ? Result<double>::Ok(parameters[*last])
+           : RecoverChartParameter(model, curve, chart.value(), end.value(),
+                                   tolerance, *intersection, budget);
+  if (!last_parameter.ok())
+    return Result<FinParameterInterval>::Err(last_parameter.error());
+  if (first_parameter.value() == last_parameter.value())
+    return Result<FinParameterInterval>::Err(
+        Error("Intersection endpoints have a collapsed parameter interval", 0,
+              ErrorCode::kUnsupportedFormat));
+  const FinParameterInterval interval{use.fin, first_parameter.value(),
+                                      last_parameter.value()};
   if (!use.fin_curve.value &&
       ((interval.end > interval.start) !=
        ((*curve.sense == '+') == (use.sense == TopologySense::kForward))))

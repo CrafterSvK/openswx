@@ -79,8 +79,9 @@ struct FinGeometryEvaluation {
 // periodic wrapping is inferred. Edge trims retain transmitted parameters,
 // ordered by fin sense, even for closed/vertex-free edges. Stored trim points
 // must match curve samples. With solver settings, direct intersections use
-// distinct, unique vertex matches among validated chart points. Closed/missing
-// endpoints and ambiguous or unmatched charts require explicit intervals.
+// stored chart matches or bounded chord-plane parameter recovery, verified by
+// solved 3D curve membership. Closed/missing endpoints and ambiguous or
+// unrecoverable parameters require explicit intervals.
 // Accurate edge orientation must agree with curve sense. Fin trims require
 // unambiguous vertex correspondence. Conics select one directed arc, or a full
 // turn for closed/vertex-free edges. Coincident distinct conic vertices, fin

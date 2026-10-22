@@ -119,14 +119,10 @@ coincident surfaces without treating the source UVs as face UVs. Off-face
 support geometry remains a membership error. Surfaces without supported
 inversion remain unsupported for this mapping.
 
-With the previous explicit intersection solver profile, the 39-stream body
-selection now binds 53 of 57 body occurrences (23 with faces, 30 without).
-All 52 earlier successes remain supported. The added body contains 60 faces
-and 276 fin uses; totals are 531 faces and 2,484 fin uses. Four bodies still
-need unique intersection matches, unresolved fin trim intervals or unsupported
-surface inversion. Synthetic tests cover rational and polynomial curves,
-clamped/unclamped domains, both fin/curve directions, interior and ambiguous
-endpoints, invalid knots/weights and SP mapping between different UV frames.
+Synthetic tests cover rational and polynomial curves, clamped/unclamped
+domains, both fin/curve directions, interior and ambiguous endpoints, invalid
+knots/weights and SP mapping between different UV frames. Current real-file
+coverage of the combined pipeline is listed under intersection binding below.
 
 ## Binding all faces of a body
 
@@ -228,9 +224,25 @@ tolerance. The matches must be distinct. The chart is first validated and
 parameterized by the existing evaluator; matches can select interior chart
 points and retain the original parameter units. Accurate edges additionally
 require known curve sense agreeing with the directed endpoint order. Fin
-curves use their oriented vertex correspondence. No interval is inferred for
-closed/vertex-free edges, ambiguous matches or endpoints between chart points.
-Those cases still require explicit intervals or partial overrides.
+curves use their oriented vertex correspondence.
+
+For an endpoint without a stored chart match, bounded recovery projects the
+point onto each chart chord to obtain a candidate chord-normal plane parameter.
+Candidates stay inside their chart segment and retain the original chart
+parameter units. The existing intersection solver evaluates the actual curve
+at each candidate; its 3D residual must meet the binding tolerance. Curve
+positions are not interpolated from the chord. Repeated identical candidate
+parameters are evaluated once; distinct successful parameters are ambiguous.
+Query errors propagate, and an unsuccessful local search is not proof that
+no curve preimage exists.
+
+Per fin, recovery permits at most 64 candidate curve evaluations shared by
+both endpoints, plus 1,000,000 estimated chart-point preparation visits
+including the initial chart preparation. Exhaustion returns `kResourceLimit`,
+even after a candidate matched. Subsequent membership samples retain their
+existing evaluation limits. Closed/vertex-free edges, ambiguous stored matches
+and unrecoverable parameters still require explicit intervals or partial
+overrides. Recovery never extends the chart or guesses terminator branches.
 
 The automatic overload also resolves source trims of intersections using their
 transmitted parameters. Omitting solver options retains the explicit
@@ -244,9 +256,9 @@ the existing solver semantics. Face membership and vertex matching still use
 the separate binding tolerance. Directed tangents retain their scale/reversal
 with respect to the fin fraction. Chart bounds, source trim bounds, dependency
 and work limits remain in force. This provides local chart evaluation, without
-certifying a global intersection branch or extending to terminators. Endpoint
-matching adds one bounded chart preparation and linear scan before the usual
-finite membership checks; it does not perform curve point inversion.
+certifying a global intersection branch or extending to terminators. Stored
+point matching precedes chord-plane recovery; all resulting intervals still
+undergo the existing finite face/vertex membership checks.
 
 Synthetic tests cover plane/plane and curved plane/sphere intersections, stored
 settings, reversed fins, source trims, independent face tolerances, invalid
@@ -257,14 +269,14 @@ establishes regression coverage. The expanded body comparison below exercises
 direct intersections from real files.
 
 With `IntersectionEvaluationOptions{1e-7, 1e-9}` and binding tolerance 1e-7,
-chart-point interval matching binds 52 of the 57 body occurrences in that
-39-stream selection (22 with faces, 30 without). All 51 earlier successes
-remain supported. The additional body has 104 faces and 456 fin uses; totals
-are now 471 bound faces and 2,208 fin uses. Five bodies remain unsupported:
-two need unique chart matches, one needs another curve interval, one has an
-unresolved fin trim and one needs unsupported surface inversion. Synthetic
-regressions cover interior chart points, nontrivial parameter units, both fin
-and curve directions, unmatched/ambiguous/collapsed matches and closed edges.
+the complete pipeline binds 55 of 57 body occurrences in the 39-stream
+selection (25 with faces, 30 without). All 53 earlier successes remain
+supported. Chord-plane recovery adds two bodies with 52 faces and 168 fin
+uses; totals are now 583 bound faces and 2,652 fin uses. Two bodies remain
+unsupported: an unresolved fin trim and unsupported spun-surface inversion.
+Synthetic regressions cover original parameter units, straight/curved interior
+points, both fin directions, off-curve and outside-chart points, multiple solved
+parameters on repeated branches and finite recovery budgets.
 
 ## Analytic offset surfaces
 

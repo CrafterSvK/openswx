@@ -247,7 +247,7 @@ TEST(ParasolidChartFinIntervals,
   EXPECT_NEAR(midpoint.value().curve.first_derivative.x, .5, 1e-12);
 }
 TEST(ParasolidChartFinIntervals,
-     RejectsUnmatchedAmbiguousOrCollapsedCorrespondence) {
+     RecoversUnstoredPointsAndRejectsAmbiguousOrCollapsedCorrespondence) {
   for (int bad = 0; bad < 3; ++bad) {
     auto f = IntersectionFace(false);
     for (auto& n : f.report.nodes) {
@@ -263,8 +263,13 @@ TEST(ParasolidChartFinIntervals,
                          : bad == 1 ? 1
                                     : .25,
                          {}, IntersectionEvaluationOptions{1e-12, 1e-12});
-    ASSERT_FALSE(result.ok()) << bad;
-    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    if (bad == 0) {
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_NEAR(result.value().loops[0].fins[0].start, .25, 1e-12);
+    } else {
+      ASSERT_FALSE(result.ok()) << bad;
+      EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    }
   }
 }
 TEST(ParasolidChartFinIntervals,
@@ -330,6 +335,90 @@ TEST(ParasolidChartFinIntervals,
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
   }
+}
+TEST(ParasolidChordFinIntervals,
+     RecoversCurvedInteriorPointsInOriginalChartUnits) {
+  auto f = IntersectionFace(false, true);
+  for (auto& n : f.report.nodes) {
+    if (n.index == 200) n.fields[0].values = {std::cos(.2), std::sin(.2), 0.};
+    if (n.index == 201) n.fields[0].values = {std::cos(.9), std::sin(.9), 0.};
+    if (n.index == 402) {
+      n.fields[0].values[0] = -4.;
+      n.fields[1].values[0] = 2.5;
+    }
+  }
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-10, {},
+                       IntersectionEvaluationOptions{1e-12, 1e-13});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto parameter = [](double angle) {
+    return -4 + 2.5 * (1 - std::cos(angle) + std::sin(angle)) / std::sqrt(2.);
+  };
+  const auto& fins = result.value().loops[0].fins;
+  EXPECT_NEAR(fins[0].start, parameter(.2), 1e-12);
+  EXPECT_NEAR(fins[0].end, parameter(.9), 1e-12);
+  EXPECT_NEAR(fins[1].start, fins[0].end, 1e-12);
+  EXPECT_NEAR(fins[1].end, fins[0].start, 1e-12);
+  const auto sample = EvaluateBoundFin(model.value(), fins[0], 0, 1e-10);
+  ASSERT_TRUE(sample.ok());
+  EXPECT_NEAR(sample.value().curve.position.x, std::cos(.2), 1e-10);
+  EXPECT_NEAR(sample.value().curve.position.y, std::sin(.2), 1e-10);
+}
+TEST(ParasolidChordFinIntervals,
+     ProjectionRequiresSolvedMembershipAndStaysInsideChart) {
+  for (bool outside : {false, true}) {
+    auto f = IntersectionFace(false);
+    for (auto& n : f.report.nodes)
+      if (n.index == 200)
+        n.fields[0].values = outside ? std::vector<ScalarValue>{-1., 0., 0.}
+                                     : std::vector<ScalarValue>{.25, 0., .01};
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, 1e-8, {},
+                         IntersectionEvaluationOptions{1e-12, 1e-12});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
+TEST(ParasolidChordFinIntervals,
+     RejectsMultipleSolvedParametersOnRepeatedBranches) {
+  std::vector<Vector3> points;
+  for (int i = 0; i <= 30; ++i) {
+    const double angle = i * .3;
+    points.push_back({std::cos(angle), std::sin(angle), 0});
+  }
+  auto f = IntersectionFace(false, true, points);
+  for (auto& n : f.report.nodes)
+    if (n.index == 200) n.fields[0].values = {std::cos(.15), std::sin(.15), 0.};
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-10, {},
+                       IntersectionEvaluationOptions{1e-12, 1e-13});
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("Ambiguous solved"), std::string::npos);
+}
+TEST(ParasolidChordFinIntervals,
+     RecoveryQueryBudgetIsFiniteEvenWithoutAnyMatch) {
+  std::vector<Vector3> points;
+  for (int i = 0; i <= 70; ++i) {
+    const double angle = i * .01;
+    points.push_back({std::cos(angle), std::sin(angle), 0});
+  }
+  auto f = IntersectionFace(false, true, points);
+  for (auto& n : f.report.nodes)
+    if (n.index == 200) n.fields[0].values = {0., 0., 0.};
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-10, {},
+                       IntersectionEvaluationOptions{1e-12, 1e-13});
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
 }
 TEST(ParasolidFaceBinding, AutomaticallyBindsTrimmedIntersectionsWithOptions) {
   for (bool curved : {false, true}) {
