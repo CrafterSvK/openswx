@@ -15,6 +15,7 @@
 
 #include "../../libopenswx/tests/test_helpers.h"
 #include "../src/annular_boundary.h"
+#include "../src/cone_patch.h"
 #include "../src/cylinder_patch.h"
 #include "fixtures.h"
 
@@ -894,6 +895,133 @@ TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 6);
+}
+TEST(OpenSwStep, ExportsExactConePatchesAndClosedSectors) {
+  for (const double slope : {1., -0.25}) {
+    for (const double span :
+         {std::numbers::pi / 2, std::numbers::pi, 1.5 * std::numbers::pi})
+      for (const bool inward : {false, true}) {
+        const auto fixture = test::ConePatchFixture(span, inward, slope);
+        for (const auto& source :
+             {fixture, test::RotateAndTranslate(fixture)}) {
+          const auto result = Export(source);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          EXPECT_EQ(result.value().statistics.faces, 1);
+          EXPECT_EQ(result.value().statistics.edges, 4);
+          EXPECT_EQ(result.value().statistics.vertices, 4);
+          CheckReferences(result.value());
+        }
+      }
+    for (const auto& source :
+         {test::ConeSector(slope),
+          test::RotateAndTranslate(test::ConeSector(slope))}) {
+      const auto result = Export(source);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.solids, 1);
+      EXPECT_EQ(result.value().statistics.faces, 5);
+      EXPECT_EQ(result.value().statistics.edges, 9);
+    }
+  }
+  ASSERT_TRUE(Export(test::RotateLineProfile(test::ConePatchFixture(),
+                                             7 * std::numbers::pi / 4))
+                  .ok());
+}
+TEST(OpenSwStep, ChecksConePatchProfilesGeneratorsAndSharedBudget) {
+  auto options = Options();
+  options.max_polygon_checks = 5;
+  ASSERT_TRUE(Export(test::ConePatchFixture(), options).ok());
+  options.max_polygon_checks = 4;
+  const auto limited = Export(test::ConePatchFixture(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto twisted =
+      Export(test::ConePatchFixture(std::numbers::pi / 2, false, 1, 1e-4));
+  ASSERT_FALSE(twisted.ok());
+  EXPECT_NE(twisted.error().message.find("cone generator"), std::string::npos);
+  auto tilted = test::ConePatchFixture(std::numbers::pi);
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4000)
+      node.fields[1].values = {0., std::sin(1e-7), std::cos(1e-7)};
+  const auto outside = Export(tilted);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_NE(outside.error().message.find("coaxial profile"), std::string::npos)
+      << outside.error().message;
+}
+TEST(OpenSwStep, PreservesConePatchAxisReferenceAndLoopOrder) {
+  auto reverse = test::ConePatchFixture();
+  for (auto& node : reverse.report.nodes)
+    if (node.index == 700) {
+      node.fields[1].values = {0., 0., -1.};
+      node.fields[3].values[0] = -std::get<double>(node.fields[3].values[0]);
+    }
+  ASSERT_TRUE(Export(reverse).ok());
+  auto reordered = test::ConePatchFixture();
+  test::Set(reordered, 600, "halfedge", 1004);
+  ASSERT_TRUE(Export(reordered).ok());
+  auto apex = test::ConePatchFixture();
+  for (auto& node : apex.report.nodes)
+    if (node.index == 700) {
+      node.fields[0].values = {0., 0., -1.};
+      node.fields[2].values[0] = 0.;
+    }
+  ASSERT_TRUE(Export(apex).ok());
+}
+TEST(OpenSwStep, IntegratesConePatchFluxWithAxialAndTransverseOffsets) {
+  const double q = std::sqrt(0.5);
+  ConeGeometry cone{{0, 0, 0}, {0, 0, 1}, 1, q, q, {1, 0, 0}};
+  internal::ConePatch patch{
+      2, std::numbers::pi / 2, 1, 3, {1, 0, 0}, {0, 1, 0}, {1, 0, 0}};
+  EXPECT_NEAR(internal::ConePatchVolume6(cone, patch, {}), 4 * std::numbers::pi,
+              1e-12);
+  EXPECT_NEAR(internal::ConePatchVolume6(cone, patch, {1, 0, 0}),
+              4 * std::numbers::pi - 8, 1e-12);
+  EXPECT_NEAR(internal::ConePatchVolume6(cone, patch, {0, 1, 2}),
+              12 * std::numbers::pi - 8, 1e-12);
+  cone.origin = {1e6, -2e6, 3e6};
+  EXPECT_NEAR(internal::ConePatchVolume6(cone, patch, {1e6, -2e6 + 1, 3e6 + 2}),
+              12 * std::numbers::pi - 8, 1e-12);
+  cone.axis = {0, 0, -1};
+  cone.sin_half_angle = -q;
+  std::swap(patch.first_direction, patch.last_direction);
+  std::swap(patch.lower_radius, patch.upper_radius);
+  EXPECT_NEAR(internal::ConePatchVolume6(cone, patch, {1e6, -2e6 + 1, 3e6 + 2}),
+              12 * std::numbers::pi - 8, 1e-12);
+}
+TEST(OpenSwStep, RejectsUnsupportedOrMismatchedConePatchArcs) {
+  const GeometryPayload intersection = IntersectionCurveGeometry{};
+  std::array<internal::PlanarCurve, 4> curves;
+  curves.fill({&intersection, 0, 1});
+  uint64_t remaining = 5;
+  const double q = std::sqrt(0.5);
+  const auto foreign = internal::ValidateConePatch(
+      curves, {{0, 0, 0}, {0, 0, 1}, 1, q, q, {1, 0, 0}}, true, 1e-7,
+      remaining);
+  ASSERT_FALSE(foreign.ok());
+  EXPECT_EQ(foreign.error().code, ErrorCode::kUnsupportedFormat);
+  auto wrong = test::ConePatchFixture();
+  test::Set(wrong, 4002, "sense", '+');
+  const auto result = Export(wrong);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("winding"), std::string::npos);
+  auto inverted = test::ConeSector();
+  for (uint32_t i = 0; i < 5; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto negative = Export(inverted);
+  ASSERT_FALSE(negative.ok());
+  EXPECT_NE(negative.error().message.find("signed volume"), std::string::npos);
+}
+TEST(OpenSwStep, ParsesConePatchesThroughBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::ConeSector());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
 }
 TEST(OpenSwStep, ExportsExactCylinderPatchesAndClosedSectors) {
   for (const auto& fixture :

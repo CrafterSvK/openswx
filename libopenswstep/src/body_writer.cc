@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "annular_boundary.h"
+#include "cone_patch.h"
 #include "conic_boundary.h"
 #include "convex_boundary.h"
 #include "cylinder_patch.h"
@@ -42,6 +43,7 @@ struct FaceData {
   std::optional<TorusBand> torus_band;
   std::optional<SphereBand> sphere_band;
   std::optional<CylinderPatch> cylinder_patch;
+  std::optional<ConePatch> cone_patch;
 };
 struct EdgeUse {
   std::size_t face;
@@ -74,7 +76,7 @@ class BodyWriter {
   Result<bool> PrepareFaces();
   Result<bool> PrepareConicFace(FaceData& face);
   Result<bool> PrepareCurvedPlanarFace(FaceData& face);
-  Result<bool> PrepareCylinderPatchFace(FaceData& face);
+  Result<bool> PrepareRuledPatchFace(FaceData& face);
   Result<ConicBoundary> ReadConicLoop(NodeId face, const FaceTrimLoop& loop);
   Result<std::vector<ConicBoundary>> ConicLoops(const FaceData& face);
   Result<bool> CheckVertexLinks();
@@ -392,12 +394,12 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   face.outer_loop = 0;
   return Result<bool>::Ok(true);
 }
-Result<bool> BodyWriter::PrepareCylinderPatchFace(FaceData& face) {
+Result<bool> BodyWriter::PrepareRuledPatchFace(FaceData& face) {
   if (face.source->loops.size() != 1 ||
       face.source->loops.front().isolated_vertex)
     return Result<bool>::Err(
         Error(face.source->face, ErrorCode::kUnsupportedFormat,
-              "Cylinder patches require one non-isolated loop"));
+              "Ruled patches require one non-isolated loop"));
   std::set<uint32_t> vertices;
   std::vector<PlanarCurve> curves;
   for (const auto& fin : face.source->loops.front().fins) {
@@ -409,21 +411,32 @@ Result<bool> BodyWriter::PrepareCylinderPatchFace(FaceData& face) {
         !vertices.insert(fin.use.start_vertex.value).second)
       return Result<bool>::Err(
           Error(face.source->face, ErrorCode::kUnsupportedFormat,
-                "Cylinder patch corners require distinct non-null vertices"));
+                "Ruled patch corners require distinct non-null vertices"));
     const auto basis = Basis(fin.curve);
     if (!basis.ok()) return Result<bool>::Err(basis.error());
     curves.push_back({&basis.value()->payload, fin.start, fin.end});
     uses_[fin.use.edge.value].push_back(
         {faces_.size(), fin.use.sense == TopologySense::kForward});
   }
-  const auto patch =
-      ValidateCylinderPatch(curves, *face.cylinder, face.natural_sense,
-                            options_.tolerance, polygon_checks_remaining_);
-  if (!patch.ok())
-    return Result<bool>::Err(Error(face.source->face, patch.error().code,
-                                   patch.error().message.c_str()));
-  face.cylinder_patch = patch.value();
-  face.reference_point = patch.value().reference_point;
+  if (face.cone) {
+    const auto patch =
+        ValidateConePatch(curves, *face.cone, face.natural_sense,
+                          options_.tolerance, polygon_checks_remaining_);
+    if (!patch.ok())
+      return Result<bool>::Err(Error(face.source->face, patch.error().code,
+                                     patch.error().message.c_str()));
+    face.cone_patch = patch.value();
+    face.reference_point = patch.value().reference_point;
+  } else {
+    const auto patch =
+        ValidateCylinderPatch(curves, *face.cylinder, face.natural_sense,
+                              options_.tolerance, polygon_checks_remaining_);
+    if (!patch.ok())
+      return Result<bool>::Err(Error(face.source->face, patch.error().code,
+                                     patch.error().message.c_str()));
+    face.cylinder_patch = patch.value();
+    face.reference_point = patch.value().reference_point;
+  }
   face.outer_loop = 0;
   return Result<bool>::Ok(true);
 }
@@ -462,8 +475,8 @@ Result<bool> BodyWriter::PrepareFaces() {
     const bool all_conic =
         std::all_of(source.loops.begin(), source.loops.end(),
                     [](const auto& loop) { return loop.fins.size() == 1; });
-    if (cylinder && !all_conic) {
-      const auto patch = PrepareCylinderPatchFace(face);
+    if ((cylinder || cone) && !all_conic) {
+      const auto patch = PrepareRuledPatchFace(face);
       if (!patch.ok()) return patch;
       faces_.push_back(std::move(face));
       continue;
@@ -715,6 +728,9 @@ Result<bool> BodyWriter::CheckSolid() {
       } else if (face.torus) {
         volume6 +=
             sign * TorusBandVolume6(*face.torus, *face.torus_band, origin);
+      } else if (face.cone_patch) {
+        volume6 +=
+            sign * ConePatchVolume6(*face.cone, *face.cone_patch, origin);
       } else if (face.cone) {
         const auto& band = *face.cone_band;
         const auto& axis = face.cone->axis;

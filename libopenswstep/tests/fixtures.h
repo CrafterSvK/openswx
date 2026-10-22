@@ -1006,17 +1006,18 @@ inline void CircleBasis(ModelFixture& f, uint32_t id, Vector3 center,
          Numbers("radius", {radius}),
          ByteValue("sense", sense, FieldType::kCharacter)});
 }
-inline ModelFixture CylinderPatchFixture(double span = std::acos(-1.) / 2,
-                                         bool inward = false,
-                                         double top_phase = 0) {
+inline ModelFixture RuledPatchFixture(double span, bool inward,
+                                      double top_phase, double slope) {
   const double height = 2;
-  auto f = Polyhedron(
-      {{1, 0, 0},
-       {std::cos(span), std::sin(span), 0},
-       {std::cos(span + top_phase), std::sin(span + top_phase), height},
-       {std::cos(top_phase), std::sin(top_phase), height}},
-      {inward ? std::vector<unsigned>{3, 2, 1, 0}
-              : std::vector<unsigned>{0, 1, 2, 3}});
+  const double top_radius = 1 + height * slope;
+  auto f = Polyhedron({{1, 0, 0},
+                       {std::cos(span), std::sin(span), 0},
+                       {top_radius * std::cos(span + top_phase),
+                        top_radius * std::sin(span + top_phase), height},
+                       {top_radius * std::cos(top_phase),
+                        top_radius * std::sin(top_phase), height}},
+                      {inward ? std::vector<unsigned>{3, 2, 1, 0}
+                              : std::vector<unsigned>{0, 1, 2, 3}});
   RemoveNode(f, 700);
   f.Add(51, 700,
         {Numbers("origin", {0, 0, 0}, FieldType::kVector),
@@ -1043,7 +1044,31 @@ inline ModelFixture CylinderPatchFixture(double span = std::acos(-1.) / 2,
                       a == 200 ? '+' : '-'});
   }
   for (const auto& arc : arcs)
-    CircleBasis(f, arc.curve, arc.center, 1, arc.sense);
+    CircleBasis(f, arc.curve, arc.center, arc.center.z == 0 ? 1 : top_radius,
+                arc.sense);
+  return f;
+}
+inline ModelFixture CylinderPatchFixture(double span = std::acos(-1.) / 2,
+                                         bool inward = false,
+                                         double top_phase = 0) {
+  return RuledPatchFixture(span, inward, top_phase, 0);
+}
+inline void ConeBasis(ModelFixture& f, uint32_t id, double slope) {
+  RemoveNode(f, id);
+  const auto scale = std::hypot(1., slope);
+  f.Add(52, id,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
+         Numbers("sin_half_angle", {slope / scale}),
+         Numbers("cos_half_angle", {1 / scale}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+}
+inline ModelFixture ConePatchFixture(double span = std::acos(-1.) / 2,
+                                     bool inward = false, double slope = 1,
+                                     double top_phase = 0) {
+  auto f = RuledPatchFixture(span, inward, top_phase, slope);
+  ConeBasis(f, 700, slope);
   return f;
 }
 inline ModelFixture RotateLineProfile(ModelFixture f, double angle) {
@@ -1089,6 +1114,31 @@ inline ModelFixture CylinderSector() {
          Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
          Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
          ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture ConeSector(double slope = 1) {
+  const double upper = 1 + 2 * slope;
+  auto f = Polyhedron(
+      {{1, 0, 0},
+       {0, 1, 0},
+       {0, 0, 0},
+       {upper, 0, 2},
+       {0, upper, 2},
+       {0, 0, 2}},
+      {{0, 2, 1}, {3, 4, 5}, {0, 3, 5, 2}, {1, 2, 5, 4}, {0, 1, 4, 3}}, true);
+  std::vector<std::pair<uint32_t, bool>> arcs;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    if ((a == 200 && b == 201) || (a == 203 && b == 204))
+      arcs.emplace_back(PointerValue(f, node.index, "curve"), a == 200);
+  }
+  for (const auto& [curve, lower] : arcs)
+    CircleBasis(f, curve, {0, 0, lower ? 0. : 2.}, lower ? 1 : upper);
+  ConeBasis(f, 704, slope);
   return f;
 }
 inline ModelFixture Stadium() {

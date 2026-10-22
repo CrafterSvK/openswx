@@ -44,7 +44,7 @@ struct ExportOptions {
   uint64_t max_output_bytes = 128u * 1024u * 1024u;
   /// Shared boundary-check budget across the selected body: segment,
   /// containment, separation and convex-corner tests, analytic cut pairs and
-  /// spherical cap selections. Each cylindrical patch or annular sector
+  /// spherical cap selections. Each cylindrical/conical patch or annular sector
   /// consumes five checks.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
@@ -86,9 +86,10 @@ struct StepDocument {
 /// Planar faces also support one-edge full CIRCLE/ELLIPSE disks and circular
 /// faces with disjoint polygonal and/or circular holes. Complete CYLINDER/CONE
 /// bands use two coaxial full-circle loops at distinct axial levels and
-/// positive cut radii. CYLINDER also supports a single four-edge loop with two
-/// coaxial circular arcs and two axial LINE generators, spanning less than one
-/// full turn. Exact transverse flux terms are retained for solid patches.
+/// positive cut radii. CYLINDER/CONE also support a single four-edge loop with
+/// two coaxial circular arcs and two straight LINE generators, spanning less
+/// than one full turn. Generators follow the respective cylinder/cone profile.
+/// Exact transverse and axial flux terms are retained for solid patches.
 /// SPHERE faces use one full latitude circle for a cap or two full coaxial
 /// latitude circles for a band, away from the poles. Winding selects either
 /// cap, including caps larger than a hemisphere. Regular ring TORUS bands use
@@ -98,14 +99,15 @@ struct StepDocument {
 /// elliptic arcs and two-edge segments/lenses. Planar annular sectors support
 /// two concentric circular arcs joined by two radial lines, including major
 /// sectors. Other nonconvex planar curved contours, holes in multi-edge curved
-/// contours, partial azimuths, spherical pole cuts, apex loops, explicit seam
-/// fins, horn/apple/lemon tori and elliptical holes remain unsupported. Sheet
-/// orientation is propagated across shared edges. Solid export requires one
-/// material region with one closed, connected shell, consistent face-side uses
-/// and positive signed volume. Foreign geometry, tolerant fin curves, isolated
-/// face loops, compound bodies, general bodies and other curve/surface types
-/// return explicit errors. Existing finite membership checks are retained; no
-/// global intersection or full CAD-kernel validity certificate is implied.
+/// contours, other non-planar trimming contours, spherical pole cuts, apex
+/// loops, explicit seam fins, horn/apple/lemon tori and elliptical holes remain
+/// unsupported. Sheet orientation is propagated across shared edges. Solid
+/// export requires one material region with one closed, connected shell,
+/// consistent face-side uses and positive signed volume. Foreign geometry,
+/// tolerant fin curves, isolated face loops, compound bodies, general bodies
+/// and other curve/surface types return explicit errors. Existing finite
+/// membership checks are retained; no global intersection or full CAD-kernel
+/// validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
 /// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
 /// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus), 5.2.8 (senses)

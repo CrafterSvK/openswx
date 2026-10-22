@@ -23,6 +23,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
 | Partial CYLINDER patches with two circular arcs and two axial generators | Exact `CYLINDRICAL_SURFACE` with one four-edge outer bound, including major arcs and parameter-seam crossings |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
+| Partial CONE patches with two circular arcs and two straight cone generators | Exact `CONICAL_SURFACE` with one four-edge outer bound, including expanding/narrowing sectors |
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
@@ -159,7 +160,24 @@ keeps the band on the positive-radius branch between them. Signed volume
 includes the analytic conical flux, including inward conical tube walls.
 Narrowing source cones use a positive STEP semi-angle and reversed exported
 axis. The reference origin may be at the apex, provided both boundary circles
-are away from it. Apex boundary loops and partial conical sectors are unsupported.
+are away from it. Apex boundary loops remain unsupported.
+
+Partial conical patches support one four-edge loop alternating between two
+coaxial `CIRCLE` arcs and two straight `LINE` generators. Both cut radii must
+exceed the source tolerance and match the source linear cone profile. The
+whole-circle bound includes center displacement, tilt and slope-dependent
+radius variation. The lower and upper arcs must select equal azimuth spans,
+strictly shorter than one turn, and have opposite winding consistent with the
+effective face normal. The two generators must stay more than two tolerances
+apart even at the smaller cut radius. Each straight edge is checked against the
+cone ruling over its entire length; twisted connections between different
+azimuths are rejected. Source edges and vertices remain exact and shared.
+Major arcs, parameter-seam crossings, inward sheets, reversed axes and narrowing
+cones are supported. Together with planar caps and radial walls this permits
+closed conical sector solids. Signed volume uses the exact conical divergence
+integral, retaining both transverse and axial origin terms. Five shared checks
+cover each patch. Other conical trimming contours, apex boundaries, elliptic
+cuts and additional hole loops remain unsupported.
 
 Spherical bands use two complete coaxial latitude circles on a positive-radius
 sphere. The exporter checks circle radius, center displacement and whole-circle
@@ -208,7 +226,7 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, other nonconvex planar curved boundaries, holes in multi-edge curved contours,
-elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder trims and partial conical bands, partial torus azimuths, uncut tori,
+elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -272,7 +290,7 @@ same budget. Mixed polygon/circle boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
 conical/spherical/toroidal cut pair consumes one check, as does each spherical
-cap selection. Each partial cylinder patch and planar annular sector consumes five checks. Parser, model and body-binding
+cap selection. Each partial cylinder/cone patch and planar annular sector consumes five checks. Parser, model and body-binding
 budgets remain independently configurable in `ExportOptions`. The file adapter
 checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -304,7 +322,7 @@ GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
-bands/patches, closed cylinder sectors, conical frustums, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
+bands/patches, closed cylinder sectors, conical frustums/patches/sectors, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
 contours, invalid topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -334,6 +352,10 @@ unsupported-format errors. Annular-sector support adds one complete body with
 check sector areas and closed ring-sector volumes, including major arcs,
 reversed orientations, translated frames and parameter-seam crossings. Existing
 convex stadium profiles also retain their original behavior and budget.
+Conical-patch support preserves these 47 successes; the remaining bodies still
+require other geometry. Synthetic OCCT round trips additionally check expanding
+and narrowing conical patch areas and closed sector volumes, including major
+arcs, inward sheets, parameter-seam crossings and translated frames.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.
