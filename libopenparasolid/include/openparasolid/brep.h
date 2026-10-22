@@ -2,6 +2,7 @@
 // Copyright (c) 2026 openswx contributors
 #ifndef OPENPARASOLID_BREP_H_
 #define OPENPARASOLID_BREP_H_
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -150,6 +151,30 @@ struct BoundaryPathBindingOptions {
 [[nodiscard]] Result<FinGeometryEvaluation> EvaluateBoundBoundaryPathEdge(
     const Model& model, const BoundBoundaryPathEdge& edge, double fraction,
     double tolerance);
+enum class BoundaryPathJoinSide { kIncoming, kOutgoing };
+struct BoundaryPathEvaluationOptions {
+  uint64_t max_edges = 100000;
+  BoundaryPathJoinSide join_side = BoundaryPathJoinSide::kOutgoing;
+};
+struct BoundaryPathEvaluation {
+  std::size_t edge_index = 0;
+  double edge_fraction = 0;
+  BoundaryPathEdge use;
+  NodeId face;
+  NodeId surface;
+  NodeId curve;
+  FinGeometryEvaluation geometry;
+};
+// Evaluates a previously bound path with one parameter unit per edge. Domain
+// is [0, edge count]. At interior integer joins, selects the incoming end or
+// outgoing start explicitly; endpoints always use the first/last edge without
+// cycle wrapping. Tangent is dP/d(path parameter), retaining the selected
+// edge's surface mapping and owned solver profile. No tangent/UV blending.
+// Performs constant-work edge selection under a positive size budget. Does
+// not revalidate the complete path or certify smoothness/arc-length spacing.
+[[nodiscard]] Result<BoundaryPathEvaluation> EvaluateBoundBoundaryPath(
+    const Model& model, const BoundBoundaryPath& path, double parameter,
+    double tolerance, const BoundaryPathEvaluationOptions& options = {});
 struct BodyFaceBindingOptions {
   BodyValidationOptions topology;
   FaceTraversalOptions face;

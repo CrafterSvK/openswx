@@ -113,6 +113,53 @@ Result<FinGeometryEvaluation> EvaluateBoundBoundaryPathEdge(
   if (edge.use.sense != fin.use.sense) std::swap(fin.start, fin.end);
   return EvaluateBoundFin(model, fin, fraction, tolerance);
 }
+Result<BoundaryPathEvaluation> EvaluateBoundBoundaryPath(
+    const Model& model, const BoundBoundaryPath& path, double parameter,
+    double tolerance, const BoundaryPathEvaluationOptions& options) {
+  using Output = Result<BoundaryPathEvaluation>;
+  if (!options.max_edges ||
+      (options.join_side != BoundaryPathJoinSide::kIncoming &&
+       options.join_side != BoundaryPathJoinSide::kOutgoing) ||
+      !std::isfinite(parameter) || parameter < 0 || !std::isfinite(tolerance) ||
+      tolerance < 0 || path.edges.empty())
+    return Output::Err(Invalid("Invalid boundary path evaluation options"));
+  if (path.kind == BoundaryGroupKind::kBranched)
+    return Output::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Branched boundary has no single path"});
+  if (path.kind != BoundaryGroupKind::kChain &&
+      path.kind != BoundaryGroupKind::kCycle)
+    return Output::Err(Invalid("Unknown boundary path kind"));
+  // All integer joins and the final endpoint must be exactly representable.
+  constexpr uint64_t kMaxExactDoubleInteger = uint64_t{1} << 53;
+  if (path.edges.size() > options.max_edges ||
+      path.edges.size() > kMaxExactDoubleInteger)
+    return Output::Err(
+        {ErrorCode::kResourceLimit, 0, "Boundary path evaluation edge limit"});
+  const double count = static_cast<double>(path.edges.size());
+  if (parameter > count)
+    return Output::Err(Invalid("Boundary path parameter outside domain"));
+  std::size_t index = 0;
+  double fraction = 0;
+  if (parameter == count) {
+    index = path.edges.size() - 1;
+    fraction = 1;
+  } else {
+    index = static_cast<std::size_t>(parameter);
+    fraction = parameter - static_cast<double>(index);
+    if (fraction == 0 && index != 0 &&
+        options.join_side == BoundaryPathJoinSide::kIncoming) {
+      --index;
+      fraction = 1;
+    }
+  }
+  const auto& edge = path.edges[index];
+  auto evaluation =
+      EvaluateBoundBoundaryPathEdge(model, edge, fraction, tolerance);
+  if (!evaluation.ok()) return Output::Err(evaluation.error());
+  return Output::Ok({index, fraction, edge.use, edge.source.face,
+                     edge.source.surface, edge.source.curve,
+                     std::move(evaluation).value()});
+}
 Result<std::vector<BoundBoundaryPath>> BindBoundaryPathsGeometry(
     const Model& model, std::span<const ShellBoundaryGroup> groups,
     std::span<const FaceTrimming> faces, double tolerance,

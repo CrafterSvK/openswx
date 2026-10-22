@@ -2372,6 +2372,58 @@ eight explicit fin intervals. All nine boundary paths and 30 directed edge
 records match the source topology, intervals and solver profiles. Private
 inputs, scripts and generated reports remain outside the repository.
 
+## Evaluating complete boundary paths
+
+`EvaluateBoundBoundaryPath(model, path, parameter, tolerance, options)` evaluates
+a previously bound path with one parameter unit per edge. For `N` edges the
+domain is `[0, N]`: parameter `i + f` selects edge `i` at local fraction `f`.
+Physical spacing follows each source curve's parameterization.
+
+`BoundaryPathEvaluation` returns the selected `edge_index`, `edge_fraction`,
+source path use, face/surface/curve IDs, and `geometry` containing the point,
+path tangent and source UV mapping. The curve tangent is `dP/d(parameter)`;
+within an edge it retains the directed single-edge fraction derivative. The
+query does not blend tangents or UV coordinates from adjacent edges.
+
+At an interior integer parameter, `BoundaryPathJoinSide::kIncoming` selects
+the previous edge's end; `kOutgoing` selects the next edge's start and is the
+default. This lets callers inspect distinct corner tangents and surface charts
+at the same join. Exact endpoints always select the first edge at zero or the
+last edge at one, including for cycles. Values immediately before/after a join
+remain on their respective edges; the geometry tolerance does not snap the
+path parameter to a join.
+
+```cpp
+openparasolid::BoundaryPathEvaluationOptions options;
+options.join_side = openparasolid::BoundaryPathJoinSide::kIncoming;
+auto value = openparasolid::EvaluateBoundBoundaryPath(
+    model, path, 1.0, tolerance, options);
+if (!value.ok()) return value.error();
+// value.value().geometry contains the selected side's curve point and UVs.
+```
+
+The query selects one edge with constant work and reuses
+`EvaluateBoundBoundaryPathEdge`, including reversed intervals and owned
+intersection solver settings. It does not revalidate complete path incidence,
+joins, smoothness or whole-curve membership. Use the matching model and a
+previously bound path.
+
+`BoundaryPathEvaluationOptions::max_edges` is a positive size budget, default
+100,000. Exceeding it returns `kResourceLimit`; counts beyond the exact integer
+range of `double` are also rejected. Empty paths, invalid join sides, nonfinite
+or out-of-domain parameters, invalid kinds and negative/nonfinite tolerances
+return `kInvalidOptions`. Branched paths remain unsupported, and selected
+source evaluation errors retain their original code and message. Path
+selection uses constant scratch storage and requires no recursion or curve
+fitting. This C++ API adds no CLI options or dependencies.
+
+Tests cover incoming/outgoing corner tangents, path interiors, cycle endpoints,
+near-join values, metadata, solver profiles, invalid domains and exact size
+budgets. Private checks retain all 57 body outcomes and verify 150 whole-path
+samples across nine paths against single-edge evaluation, plus both sides of
+21 inner joins (42 queries). Private inputs and reports remain outside the
+repository.
+
 ## Inspecting validated body topology
 
 ```bash
