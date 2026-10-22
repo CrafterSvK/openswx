@@ -12,7 +12,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Source geometry | STEP representation |
 | --- | --- |
 | LINE, CIRCLE and ELLIPSE wire edges, including supported source trim wrappers | `EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION`, with shared `VERTEX_POINT` and `EDGE_CURVE` instances |
-| Complete clamped open polynomial/rational B_CURVE wire edges with certified endpoint separation | Exact `B_SPLINE_CURVE_WITH_KNOTS` and, for positive homogeneous weights, `RATIONAL_B_SPLINE_CURVE` |
+| Clamped open polynomial/rational B_CURVE wire edges, including certified partial intervals | Exact `B_SPLINE_CURVE_WITH_KNOTS` and, for positive homogeneous weights, `RATIONAL_B_SPLINE_CURVE` |
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
@@ -47,14 +47,27 @@ Natural conic parameters remain radians. Source vertex/edge identities are reuse
 body. Conic intervals longer than one turn are rejected because a single
 `EDGE_CURVE` cannot preserve their turn count.
 
-Open B-spline wire edges support their complete natural domain, in either
-direction, including full-domain source trim wrappers and nonuniform knots.
-Degree, distinct knots, multiplicities and control order remain unchanged.
+Open B-spline wire edges support complete or partial natural domains, in either
+direction, including nested source trim wrappers, explicit caller intervals and
+nonuniform knots. Complete-domain curves retain degree, distinct knots,
+multiplicities and control order unchanged.
 Rational controls contain weighted coordinates: each pole is divided by its
 positive weight, and the weights are serialized separately in the STEP complex
 entity. Polynomial controls are written directly. Three spatial coordinates are
 required; two-dimensional parameter curves are not treated as 3D wire curves.
 The source classification bytes are not assumed to be equivalent STEP enums.
+
+Partial intervals are restricted by homogeneous knot insertion at both selected
+ends. Interior cut knots reach degree multiplicity; cropping the control net and
+adding one endpoint knot clamps each new end. Unselected pieces are removed,
+while the degree, source parameter values and retained interior knots stay in
+the source frame. Positive rational weights are interpolated along with weighted
+coordinates. This is an algebraic restriction of the same B-spline, subject to
+double precision; it does not fit a replacement curve. The resulting endpoints
+must still meet the named source vertices within the caller's length tolerance.
+Distinct selected edges on one basis receive their own restricted curves.
+The reader's trim-sense checks still apply: a descending outer trim on a
+positively sensed inner trim is contradictory and remains rejected.
 
 Both end knots must be clamped with degree-plus-one multiplicity, and the spline
 must be open and nonperiodic. Every interior Cartesian control point must lie
@@ -63,8 +76,11 @@ clearance for source tolerance and coordinate roundoff. The positive-weight
 convex hull property then excludes either endpoint everywhere inside the curve,
 so the STEP edge limits retain the complete selected source interval. This
 conservative certificate can reject valid curves; it does not certify global
-wire simplicity. Every interior control consumes one shared comparison check.
-Partial-domain, closed or periodic splines and B-spline face boundaries remain
+wire simplicity. Every retained interior control consumes one shared comparison
+check. Partial restriction additionally charges one check per original control
+for the source copy and per output control at each knot insertion. Temporary
+control storage retains the reader evaluator's one-million-scalar limit.
+Closed or periodic splines, unclamped source axes and B-spline face boundaries remain
 unsupported. No fitting, resampling or tessellation replaces the source curve.
 
 Body binding validates recorded incidence, directed intervals, finite curve
@@ -472,7 +488,8 @@ each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Convex line/arc contours consume one check per corner.
 Circular containment and hole-pair comparisons consume one check each from the
 same budget. Each open B-spline wire interior control point consumes one
-endpoint separation check. Convex curved-hole envelopes consume one check per edge plus
+endpoint separation check. Partial spline restriction also charges the original
+control count and every insertion's new control count. Convex curved-hole envelopes consume one check per edge plus
 one per convex corner; both original and envelope-augmented mixed-boundary
 validation passes share this budget. Convex curved contours with circular holes consume one additional
 check per circular-hole/outer-edge pair, polygon-vertex/outer-edge pair and
@@ -557,6 +574,12 @@ degree/poles/weights/knots and source parameter values using an independent Cox
 basis recurrence. Adaptive OCCT curve-length integration checks the polynomial
 parabola and exact rational quarter circle against their analytic lengths with
 the existing 1e-9 relative tolerance.
+
+Twelve partial B-spline round trips additionally check cuts inside spans and at
+existing knots, reversed and nested trims, and two independent sections sharing
+one source basis. Imported points are compared against the original uncut
+source's Cox basis, including both selected endpoints and values around retained
+knots. Polynomial and rational arc lengths keep the same analytic tolerance.
 
 The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 53 export successfully, including twenty-three face-bearing

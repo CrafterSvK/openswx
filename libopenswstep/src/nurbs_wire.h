@@ -6,6 +6,13 @@
 #include "step_writer.h"
 
 namespace openswstep::internal {
+// Restricts an open clamped source spline by homogeneous knot insertion.
+// Keeps the source parameter frame and charges the initial source copy and each
+// insertion's new control count to the shared work budget. The source curve is
+// never modified; stored controls remain subject to double-precision rounding.
+[[nodiscard]] Result<openparasolid::NurbsCurveGeometry> RestrictNurbsWire(
+    const openparasolid::NurbsCurveGeometry& curve, double first, double last,
+    uint64_t& checks_remaining);
 // A complete, clamped, open spline has unambiguous STEP edge limits when
 // strict endpoint supporting planes exclude all interior control points.
 // Positive weights then exclude either endpoint everywhere in the interior.

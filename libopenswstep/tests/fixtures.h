@@ -298,6 +298,66 @@ inline ModelFixture SplineWire(bool rational = false, bool multi = false,
   }
   return f;
 }
+inline ModelFixture TrimmedSplineWire(bool rational = false, bool multi = false,
+                                      bool reverse = false, bool nested = false,
+                                      double low = 2.5, double high = 6.) {
+  auto f = SplineWire(rational, multi, reverse, nested);
+  const auto model = ModelBuilder::Build(f.report).value();
+  const auto first = reverse ? high : low, last = reverse ? low : high;
+  const auto a = EvaluateCurve(model, NodeId{4000}, first).value().position;
+  const auto b = EvaluateCurve(model, NodeId{4000}, last).value().position;
+  for (auto& node : f.report.nodes) {
+    if (node.index == 500) node.fields[0].values = {a.x, a.y, a.z};
+    if (node.index == 501) node.fields[0].values = {b.x, b.y, b.z};
+  }
+  f.Add(133, 8005,
+        {Pointer("basis_curve", nested ? 8004 : 4000, 1008),
+         Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+         Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+         Numbers("parm_1", {first}), Numbers("parm_2", {last}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 100, "curve", 8005);
+  return f;
+}
+inline ModelFixture TwoSplineSections(bool rational = false) {
+  auto f = TrimmedSplineWire(rational, true, false, false, 2.25, 3.5);
+  const auto model = ModelBuilder::Build(f.report).value();
+  const auto a = EvaluateCurve(model, NodeId{4000}, 4.5).value().position;
+  const auto b = EvaluateCurve(model, NodeId{4000}, 6.75).value().position;
+  Set(f, 100, "next", 101);
+  Set(f, 201, "next", 202);
+  f.Add(16, 101,
+        {Pointer("owner", 4, 1029), Pointer("previous", 100, 16),
+         Pointer("next", 0, 16), Pointer("halfedge", 1002, 17),
+         Pointer("curve", 8006, 1008)});
+  for (uint32_t id : {1002, 1003})
+    f.Add(
+        17, id,
+        {Pointer("edge", 101, 16),
+         Pointer("vertex", id == 1002 ? 203 : 202, 18),
+         Pointer("other", id == 1002 ? 1003 : 1002, 17), Pointer("loop", 0, 15),
+         Pointer("forward", 0, 17), Pointer("backward", 0, 17),
+         Pointer("curve", 0, 1008), Pointer("next_at_vx", 0, 17),
+         ByteValue("sense", id == 1002 ? '+' : '-', FieldType::kCharacter)});
+  for (uint32_t id : {202, 203}) {
+    f.Add(18, id,
+          {Pointer("owner", 1, 1029),
+           Pointer("halfedge", id == 202 ? 1003 : 1002, 17),
+           Pointer("previous", id - 1, 18),
+           Pointer("next", id == 202 ? 203 : 0, 18),
+           Pointer("point", id + 300, 29)});
+    const auto p = id == 202 ? a : b;
+    f.Add(29, id + 300,
+          {Numbers("position", {p.x, p.y, p.z}, FieldType::kVector)});
+  }
+  f.Add(133, 8006,
+        {Pointer("basis_curve", 4000, 1008),
+         Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+         Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+         Numbers("parm_1", {4.5}), Numbers("parm_2", {6.75}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
 // Groups source faces into one face's ordered loop list, retaining fin/edge
 // identities. The first face in each group supplies the surface and sense.
 inline void MergeFaceLoops(ModelFixture& f,

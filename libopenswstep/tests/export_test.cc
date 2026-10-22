@@ -189,8 +189,177 @@ TEST(OpenSwStep, RejectsUncertifiedSplineWireDomainsAndEndpointAmbiguity) {
     }
   }
   const auto partial_export = Export(wrapped);
-  ASSERT_FALSE(partial_export.ok());
-  EXPECT_EQ(partial_export.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(partial_export.ok()) << partial_export.error().message;
+}
+TEST(OpenSwStep, ExportsRestrictedPolynomialAndRationalSplineWires) {
+  for (bool rational : {false, true})
+    for (bool multi : {false, true})
+      for (bool reverse : {false, true})
+        for (bool nested : {false, true})
+          for (const auto bounds : {std::pair{2., 5.}, std::pair{3., 7.},
+                                    std::pair{3., 5.}, std::pair{2.5, 6.}}) {
+            const auto fixture = test::TrimmedSplineWire(
+                rational, multi, reverse, nested, bounds.first, bounds.second);
+            const auto result = Export(fixture);
+            // The reader requires positive trim senses. A descending outer
+            // trim contradicts its positively sensed inner trim basis.
+            if (nested && reverse) {
+              ASSERT_FALSE(result.ok());
+              EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+              continue;
+            }
+            ASSERT_TRUE(result.ok()) << result.error().message;
+            EXPECT_EQ(result.value().statistics.edges, 1);
+            EXPECT_EQ(result.value().statistics.vertices, 2);
+            EXPECT_EQ(result.value().statistics.faces, 0);
+            CheckReferences(result.value());
+            const auto source = test::Serialize(fixture);
+            const auto binary = ExportParasolid(source.bytes, NodeId{1},
+                                                Options(), &source.catalog);
+            ASSERT_TRUE(binary.ok()) << binary.error().message;
+            EXPECT_EQ(binary.value().text, result.value().text);
+          }
+}
+TEST(OpenSwStep, PreservesSplineSectionsAndDerivativesAcrossKnotSpans) {
+  for (bool rational : {false, true}) {
+    const auto model =
+        ModelBuilder::Build(test::SplineWire(rational, true).report);
+    ASSERT_TRUE(model.ok());
+    const auto spline = std::get<NurbsCurveGeometry>(
+        model.value()
+            .geometry()[*model.value().FindNode(NodeId{4000})->geometry]
+            .payload);
+    for (const auto bounds :
+         {std::pair{2., 5.}, std::pair{3., 7.}, std::pair{3., 5.},
+          std::pair{2.5, 6.}, std::pair{3.5, 4.5}}) {
+      uint64_t checks = 1000;
+      const auto result = internal::RestrictNurbsWire(spline, bounds.first,
+                                                      bounds.second, checks);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      const auto reversed = internal::RestrictNurbsWire(spline, bounds.second,
+                                                        bounds.first, checks);
+      ASSERT_TRUE(reversed.ok());
+      const auto& section = result.value();
+      EXPECT_EQ(section.axis.knots.front(), bounds.first);
+      EXPECT_EQ(section.axis.knots.back(), bounds.second);
+      EXPECT_EQ(section.axis.multiplicities.front(), spline.axis.degree + 1);
+      EXPECT_EQ(section.axis.multiplicities.back(), spline.axis.degree + 1);
+      EXPECT_EQ(section.axis.knots, reversed.value().axis.knots);
+      EXPECT_EQ(section.controls.values, reversed.value().controls.values);
+      EXPECT_EQ(section.controls.rational, rational);
+      for (unsigned i = 0; i <= 100; ++i) {
+        const double t = std::lerp(bounds.first, bounds.second, i / 100.);
+        const auto before = EvaluateCurve(spline, t);
+        const auto after = EvaluateCurve(section, t);
+        ASSERT_TRUE(before.ok());
+        ASSERT_TRUE(after.ok()) << after.error().message;
+        const auto a = before.value(), b = after.value();
+        EXPECT_NEAR(a.position.x, b.position.x, 2e-14);
+        EXPECT_NEAR(a.position.y, b.position.y, 2e-14);
+        EXPECT_NEAR(a.position.z, b.position.z, 2e-14);
+        EXPECT_NEAR(a.first_derivative.x, b.first_derivative.x, 2e-14);
+        EXPECT_NEAR(a.first_derivative.y, b.first_derivative.y, 2e-14);
+        EXPECT_NEAR(a.first_derivative.z, b.first_derivative.z, 2e-14);
+      }
+    }
+  }
+}
+TEST(OpenSwStep, BoundsSplineKnotInsertionBeforePublishingSections) {
+  const auto fixture = test::TrimmedSplineWire();
+  const auto baseline = Export(fixture);
+  ASSERT_TRUE(baseline.ok()) << baseline.error().message;
+  // The initial copy charges 3 controls. Four insertions produce 4+5+6+7;
+  // the retained quadratic section
+  // additionally checks its single interior control against endpoint planes.
+  auto options = Options();
+  options.max_polygon_checks = 26;
+  auto result = Export(fixture, options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().text, baseline.value().text);
+  --options.max_polygon_checks;
+  result = Export(fixture, options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  options.max_polygon_checks = 3;
+  result = Export(fixture, options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RestrictsLinearAndCubicSplineSectionsWithoutResampling) {
+  for (uint32_t degree : {1u, 3u})
+    for (bool rational : {false, true}) {
+      NurbsCurveGeometry curve;
+      curve.axis.degree = degree;
+      curve.axis.control_count = degree == 1 ? 3 : 6;
+      curve.axis.knots = {2, 4, 7};
+      curve.axis.multiplicities = {static_cast<uint16_t>(degree + 1),
+                                   static_cast<uint16_t>(degree == 1 ? 1 : 2),
+                                   static_cast<uint16_t>(degree + 1)};
+      curve.controls.dimension = rational ? 4 : 3;
+      curve.controls.rational = rational;
+      for (uint32_t i = 0; i < curve.axis.control_count; ++i) {
+        const double weight = rational ? 1. + i % 3 : 1.;
+        for (double p : {double(i), double(i % 2), double(i % 3)})
+          curve.controls.values.push_back(p * weight);
+        if (rational) curve.controls.values.push_back(weight);
+      }
+      const auto original_controls = curve.controls.values;
+      for (const auto bounds : {std::pair{2.25, 6.5}, std::pair{2., 4.},
+                                std::pair{4., 7.}, std::pair{3., 3.5}}) {
+        uint64_t remaining = 1000;
+        const auto section = internal::RestrictNurbsWire(
+            curve, bounds.first, bounds.second, remaining);
+        ASSERT_TRUE(section.ok()) << section.error().message;
+        for (unsigned i = 0; i <= 100; ++i) {
+          const auto t = std::lerp(bounds.first, bounds.second, i / 100.);
+          const auto expected = EvaluateCurve(curve, t);
+          const auto actual = EvaluateCurve(section.value(), t);
+          ASSERT_TRUE(expected.ok());
+          ASSERT_TRUE(actual.ok());
+          const auto a = expected.value().position, b = actual.value().position;
+          EXPECT_NEAR(a.x, b.x, 2e-14);
+          EXPECT_NEAR(a.y, b.y, 2e-14);
+          EXPECT_NEAR(a.z, b.z, 2e-14);
+        }
+        EXPECT_EQ(curve.controls.values, original_controls);
+      }
+      uint64_t remaining = 1000;
+      const auto zero = internal::RestrictNurbsWire(curve, 4, 4, remaining);
+      ASSERT_FALSE(zero.ok());
+      EXPECT_EQ(zero.error().code, ErrorCode::kInvalidOptions);
+      const auto outside = internal::RestrictNurbsWire(curve, 1, 6, remaining);
+      ASSERT_FALSE(outside.ok());
+      EXPECT_EQ(outside.error().code, ErrorCode::kInvalidOptions);
+    }
+}
+TEST(OpenSwStep, KeepsDistinctSplineSectionsAndCallerIntervals) {
+  for (bool rational : {false, true}) {
+    const auto sections = Export(test::TwoSplineSections(rational));
+    ASSERT_TRUE(sections.ok()) << sections.error().message;
+    EXPECT_EQ(sections.value().statistics.edges, 2);
+    EXPECT_EQ(sections.value().statistics.vertices, 4);
+    const std::regex splines(rational ? "RATIONAL_B_SPLINE_CURVE\\("
+                                      : "B_SPLINE_CURVE_WITH_KNOTS\\(");
+    EXPECT_EQ(std::distance(
+                  std::sregex_iterator(sections.value().text.begin(),
+                                       sections.value().text.end(), splines),
+                  std::sregex_iterator()),
+              2);
+    CheckReferences(sections.value());
+    auto fixture = test::TrimmedSplineWire(rational, true);
+    const auto original = Export(fixture);
+    ASSERT_TRUE(original.ok());
+    test::Set(fixture, 100, "curve", 4000);
+    auto options = Options();
+    options.wire_intervals = {{NodeId{100}, 2.5, 6.}};
+    const auto explicit_interval = Export(fixture, options);
+    ASSERT_TRUE(explicit_interval.ok()) << explicit_interval.error().message;
+    EXPECT_EQ(original.value().text, explicit_interval.value().text);
+    options.wire_intervals.front().end = 5.5;
+    const auto contradictory = Export(fixture, options);
+    ASSERT_FALSE(contradictory.ok());
+    EXPECT_EQ(contradictory.error().code, ErrorCode::kInvalidRecord);
+  }
 }
 TEST(OpenSwStep, RejectsMalformedSplineWireControlsAndKnots) {
   for (int change = 0; change < 5; ++change) {

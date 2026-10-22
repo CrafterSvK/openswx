@@ -247,19 +247,51 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
   const bool conic =
       std::holds_alternative<CircleGeometry>(basis.value()->payload) ||
       std::holds_alternative<EllipseGeometry>(basis.value()->payload);
+  std::optional<NurbsCurveGeometry> restricted;
   if (const auto* spline =
           std::get_if<NurbsCurveGeometry>(&basis.value()->payload)) {
-    const auto valid = ValidateNurbsWire(
-        *spline, first, last, options_.tolerance, polygon_checks_remaining_);
+    auto section =
+        RestrictNurbsWire(*spline, first, last, polygon_checks_remaining_);
+    if (!section.ok())
+      return Result<Id>::Err(
+          Error(edge, section.error().code, section.error().message.c_str()));
+    restricted = std::move(section).value();
+    const auto valid =
+        ValidateNurbsWire(*restricted, first, last, options_.tolerance,
+                          polygon_checks_remaining_);
     if (!valid.ok())
       return Result<Id>::Err(
           Error(edge, valid.error().code, valid.error().message.c_str()));
+    // Knot insertion is algebraically exact, but its stored doubles must
+    // still meet the actual source vertices' length tolerance after rounding.
+    for (const auto& [vertex, parameter] :
+         {std::pair{start, first}, std::pair{end, last}}) {
+      const auto position = points_.find(vertex.value);
+      if (position == points_.end())
+        return Result<Id>::Err(
+            Error(edge, ErrorCode::kUnsupportedFormat,
+                  "Spline wire endpoints require named source vertices"));
+      const auto sample = EvaluateCurve(*restricted, parameter);
+      if (!sample.ok()) return Result<Id>::Err(sample.error());
+      const auto& p = sample.value().position;
+      const auto& q = position->second;
+      if (std::hypot(static_cast<long double>(p.x) - q.x,
+                     static_cast<long double>(p.y) - q.y,
+                     static_cast<long double>(p.z) - q.z) > options_.tolerance)
+        return Result<Id>::Err(Error(
+            edge, ErrorCode::kUnsupportedFormat,
+            "Restricted spline endpoints exceed source length tolerance"));
+    }
   }
   if (conic && std::abs(last - first) > 2 * std::numbers::pi)
     return Result<Id>::Err(
         Error(edge, ErrorCode::kUnsupportedFormat,
               "Multiple conic turns cannot be represented by one EDGE_CURVE"));
-  const auto geometry = Curve(curve);
+  // A selected spline section belongs to this source edge. Distinct intervals
+  // on one basis must never reuse the other edge's restricted geometry.
+  const auto geometry =
+      restricted ? Result<Id>::Ok(WriteNurbsCurve(writer_, *restricted))
+                 : Curve(curve);
   if (!geometry.ok()) return geometry;
   Id start_id = 0, end_id = 0;
   if (start.value == 0 && end.value == 0) {

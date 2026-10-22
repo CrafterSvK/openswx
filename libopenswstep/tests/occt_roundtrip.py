@@ -23,7 +23,26 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 MINOR_ARC_SEGMENT = 25 / 2 * (2 * math.asin(.2) - math.sin(2 * math.asin(.2)))
+# A quadratic parabola trimmed from u=.1 to .8, and the corresponding source
+# parameter interval on a positive-weight rational quadratic quarter circle.
+TRIMMED_PARABOLA_LENGTH = sum(.5*(x*math.sqrt(1+x*x)+math.asinh(x)) for x in (.8,.6))
+def quarter_circle_angle(u):
+    w = math.sqrt(.5)
+    return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
+TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "spline-polynomial-trimmed": (2,1,0,0,"length",TRIMMED_PARABOLA_LENGTH),
+    "spline-polynomial-trimmed-reversed": (2,1,0,0,"length",TRIMMED_PARABOLA_LENGTH),
+    "spline-rational-trimmed": (2,1,0,0,"length",TRIMMED_CIRCLE_LENGTH),
+    "spline-rational-trimmed-nested": (2,1,0,0,"length",TRIMMED_CIRCLE_LENGTH),
+    "spline-polynomial-multi-trimmed": (2,1,0,0,None,None),
+    "spline-rational-multi-trimmed": (2,1,0,0,None,None),
+    "spline-rational-multi-trimmed-reversed": (2,1,0,0,None,None),
+    "spline-rational-multi-trimmed-nested": (2,1,0,0,None,None),
+    "spline-polynomial-multi-trimmed-knots": (2,1,0,0,None,None),
+    "spline-rational-multi-trimmed-knots": (2,1,0,0,None,None),
+    "spline-polynomial-multi-trimmed-pair": (4,2,0,0,None,None),
+    "spline-rational-multi-trimmed-pair": (4,2,0,0,None,None),
     "spline-polynomial": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
     "spline-polynomial-reversed": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
     "spline-polynomial-wrapped": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
@@ -312,22 +331,6 @@ def check_source_spline(name, shape):
         knots, multiplicities = [2,7], [3,3]
     if "translated" in name:
         poles = [(y+10,z-20,x+30) for x,y,z in poles]
-    edges = TopTools_IndexedMapOfShape()
-    TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
-    curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(1)))
-    assert curve.GetType() == GeomAbs_BSplineCurve, name
-    spline = curve.BSpline()
-    assert spline.Degree() == 2 and spline.NbPoles() == len(poles), name
-    assert spline.NbKnots() == len(knots) and spline.IsRational() == rational, name
-    assert not spline.IsPeriodic() and not spline.IsClosed(), name
-    assert curve.FirstParameter() == 2 and curve.LastParameter() == 7, name
-    for i, (knot, count) in enumerate(zip(knots, multiplicities), 1):
-        assert spline.Knot(i) == knot and spline.Multiplicity(i) == count, name
-    for i, (pole, weight) in enumerate(zip(poles, weights), 1):
-        actual = spline.Pole(i)
-        assert math.isclose(spline.Weight(i), weight, rel_tol=1e-14), name
-        assert max(abs(a-b) for a,b in zip((actual.X(), actual.Y(), actual.Z()), pole)) < 1e-13, name
-
     expanded = [k for k,m in zip(knots,multiplicities) for _ in range(m)]
     # Cox basis recurrence is independent of the reader's homogeneous de Boor
     # evaluator. Include interior knots and values on both adjacent spans.
@@ -338,11 +341,42 @@ def check_source_spline(name, shape):
         right = expanded[i+degree+1] - expanded[i+1]
         return ((t-expanded[i])/left*basis(i, degree-1, t) if left else 0) + ((expanded[i+degree+1]-t)/right*basis(i+1, degree-1, t) if right else 0)
 
-    for t in (2,2.25,2.99,3,3.01,4.5,4.99,5,5.01,6.75):
-        coefficients = [basis(i, 2, t)*w for i,w in enumerate(weights)]
-        expected = [sum(c*p[axis] for c,p in zip(coefficients, poles))/sum(coefficients) for axis in range(3)]
-        actual = curve.Value(t)
-        assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),expected)) < 1e-12, (name,t)
+    trimmed = "trimmed" in name
+    intervals = [(2,7)]
+    if trimmed:
+        intervals = [(3,5)] if "knots" in name else [(2.5,6)]
+        if "pair" in name:
+            intervals = [(2.25,3.5), (4.5,6.75)]
+    edges = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
+    observed = []
+    for index in range(1, edges.Extent()+1):
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(index)))
+        assert curve.GetType() == GeomAbs_BSplineCurve, name
+        spline = curve.BSpline()
+        low, high = curve.FirstParameter(), curve.LastParameter()
+        observed.append((low,high))
+        assert (low,high) in intervals, (name,low,high)
+        kept_knots = [low]+[k for k in knots if low < k < high]+[high]
+        kept_counts = [3]+[m for k,m in zip(knots,multiplicities) if low < k < high]+[3]
+        assert spline.Degree() == 2 and spline.NbPoles() == sum(kept_counts)-3, name
+        assert spline.NbKnots() == len(kept_knots) and spline.IsRational() == rational, name
+        assert not spline.IsPeriodic() and not spline.IsClosed(), name
+        for i, (knot, count) in enumerate(zip(kept_knots, kept_counts), 1):
+            assert spline.Knot(i) == knot and spline.Multiplicity(i) == count, name
+        if not trimmed:
+            for i, (pole, weight) in enumerate(zip(poles, weights), 1):
+                actual = spline.Pole(i)
+                assert math.isclose(spline.Weight(i), weight, rel_tol=1e-14), name
+                assert max(abs(a-b) for a,b in zip((actual.X(), actual.Y(), actual.Z()), pole)) < 1e-13, name
+        samples = {low+(high-low)*i/40 for i in range(41)}
+        samples.update(t for t in (2.99,3,3.01,4.99,5,5.01) if low <= t <= high)
+        for t in sorted(samples):
+            coefficients = [basis(i, 2, t)*w for i,w in enumerate(weights)]
+            expected = poles[-1] if t == 7 else [sum(c*p[axis] for c,p in zip(coefficients, poles))/sum(coefficients) for axis in range(3)]
+            actual = curve.Value(t)
+            assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),expected)) < 1e-12, (name,t)
+    assert sorted(observed) == sorted(intervals), (name,observed)
 
 with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
     subprocess.run([sys.argv[1], directory], check=True)
@@ -392,6 +426,6 @@ with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
                 edges = TopTools_IndexedMapOfShape()
                 TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
                 curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(1)))
-                actual = GCPnts_AbscissaPoint.Length_s(curve, 2., 7., 1e-12)
+                actual = GCPnts_AbscissaPoint.Length_s(curve, curve.FirstParameter(), curve.LastParameter(), 1e-12)
             assert math.isclose(actual, target, rel_tol=IMPORTED_PCURVE_REL_TOL.get(name, 1e-9), abs_tol=1e-12), (name, actual, target)
         print(name, "valid, topology and measures verified")
