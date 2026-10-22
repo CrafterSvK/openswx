@@ -760,6 +760,7 @@ Result<FaceTrimming> BindFaceTrimming(
       if (!uv.ok()) return Result<FaceTrimming>::Err(uv.error());
       out.isolated_vertex = uv.value();
     }
+    std::optional<Vector3> first_position, previous_end;
     for (const auto& use : loop.fins) {
       auto found = parameters.find(use.fin.value);
       if (found == parameters.end())
@@ -794,6 +795,15 @@ Result<FaceTrimming> BindFaceTrimming(
       for (double fraction : {0., 0.5, 1.}) {
         auto sample = EvaluateBoundFin(model, fin, fraction, tolerance);
         if (!sample.ok()) return Result<FaceTrimming>::Err(sample.error());
+        const auto& position = sample.value().curve.position;
+        if (fraction == 0) {
+          if (previous_end && Distance(*previous_end, position) > tolerance)
+            return Result<FaceTrimming>::Err(
+                Error("Fin endpoints do not join within face loop tolerance"));
+          if (!first_position) first_position = position;
+        } else if (fraction == 1) {
+          previous_end = position;
+        }
         const NodeId vertex = fraction == 0   ? use.start_vertex
                               : fraction == 1 ? use.end_vertex
                                               : NodeId{};
@@ -809,6 +819,10 @@ Result<FaceTrimming> BindFaceTrimming(
       out.fins.push_back(fin);
       parameters.erase(found);
     }
+    if (first_position && previous_end &&
+        Distance(*previous_end, *first_position) > tolerance)
+      return Result<FaceTrimming>::Err(
+          Error("Face loop does not close within tolerance"));
     result.loops.push_back(std::move(out));
   }
   if (!parameters.empty())

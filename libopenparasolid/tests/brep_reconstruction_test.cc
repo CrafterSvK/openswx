@@ -1549,6 +1549,67 @@ TEST(ParasolidFaceBinding, VertexFreeTrimMustCloseWithinCallerTolerance) {
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
 }
+TEST(ParasolidFaceBinding, ExplicitVertexFreeSingleFinLoopsMustClose) {
+  const auto f = ClosedTrimFace(true, false);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const double start = -.25, end = start + 2 * std::numbers::pi;
+  std::vector<FinParameterInterval> intervals{{NodeId{10}, start, end},
+                                              {NodeId{11}, end, start}};
+  ASSERT_TRUE(
+      BindFaceTrimming(model.value(), NodeId{30}, intervals, 1e-12).ok());
+  intervals[0].end = start + std::numbers::pi;
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, intervals, 1e-12);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_EQ(result.error().message,
+            "Face loop does not close within tolerance");
+  EXPECT_FALSE(
+      BindFaceTrimmingWithOverrides(model.value(), NodeId{30}, intervals, 1e-12)
+          .ok());
+}
+TEST(ParasolidFaceBinding, AdjacentFinsMustJoinEvenWhenEachMatchesItsVertex) {
+  auto f = Face();
+  // Each fin is within 0.75 of the recorded vertex; the two curves are 1.5
+  // apart. Endpoint-to-vertex checks alone would accept both with tolerance 1.
+  for (auto& node : f.report.nodes)
+    if (node.index == 200 || node.index == 201) node.fields[0].values[1] = .75;
+  f.Add(30, 401,
+        {Numbers("origin", {0, 1.5, 0}, FieldType::kVector),
+         Numbers("direction", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 10, "curve", 400);
+  Set(f, 11, "curve", 401);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval intervals[]{{NodeId{10}, 0, 1},
+                                         {NodeId{11}, 1, 0}};
+  const auto result = BindFaceTrimming(model.value(), NodeId{30}, intervals, 1);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_EQ(result.error().message,
+            "Fin endpoints do not join within face loop tolerance");
+  // At tolerance 0.75 automatic endpoint correspondence remains unambiguous.
+  EXPECT_FALSE(BindFaceTrimming(model.value(), NodeId{30}, .75).ok());
+  EXPECT_TRUE(BindFaceTrimming(model.value(), NodeId{30}, intervals, 1.5).ok());
+}
+TEST(ParasolidFaceBinding,
+     ClosingPairUsesCallerToleranceWithoutAccumulatingIt) {
+  const auto f = Face();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  // The internal pair meets at 1. The closing pair has a gap of 0.75,
+  // although each endpoint separately lies within 0.375 of vertex 100.
+  const FinParameterInterval intervals[]{{NodeId{10}, -.375, 1},
+                                         {NodeId{11}, 1, .375}};
+  const auto result =
+      BindFaceTrimming(model.value(), NodeId{30}, intervals, .5);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().message,
+            "Face loop does not close within tolerance");
+  EXPECT_TRUE(BindFaceTrimming(model.value(), NodeId{30}, intervals, .75).ok());
+}
 TEST(ParasolidFaceBinding,
      RejectsMissingDuplicateWrongDirectionAndSurfaceIntervals) {
   const auto f = Face();

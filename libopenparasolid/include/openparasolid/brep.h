@@ -63,7 +63,10 @@ struct FinGeometryEvaluation {
 // Builds a source-order exact boundary representation, without tessellation.
 // Requires exactly one directed interval per non-isolated fin. Endpoints are
 // checked against vertex points; endpoints and midpoint against the surface.
-// These finite checks are not a proof of membership for every parameter.
+// Consecutive fin endpoints and the last/first pair must also join in 3D
+// within tolerance, including vertex-free single-fin loops. UV seam coordinates
+// need not coincide. These finite checks do not certify interior membership,
+// loop simplicity, hole orientation or global solid validity.
 // Optional intersection settings enable the existing bounded local solver,
 // including through trims. Settings are validated even for empty boundaries
 // and copied into each fin; omission preserves unsupported intersections.

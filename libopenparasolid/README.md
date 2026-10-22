@@ -1951,6 +1951,31 @@ For the standard-library-only target, add
 `-DOPENPARASOLID_BUILD_TOOLS=OFF`. Standalone tests require an installed
 GoogleTest package; the top-level build supplies its existing GoogleTest target.
 
+## Geometric closure of face loops
+
+All `BindFaceTrimming` overloads now check consecutive directed fin endpoints
+and the last/first endpoint pair in source 3D coordinates. Each gap must be no
+larger than the caller's binding tolerance. This also applies to vertex-free
+single-fin loops and to partial overrides; body face and combined geometry
+binding inherit these checks. A gap returns `kInvalidRecord` and no partial
+face/body binding is returned.
+
+Checks reuse the existing endpoint samples with constant scratch storage per
+loop; they add no curve evaluations, search or tolerance defaults. Matching
+each endpoint to the same recorded vertex is insufficient: the endpoints may
+each satisfy the vertex tolerance while their mutual gap exceeds it. The
+joining tolerance is checked directly and is not doubled or accumulated.
+Isolated-vertex loops retain their existing surface check. Closure is checked
+in 3D, so periodic surface coordinates do not need to match across a UV seam.
+This verifies endpoint continuity only; it does not establish loop simplicity,
+hole orientation, complete surface membership or a globally valid solid.
+
+Tests cover open vertex-free single-fin loops, gaps between otherwise valid
+vertex-matching fins, and a gap only at the final closing pair, including the
+inclusive tolerance boundary. The private 57-body selection retains its 56
+automatic successes and the remaining success with eight caller-selected fin
+intervals. All private inputs and reports remain outside the repository.
+
 ## Inspecting bound body geometry
 
 The inspector exposes automatic combined body binding with a positive source
