@@ -20,6 +20,12 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 CASES = {
     "tetra": (4, 6, 4, 1, "volume", 1 / 6),
     "cube": (8, 12, 6, 1, "volume", 1),
+    "perforated-sheet": (8, 8, 1, 0, "area", 12),
+    "hole-first-sheet": (8, 8, 1, 0, "area", 12),
+    "two-hole-sheet": (12, 12, 1, 0, "area", 21),
+    "perforated-prism": (16, 24, 10, 1, "volume", 12),
+    "negative-hole-sheet": (8, 8, 1, 0, "area", 12),
+    "oblique-hole-sheet": (8, 8, 1, 0, "area", 12),
     "square": (4, 4, 1, 0, "area", 1),
     "concave": (5, 5, 1, 0, "area", 3),
     "line": (2, 1, 0, 0, "length", 2),

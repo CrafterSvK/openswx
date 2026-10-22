@@ -261,6 +261,126 @@ TEST(OpenSwStep, RejectsGeneralBodiesAndUnsupportedFaces) {
          test::ByteValue("sense", '+', FieldType::kCharacter)});
   EXPECT_FALSE(Export(f).ok());
 }
+TEST(OpenSwStep, ExportsPolygonHolesWithoutAssumingSourceLoopOrder) {
+  for (const bool hole_first : {false, true}) {
+    const auto result = Export(test::PerforatedSheet(hole_first));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.vertices, 8);
+    EXPECT_EQ(result.value().statistics.edges, 8);
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    EXPECT_EQ(result.value().statistics.solids, 0);
+    const auto& text = result.value().text;
+    const auto outer = text.find("=FACE_OUTER_BOUND(");
+    const auto inner = text.find("=FACE_BOUND(");
+    ASSERT_NE(outer, std::string::npos);
+    ASSERT_NE(inner, std::string::npos);
+    EXPECT_EQ(inner < outer, hole_first);
+    CheckReferences(result.value());
+  }
+  const auto multiple = Export(test::TwoHoleSheet());
+  ASSERT_TRUE(multiple.ok()) << multiple.error().message;
+  EXPECT_EQ(multiple.value().statistics.edges, 12);
+  CheckReferences(multiple.value());
+}
+TEST(OpenSwStep, PreservesThroughHolesInClosedPlanarSolids) {
+  const auto result = Export(test::PerforatedPrism());
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.vertices, 16);
+  EXPECT_EQ(result.value().statistics.edges, 24);
+  EXPECT_EQ(result.value().statistics.faces, 10);
+  EXPECT_EQ(result.value().statistics.solids, 1);
+  EXPECT_NE(result.value().text.find("=FACE_BOUND("), std::string::npos);
+  CheckReferences(result.value());
+}
+TEST(OpenSwStep, ChecksHoleContainmentWindingNestingAndIntersections) {
+  const std::vector<Vector3> outer{{0, 0, 0}, {4, 0, 0}, {4, 4, 0}, {0, 4, 0}};
+  for (const auto& hole : std::vector<std::vector<Vector3>>{
+           {{5, 1, 0}, {5, 2, 0}, {6, 2, 0}, {6, 1, 0}},  // outside
+           {{3, 1, 0},
+            {3, 2, 0},
+            {5, 2, 0},
+            {5, 1, 0}},  // crosses outer boundary
+           {{0, 1, 0}, {0, 2, 0}, {1, 2, 0}, {1, 1, 0}},  // touches outer edge
+           {{1, 1, 0}, {3, 1, 0}, {3, 3, 0}, {1, 3, 0}},  // wrong winding
+           {{-1, -1, 0},
+            {-1, 5, 0},
+            {5, 5, 0},
+            {5, -1, 0}}}) {  // surrounds outer
+    auto points = outer;
+    points.insert(points.end(), hole.begin(), hole.end());
+    const auto result =
+        Export(test::PlanarFace(points, {{0, 1, 2, 3}, {4, 5, 6, 7}}));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(result.error().offset, 0);
+  }
+  for (const auto& second :
+       std::vector<std::vector<Vector3>>{{{1.5, 1.5, 0},
+                                          {1.5, 2.5, 0},
+                                          {2.5, 2.5, 0},
+                                          {2.5, 1.5, 0}},  // nested
+                                         {{2, 2, 0},
+                                          {2, 3.5, 0},
+                                          {3.5, 3.5, 0},
+                                          {3.5, 2, 0}},  // crossing holes
+                                         {{3, 1, 0},
+                                          {3, 2, 0},
+                                          {3.5, 2, 0},
+                                          {3.5, 1, 0}}}) {  // touching holes
+    auto points = outer;
+    const std::vector<Vector3> first{
+        {1, 1, 0}, {1, 3, 0}, {3, 3, 0}, {3, 1, 0}};
+    points.insert(points.end(), first.begin(), first.end());
+    points.insert(points.end(), second.begin(), second.end());
+    const auto result = Export(
+        test::PlanarFace(points, {{0, 1, 2, 3}, {4, 5, 6, 7}, {8, 9, 10, 11}}));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+}
+TEST(OpenSwStep, BoundsHoleComparisonsAndContainmentTogether) {
+  auto options = Options();
+  options.max_polygon_checks = 24;
+  const auto exact = Export(test::PerforatedSheet(true), options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  options.max_polygon_checks = 23;
+  const auto limited = Export(test::PerforatedSheet(true), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsToleranceAmbiguousHoleGaps) {
+  for (const auto gap : {1e-9, 1e-5}) {
+    const auto f = test::PlanarFace({{0, 0, 0},
+                                     {4, 0, 0},
+                                     {4, 4, 0},
+                                     {0, 4, 0},
+                                     {gap, 1, 0},
+                                     {gap, 2, 0},
+                                     {1, 2, 0},
+                                     {1, 1, 0}},
+                                    {{0, 1, 2, 3}, {4, 5, 6, 7}});
+    const auto result = Export(f);
+    EXPECT_EQ(result.ok(), gap > Options().tolerance);
+    if (!result.ok()) EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+}
+TEST(OpenSwStep, HandlesHolesWithNegativeSensesAndObliqueTranslatedPlanes) {
+  for (const auto& f :
+       {test::NegativePerforatedSheet(), test::ObliquePerforatedSheet()}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.edges, 8);
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, ParsesHoleLoopsThroughTheBinaryExportEntryPoint) {
+  const auto fixture = test::Serialize(test::PerforatedPrism());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.faces, 10);
+  CheckReferences(result.value());
+}
 class StepFileTest : public testing::Test {
  protected:
   std::filesystem::path root;

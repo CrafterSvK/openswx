@@ -42,7 +42,8 @@ struct ExportOptions {
   uint64_t max_entities = 1000000;
   /// Cap on the complete owned Part 21 output, including its header.
   uint64_t max_output_bytes = 128u * 1024u * 1024u;
-  /// Aggregate cap on nonadjacent polygon segment comparisons.
+  /// Aggregate cap on intra/inter-loop segment comparisons and containment
+  /// edge tests across the selected body.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -76,10 +77,12 @@ struct StepDocument {
 
 /// @brief Binds and exports one body in source coordinates, without
 /// tessellation. Supports LINE/CIRCLE/ELLIPSE wire bodies, point-only acorns,
-/// and single-loop planar polygon faces with LINE edges. Sheet orientation is
+/// and planar polygon faces with LINE edges, one outer loop and disjoint,
+/// nonnested hole loops. Source loop order does not determine the outer loop.
+/// Sheet orientation is
 /// propagated across shared edges. Solid export requires one material region
 /// with one closed, connected shell, consistent face-side uses and positive
-/// signed volume. Foreign geometry, tolerant fin curves, holes, isolated face
+/// signed volume. Foreign geometry, tolerant fin curves, isolated face
 /// loops, compound bodies, general bodies and other curve/surface types return
 /// explicit errors. Existing finite membership checks are retained; no global
 /// intersection or full CAD-kernel validity certificate is implied.

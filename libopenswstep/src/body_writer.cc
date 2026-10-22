@@ -9,34 +9,21 @@
 #include <utility>
 #include <vector>
 
+#include "planar_boundary.h"
 #include "step_writer.h"
 
 namespace openswstep::internal {
 namespace {
 using namespace openparasolid;
-struct Point2 {
-  long double x;
-  long double y;
-};
-long double Turn(Point2 a, Point2 b, Point2 c) {
-  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
-}
 Vector3 Difference(Vector3 a, Vector3 b) {
   return {a.x - b.x, a.y - b.y, a.z - b.z};
-}
-long double Dot(Vector3 a, Vector3 b) {
-  return static_cast<long double>(a.x) * b.x +
-         static_cast<long double>(a.y) * b.y +
-         static_cast<long double>(a.z) * b.z;
-}
-Vector3 Cross(Vector3 a, Vector3 b) {
-  return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 struct FaceData {
   const FaceTrimming* source = nullptr;
   const PlaneGeometry* plane = nullptr;
   bool natural_sense = true;
-  std::vector<Vector3> polygon;
+  std::vector<std::vector<Vector3>> polygons;
+  std::size_t outer_loop = 0;
 };
 struct EdgeUse {
   std::size_t face;
@@ -51,7 +38,11 @@ class BodyWriter {
  public:
   BodyWriter(const Model& model, const BodyGeometryBinding& body,
              const ExportOptions& options)
-      : model_(model), body_(body), options_(options), writer_(options) {}
+      : model_(model),
+        body_(body),
+        options_(options),
+        writer_(options),
+        polygon_checks_remaining_(options.max_polygon_checks) {}
   Result<StepDocument> Build();
 
  private:
@@ -63,7 +54,6 @@ class BodyWriter {
                   double first, double last);
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
-  Result<bool> CheckPolygon(const FaceData& face);
   Result<bool> CheckVertexLinks();
   Result<bool> OrientFaces();
   Result<bool> CheckSolid();
@@ -84,7 +74,7 @@ class BodyWriter {
   std::vector<FaceData> faces_;
   std::vector<bool> reversed_;
   std::vector<FaceComponent> components_;
-  uint64_t polygon_checks_ = 0;
+  uint64_t polygon_checks_remaining_;
   bool solid_ = false;
 };
 ParseError BodyWriter::Error(NodeId id, ErrorCode code,
@@ -203,81 +193,11 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
   ++statistics_.edges;
   return Result<Id>::Ok(result);
 }
-Result<bool> BodyWriter::CheckPolygon(const FaceData& face) {
-  const auto& polygon = face.polygon;
-  const auto normal = face.plane->normal;
-  const auto x = face.plane->x_axis;
-  const auto y = Cross(normal, x);
-  std::vector<Point2> points;
-  points.reserve(polygon.size());
-  // Subtract a polygon vertex, not an arbitrary global origin, to retain local
-  // precision when the model has a large translation.
-  const auto origin = polygon.front();
-  for (const auto point : polygon) {
-    const auto residual = Dot(Difference(point, face.plane->origin), normal);
-    if (!std::isfinite(residual) || std::abs(residual) > options_.tolerance)
-      return Result<bool>::Err(
-          Error(face.source->face, ErrorCode::kInvalidRecord,
-                "Polygon vertex is outside the plane tolerance"));
-    const auto delta = Difference(point, origin);
-    points.push_back({Dot(delta, x), Dot(delta, y)});
-  }
-  long double area = 0, perimeter = 0;
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    const auto a = points[i], b = points[(i + 1) % points.size()];
-    const auto length = std::hypot(b.x - a.x, b.y - a.y);
-    if (length <= options_.tolerance)
-      return Result<bool>::Err(
-          Error(face.source->face, ErrorCode::kInvalidRecord,
-                "Polygon edge is degenerate at the export tolerance"));
-    area += a.x * b.y - a.y * b.x;
-    perimeter += length;
-  }
-  if (!std::isfinite(area) ||
-      std::abs(area) <= options_.tolerance * perimeter ||
-      (area > 0) != face.natural_sense)
-    return Result<bool>::Err(Error(face.source->face, ErrorCode::kInvalidRecord,
-                                   "Polygon area is degenerate or disagrees "
-                                   "with the recorded face normal"));
-  for (std::size_t i = 0; i < points.size(); ++i) {
-    const auto a = points[i], b = points[(i + 1) % points.size()];
-    for (std::size_t j = i + 1; j < points.size(); ++j) {
-      if (j == i + 1 || (i == 0 && j + 1 == points.size())) continue;
-      if (polygon_checks_ >= options_.max_polygon_checks)
-        return Result<bool>::Err(Error(face.source->face,
-                                       ErrorCode::kResourceLimit,
-                                       "Polygon comparison limit exceeded"));
-      ++polygon_checks_;
-      const auto c = points[j], d = points[(j + 1) % points.size()];
-      const auto tolerance = static_cast<long double>(options_.tolerance);
-      if (std::max(a.x, b.x) + tolerance < std::min(c.x, d.x) ||
-          std::max(c.x, d.x) + tolerance < std::min(a.x, b.x) ||
-          std::max(a.y, b.y) + tolerance < std::min(c.y, d.y) ||
-          std::max(c.y, d.y) + tolerance < std::min(a.y, b.y))
-        continue;
-      const auto epsilon =
-          tolerance * std::max(std::hypot(b.x - a.x, b.y - a.y),
-                               std::hypot(d.x - c.x, d.y - c.y));
-      const auto ab_c = Turn(a, b, c), ab_d = Turn(a, b, d),
-                 cd_a = Turn(c, d, a), cd_b = Turn(c, d, b);
-      const auto opposite = [epsilon](long double u, long double v) {
-        return !(u > epsilon && v > epsilon) && !(u < -epsilon && v < -epsilon);
-      };
-      if (opposite(ab_c, ab_d) && opposite(cd_a, cd_b))
-        return Result<bool>::Err(Error(
-            face.source->face, ErrorCode::kInvalidRecord,
-            "Polygon has crossing or tolerance-ambiguous nonadjacent edges"));
-    }
-  }
-  return Result<bool>::Ok(true);
-}
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
-    if (source.loops.size() != 1 || source.loops.front().isolated_vertex ||
-        source.loops.front().fins.size() < 3)
+    if (source.loops.empty())
       return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
-                                     "Planar export requires one polygon loop "
-                                     "with at least three line edges"));
+                                     "Planar face has no boundary loops"));
     const auto surface = Geometry(source.surface);
     if (!surface.ok()) return Result<bool>::Err(surface.error());
     const auto* plane = std::get_if<PlaneGeometry>(&surface.value()->payload);
@@ -293,34 +213,47 @@ Result<bool> BodyWriter::PrepareFaces() {
                                      "Face and surface senses must be known"));
     FaceData face{
         &source, plane, source.face_sense == surface.value()->sense, {}};
-    std::set<uint32_t> vertices;
-    for (const auto& fin : source.loops.front().fins) {
-      if (fin.use.fin_curve.value != 0)
+    for (const auto& loop : source.loops) {
+      if (loop.isolated_vertex || loop.fins.size() < 3)
         return Result<bool>::Err(
-            Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
-                  "Tolerant fin curves need an explicit STEP pcurve mapping"));
-      const auto curve = Basis(fin.curve);
-      if (!curve.ok()) return Result<bool>::Err(curve.error());
-      if (!std::holds_alternative<LineGeometry>(curve.value()->payload))
-        return Result<bool>::Err(
-            Error(fin.use.edge, ErrorCode::kUnsupportedFormat,
-                  "Planar polygon faces require LINE edge bases"));
-      if (!fin.use.start_vertex.value ||
-          !vertices.insert(fin.use.start_vertex.value).second)
-        return Result<bool>::Err(
-            Error(source.face, ErrorCode::kInvalidRecord,
-                  "Polygon vertices must be distinct and non-null"));
-      const auto point = points_.find(fin.use.start_vertex.value);
-      if (point == points_.end())
-        return Result<bool>::Err(Error(fin.use.start_vertex,
-                                       ErrorCode::kInvalidRecord,
-                                       "Bound vertex point is unavailable"));
-      face.polygon.push_back(point->second);
-      uses_[fin.use.edge.value].push_back(
-          {faces_.size(), fin.use.sense == TopologySense::kForward});
+            Error(source.face, ErrorCode::kUnsupportedFormat,
+                  "Planar polygon loops require at least three line edges"));
+      std::set<uint32_t> vertices;
+      std::vector<Vector3> polygon;
+      for (const auto& fin : loop.fins) {
+        if (fin.use.fin_curve.value != 0)
+          return Result<bool>::Err(Error(
+              fin.use.fin, ErrorCode::kUnsupportedFormat,
+              "Tolerant fin curves need an explicit STEP pcurve mapping"));
+        const auto curve = Basis(fin.curve);
+        if (!curve.ok()) return Result<bool>::Err(curve.error());
+        if (!std::holds_alternative<LineGeometry>(curve.value()->payload))
+          return Result<bool>::Err(
+              Error(fin.use.edge, ErrorCode::kUnsupportedFormat,
+                    "Planar polygon faces require LINE edge bases"));
+        if (!fin.use.start_vertex.value ||
+            !vertices.insert(fin.use.start_vertex.value).second)
+          return Result<bool>::Err(
+              Error(source.face, ErrorCode::kInvalidRecord,
+                    "Polygon vertices must be distinct and non-null"));
+        const auto point = points_.find(fin.use.start_vertex.value);
+        if (point == points_.end())
+          return Result<bool>::Err(Error(fin.use.start_vertex,
+                                         ErrorCode::kInvalidRecord,
+                                         "Bound vertex point is unavailable"));
+        polygon.push_back(point->second);
+        uses_[fin.use.edge.value].push_back(
+            {faces_.size(), fin.use.sense == TopologySense::kForward});
+      }
+      face.polygons.push_back(std::move(polygon));
     }
-    const auto polygon = CheckPolygon(face);
-    if (!polygon.ok()) return polygon;
+    const auto boundary =
+        ValidatePlanarLoops(face.polygons, *plane, face.natural_sense,
+                            options_.tolerance, polygon_checks_remaining_);
+    if (!boundary.ok())
+      return Result<bool>::Err(Error(source.face, boundary.error().code,
+                                     boundary.error().message.c_str()));
+    face.outer_loop = boundary.value();
     faces_.push_back(std::move(face));
   }
   return Result<bool>::Ok(true);
@@ -331,14 +264,16 @@ Result<bool> BodyWriter::CheckVertexLinks() {
   // Edge valence alone would miss two sheets/shells pinched at a vertex.
   std::map<uint32_t, std::map<uint32_t, std::vector<uint32_t>>> links;
   for (const auto& face : faces_) {
-    const auto& fins = face.source->loops.front().fins;
-    for (std::size_t i = 0; i < fins.size(); ++i) {
-      const auto incoming =
-          fins[(i + fins.size() - 1) % fins.size()].use.edge.value;
-      const auto outgoing = fins[i].use.edge.value;
-      auto& link = links[fins[i].use.start_vertex.value];
-      link[incoming].push_back(outgoing);
-      link[outgoing].push_back(incoming);
+    for (const auto& loop : face.source->loops) {
+      const auto& fins = loop.fins;
+      for (std::size_t i = 0; i < fins.size(); ++i) {
+        const auto incoming =
+            fins[(i + fins.size() - 1) % fins.size()].use.edge.value;
+        const auto outgoing = fins[i].use.edge.value;
+        auto& link = links[fins[i].use.start_vertex.value];
+        link[incoming].push_back(outgoing);
+        link[outgoing].push_back(incoming);
+      }
     }
   }
   for (const auto& [vertex, link] : links) {
@@ -451,24 +386,26 @@ Result<bool> BodyWriter::CheckSolid() {
     return Result<bool>::Err(
         Error(body_.topology.boundary.body, ErrorCode::kUnsupportedFormat,
               "Solid export requires one connected closed face shell"));
-  const auto origin = faces_.front().polygon.front();
+  const auto origin = faces_.front().polygons.front().front();
   long double volume6 = 0;
   for (std::size_t i = 0; i < faces_.size(); ++i) {
-    const auto& polygon = faces_[i].polygon;
-    const auto a = Difference(polygon.front(), origin);
-    for (std::size_t j = 1; j + 1 < polygon.size(); ++j) {
-      const auto b = Difference(polygon[j], origin),
-                 c = Difference(polygon[j + 1], origin);
-      const long double determinant =
-          static_cast<long double>(a.x) *
-              (static_cast<long double>(b.y) * c.z -
-               static_cast<long double>(b.z) * c.y) +
-          static_cast<long double>(a.y) *
-              (static_cast<long double>(b.z) * c.x -
-               static_cast<long double>(b.x) * c.z) +
-          static_cast<long double>(a.z) * (static_cast<long double>(b.x) * c.y -
-                                           static_cast<long double>(b.y) * c.x);
-      volume6 += reversed_[i] ? -determinant : determinant;
+    for (const auto& polygon : faces_[i].polygons) {
+      const auto a = Difference(polygon.front(), origin);
+      for (std::size_t j = 1; j + 1 < polygon.size(); ++j) {
+        const auto b = Difference(polygon[j], origin),
+                   c = Difference(polygon[j + 1], origin);
+        const long double determinant =
+            static_cast<long double>(a.x) *
+                (static_cast<long double>(b.y) * c.z -
+                 static_cast<long double>(b.z) * c.y) +
+            static_cast<long double>(a.y) *
+                (static_cast<long double>(b.z) * c.x -
+                 static_cast<long double>(b.x) * c.z) +
+            static_cast<long double>(a.z) *
+                (static_cast<long double>(b.x) * c.y -
+                 static_cast<long double>(b.y) * c.x);
+        volume6 += reversed_[i] ? -determinant : determinant;
+      }
     }
   }
   if (!std::isfinite(volume6) || volume6 <= 0)
@@ -479,27 +416,31 @@ Result<bool> BodyWriter::CheckSolid() {
 }
 Result<Id> BodyWriter::Face(std::size_t index) {
   const auto& face = faces_[index];
-  std::vector<Id> uses;
-  for (const auto& fin : face.source->loops.front().fins) {
-    const bool forward = fin.use.sense == TopologySense::kForward;
-    const auto edge =
-        Edge(fin.use.edge, fin.curve,
-             forward ? fin.use.start_vertex : fin.use.end_vertex,
-             forward ? fin.use.end_vertex : fin.use.start_vertex,
-             forward ? fin.start : fin.end, forward ? fin.end : fin.start);
-    if (!edge.ok()) return edge;
-    uses.push_back(writer_.Add("ORIENTED_EDGE('',*,*," +
-                               Reference(edge.value()) + ',' +
-                               Logical(forward) + ')'));
+  std::vector<Id> bounds;
+  for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
+    std::vector<Id> uses;
+    for (const auto& fin : face.source->loops[i].fins) {
+      const bool forward = fin.use.sense == TopologySense::kForward;
+      const auto edge =
+          Edge(fin.use.edge, fin.curve,
+               forward ? fin.use.start_vertex : fin.use.end_vertex,
+               forward ? fin.use.end_vertex : fin.use.start_vertex,
+               forward ? fin.start : fin.end, forward ? fin.end : fin.start);
+      if (!edge.ok()) return edge;
+      uses.push_back(writer_.Add("ORIENTED_EDGE('',*,*," +
+                                 Reference(edge.value()) + ',' +
+                                 Logical(forward) + ')'));
+    }
+    const auto loop = writer_.Add("EDGE_LOOP(''," + References(uses) + ')');
+    bounds.push_back(writer_.Add(
+        std::string(i == face.outer_loop ? "FACE_OUTER_BOUND" : "FACE_BOUND") +
+        "(''," + Reference(loop) + ',' + Logical(!reversed_[index]) + ')'));
   }
-  const auto loop = writer_.Add("EDGE_LOOP(''," + References(uses) + ')');
-  const auto bound = writer_.Add("FACE_OUTER_BOUND(''," + Reference(loop) +
-                                 ',' + Logical(!reversed_[index]) + ')');
   const auto placement = writer_.Placement(
       face.plane->origin, face.plane->normal, face.plane->x_axis);
   const auto plane = writer_.Add("PLANE(''," + Reference(placement) + ')');
   const auto result = writer_.Add(
-      "ADVANCED_FACE('',(" + Reference(bound) + ")," + Reference(plane) + ',' +
+      "ADVANCED_FACE(''," + References(bounds) + "," + Reference(plane) + ',' +
       Logical(face.natural_sense != reversed_[index]) + ')');
   ++statistics_.faces;
   return Result<Id>::Ok(result);

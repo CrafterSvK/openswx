@@ -7,14 +7,14 @@ It uses `libopenswx` for container inspection and extraction, and
 geometry binding. It has no CAD-kernel dependency. The core builds with
 `-fno-exceptions` under GCC/Clang and returns `openparasolid::Result<T>`.
 
-## Supported first iteration
+## Supported geometry
 
 | Source geometry | STEP representation |
 | --- | --- |
 | LINE, CIRCLE and ELLIPSE wire edges, including supported source trim wrappers | `EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION`, with shared `VERTEX_POINT` and `EDGE_CURVE` instances |
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
-| Single-loop planar polygon faces bounded by LINE edges | `ADVANCED_FACE`, `FACE_OUTER_BOUND`, `EDGE_LOOP` and source-oriented edges |
+| Planar polygon faces bounded by LINE edges, including holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Solid bodies with one material region and one connected closed planar shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
@@ -28,21 +28,28 @@ body. Conic intervals longer than one turn are rejected because a single
 
 Body binding validates recorded incidence, directed intervals, finite curve
 membership samples, loop closure and shared-edge endpoints. The exporter also
-checks polygon area/orientation, bounded nonadjacent-segment comparisons,
+checks polygon area/orientation, bounded segment comparisons and containment,
 edge valence and connected vertex links. Sheet orientations propagate across
 shared edges; nonorientable components fail explicitly. For solids, the material
 shell's face sides determine outward orientation, paired edges must agree, and
 signed enclosed volume must be positive. The source's void exterior region is
 not emitted as an additional solid.
 
+Each planar face has exactly one outer loop whose winding agrees with its
+effective source normal. Hole loops have opposite winding and must lie strictly
+inside that outer loop. Source loop order is preserved; the outer loop need not
+come first. Crossings, touching or tolerance-ambiguous edges, nested holes and
+disconnected islands are rejected. Through holes in closed planar solids retain
+their interior walls and subtract from enclosed volume.
+
 These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, curved face boundaries, non-planar surfaces, tolerant fin-specific
-curves/pcurves, face holes, isolated face loops, compounds/assemblies, general
+curves/pcurves, isolated face loops, compounds/assemblies, general
 mixed-dimensional bodies, multiple material regions and solid void shells are
-not supported by this iteration. Unsupported selected geometry fails the entire
+not supported. Unsupported selected geometry fails the entire
 export. No partial document is returned and no part of the selected body is
 silently discarded. Unrelated source geometry is not exported.
 
@@ -91,7 +98,9 @@ unspecified entities retain the source library's automatic inference. Overrides
 do not enable unsupported output geometry or bypass validation.
 
 Positive entity, output byte and polygon comparison budgets bound serialization
-and polygon checks. Parser, model and body-binding budgets remain independently
+and polygon checks. The shared polygon budget counts nonadjacent segments within
+each loop, all segment pairs between loops, and containment edge tests across
+the entire selected body. Parser, model and body-binding budgets remain independently
 configurable in `ExportOptions`. The file adapter checks source file size before
 container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -122,7 +131,8 @@ ctest --test-dir build-step -R 'OpenSwStep|StepFileTest' --output-on-failure
 GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
-and check sharing, ring seams, senses, invalid topology, budget boundaries and
+and check sharing, ring seams, senses, polygon holes, through holes, invalid
+topology, budget boundaries and
 preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -137,15 +147,17 @@ ctest --test-dir build -R openswstep_occt_roundtrip --output-on-failure
 
 It imports generated synthetic STEP documents, runs `BRepCheck_Analyzer`, checks
 unique vertex/edge/face/solid counts and compares volumes, areas and curve
-lengths. OCCT is exclusively a test dependency and is never linked into the
+lengths, including hole areas and through-hole volumes. OCCT is exclusively a test dependency and is never linked into the
 export library. Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
-The initial private regression queries 57 explicitly selected bodies in 39
+The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 35 export successfully, including five face-bearing bodies
 with 44 faces; 30 successes contain only wire/point geometry. All 35 generated
 documents pass OCCT import and B-rep validity checks. The other 22 return
-unsupported-format errors. These are raw body selections, including archival
+unsupported-format errors. Polygon-hole support preserves all 35 previous
+successes; the remaining private samples still require other geometry features.
+These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.
 
 Run `doxygen Doxyfile` from this directory to generate public API HTML at

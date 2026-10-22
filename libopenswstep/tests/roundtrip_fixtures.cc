@@ -16,6 +16,12 @@ int main(int argc, char** argv) {
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{{"tetra", test::Tetrahedron()},
                {"cube", test::Cube()},
+               {"perforated-sheet", test::PerforatedSheet()},
+               {"hole-first-sheet", test::PerforatedSheet(true)},
+               {"two-hole-sheet", test::TwoHoleSheet()},
+               {"perforated-prism", test::PerforatedPrism()},
+               {"negative-hole-sheet", test::NegativePerforatedSheet()},
+               {"oblique-hole-sheet", test::ObliquePerforatedSheet()},
                {"square", test::Square()},
                {"concave",
                 test::Polyhedron(

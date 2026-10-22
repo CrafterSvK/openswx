@@ -236,6 +236,138 @@ inline void RemoveNode(ModelFixture& f, uint32_t id) {
   std::erase_if(f.report.nodes,
                 [id](const auto& node) { return node.index == id; });
 }
+// Groups source faces into one face's ordered loop list, retaining fin/edge
+// identities. The first face in each group supplies the surface and sense.
+inline void MergeFaceLoops(ModelFixture& f,
+                           const std::vector<std::vector<uint32_t>>& groups) {
+  for (const auto& group : groups) {
+    for (std::size_t i = 0; i < group.size(); ++i) {
+      Set(f, 600 + group[i], "face", 300 + group.front());
+      Set(f, 600 + group[i], "next",
+          i + 1 < group.size() ? 600 + group[i + 1] : 0);
+      if (i != 0) {
+        RemoveNode(f, 300 + group[i]);
+        RemoveNode(f, 700 + group[i]);
+      }
+    }
+  }
+  std::vector<uint32_t> faces;
+  for (const auto& node : f.report.nodes)
+    if (node.node_type == 14) faces.push_back(node.index);
+  std::sort(faces.begin(), faces.end());
+  for (std::size_t i = 0; i < faces.size(); ++i) {
+    for (const char* field : {"previous", "previous_front"})
+      Set(f, faces[i], field, i ? faces[i - 1] : 0);
+    for (const char* field : {"next", "next_front"})
+      Set(f, faces[i], field, i + 1 < faces.size() ? faces[i + 1] : 0);
+  }
+}
+inline ModelFixture PlanarFace(const std::vector<Vector3>& points,
+                               const std::vector<std::vector<unsigned>>& loops,
+                               bool hole_first = false) {
+  auto f = Polyhedron(points, loops);
+  std::vector<uint32_t> group;
+  for (std::size_t i = 0; i < loops.size(); ++i)
+    group.push_back(static_cast<uint32_t>(i));
+  MergeFaceLoops(f, {group});
+  for (auto& node : f.report.nodes)
+    if (node.index == 700) {
+      node.fields[0].values = {0., 0., 0.};
+      node.fields[1].values = {0., 0., 1.};
+      node.fields[2].values = {1., 0., 0.};
+    }
+  if (hole_first && loops.size() > 1) {
+    Set(f, 300, "loop", 601);
+    Set(f, 600, "next", loops.size() > 2 ? 602 : 0);
+    Set(f, 601, "next", 600);
+  }
+  return f;
+}
+inline ModelFixture PerforatedSheet(bool hole_first = false) {
+  return PlanarFace({{0, 0, 0},
+                     {4, 0, 0},
+                     {4, 4, 0},
+                     {0, 4, 0},
+                     {1, 1, 0},
+                     {1, 3, 0},
+                     {3, 3, 0},
+                     {3, 1, 0}},
+                    {{0, 1, 2, 3}, {4, 5, 6, 7}}, hole_first);
+}
+inline ModelFixture TwoHoleSheet() {
+  return PlanarFace({{0, 0, 0},
+                     {6, 0, 0},
+                     {6, 4, 0},
+                     {0, 4, 0},
+                     {1, 1, 0},
+                     {1, 2, 0},
+                     {2, 2, 0},
+                     {2, 1, 0},
+                     {3, 1, 0},
+                     {3, 2, 0},
+                     {5, 2, 0},
+                     {5, 1, 0}},
+                    {{0, 1, 2, 3}, {4, 5, 6, 7}, {8, 9, 10, 11}}, true);
+}
+inline ModelFixture PerforatedPrism() {
+  auto f = Polyhedron({{0, 0, 0},
+                       {4, 0, 0},
+                       {4, 4, 0},
+                       {0, 4, 0},
+                       {1, 1, 0},
+                       {3, 1, 0},
+                       {3, 3, 0},
+                       {1, 3, 0},
+                       {0, 0, 1},
+                       {4, 0, 1},
+                       {4, 4, 1},
+                       {0, 4, 1},
+                       {1, 1, 1},
+                       {3, 1, 1},
+                       {3, 3, 1},
+                       {1, 3, 1}},
+                      {{0, 3, 2, 1},
+                       {4, 5, 6, 7},
+                       {8, 9, 10, 11},
+                       {12, 15, 14, 13},
+                       {0, 1, 9, 8},
+                       {1, 2, 10, 9},
+                       {2, 3, 11, 10},
+                       {3, 0, 8, 11},
+                       {4, 12, 13, 5},
+                       {5, 13, 14, 6},
+                       {6, 14, 15, 7},
+                       {7, 15, 12, 4}},
+                      true);
+  MergeFaceLoops(f, {{0, 1}, {2, 3}});
+  return f;
+}
+inline ModelFixture NegativePerforatedSheet() {
+  auto f = PerforatedSheet(true);
+  Set(f, 300, "sense", '-');
+  for (auto& node : f.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  return f;
+}
+inline ModelFixture ObliquePerforatedSheet() {
+  auto f = PerforatedSheet(true);
+  for (auto& node : f.report.nodes) {
+    if (node.node_type != 29 && node.node_type != 30 && node.node_type != 50)
+      continue;
+    const auto& definitions =
+        f.report.schemas[node.schema_index].definition.fields;
+    for (std::size_t i = 0; i < definitions.size(); ++i) {
+      if (definitions[i].type != FieldType::kVector) continue;
+      const auto old = node.fields[i].values;
+      const bool point =
+          definitions[i].name == "position" || definitions[i].name == "origin";
+      node.fields[i].values = {std::get<double>(old[1]) + (point ? 1e6 : 0),
+                               std::get<double>(old[2]) + (point ? -2e6 : 0),
+                               std::get<double>(old[0]) + (point ? 3e6 : 0)};
+    }
+  }
+  return f;
+}
 inline ModelFixture Conic(bool ellipse = false, bool ring = false,
                           bool reverse = false) {
   auto f = Polyhedron({{ellipse ? 2. : 1., 0, 0}, {0, 1, 0}}, {});
