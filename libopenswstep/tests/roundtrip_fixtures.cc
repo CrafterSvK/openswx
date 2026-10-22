@@ -15,6 +15,20 @@ int main(int argc, char** argv) {
   using openparasolid::NodeId;
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
+          {"spline-polynomial", test::SplineWire()},
+          {"spline-polynomial-reversed", test::SplineWire(false, false, true)},
+          {"spline-polynomial-wrapped",
+           test::SplineWire(false, false, false, true)},
+          {"spline-rational", test::SplineWire(true)},
+          {"spline-rational-reversed", test::SplineWire(true, false, true)},
+          {"spline-rational-translated",
+           test::SplineWire(true, false, false, false, true)},
+          {"spline-polynomial-multi", test::SplineWire(false, true)},
+          {"spline-rational-multi", test::SplineWire(true, true)},
+          {"spline-rational-multi-reversed",
+           test::SplineWire(true, true, true, true)},
+          {"spline-rational-multi-translated",
+           test::SplineWire(true, true, false, false, true)},
           {"tetra", test::Tetrahedron()},
           {"stadium", test::Stadium()},
           {"annular-sector", test::AnnularSector()},

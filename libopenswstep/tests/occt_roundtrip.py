@@ -9,10 +9,11 @@ import tempfile
 
 from OCP.BRepCheck import BRepCheck_Analyzer
 from OCP.BRepAdaptor import BRepAdaptor_Curve
-from OCP.GeomAbs import GeomAbs_Circle
+from OCP.GeomAbs import GeomAbs_BSplineCurve, GeomAbs_Circle
 from OCP.TopoDS import TopoDS
 from OCP.BRepGProp import BRepGProp
 from OCP.GProp import GProp_GProps
+from OCP.GCPnts import GCPnts_AbscissaPoint
 from OCP.IFSelect import IFSelect_RetDone
 from OCP.STEPControl import STEPControl_Reader
 from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_SOLID, TopAbs_VERTEX
@@ -23,6 +24,16 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 MINOR_ARC_SEGMENT = 25 / 2 * (2 * math.asin(.2) - math.sin(2 * math.asin(.2)))
 CASES = {
+    "spline-polynomial": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
+    "spline-polynomial-reversed": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
+    "spline-polynomial-wrapped": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
+    "spline-rational": (2,1,0,0,"length",math.pi/2),
+    "spline-rational-reversed": (2,1,0,0,"length",math.pi/2),
+    "spline-rational-translated": (2,1,0,0,"length",math.pi/2),
+    "spline-polynomial-multi": (2,1,0,0,None,None),
+    "spline-rational-multi": (2,1,0,0,None,None),
+    "spline-rational-multi-reversed": (2,1,0,0,None,None),
+    "spline-rational-multi-translated": (2,1,0,0,None,None),
     "closed-tolerant-torus-shifted": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
     "closed-tolerant-torus-shifted-named": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
     "closed-tolerant-torus": (2,3,3,1,"volume",TOROIDAL_SOLID_VOLUME),
@@ -287,6 +298,52 @@ IMPORTED_PCURVE_REL_TOL = {
     "profiled-cylinder-mantle": 5e-6,
 }
 
+def check_source_spline(name, shape):
+    """Check retained basis data and source parameter values independently."""
+    rational = "rational" in name
+    multi = "multi" in name
+    if multi:
+        poles = [(0,0,0), (1,1,0), (2,-1,1), (3,1,1), (4,0,0)]
+        weights = [1,2,1,2,1] if rational else [1]*5
+        knots, multiplicities = [2,3,5,7], [3,1,1,3]
+    else:
+        poles = [(1,0,0), (1,1,0), (0,1,0)] if rational else [(0,0,0), (1,1,0), (2,0,0)]
+        weights = [1,math.sqrt(.5),1] if rational else [1]*3
+        knots, multiplicities = [2,7], [3,3]
+    if "translated" in name:
+        poles = [(y+10,z-20,x+30) for x,y,z in poles]
+    edges = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
+    curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(1)))
+    assert curve.GetType() == GeomAbs_BSplineCurve, name
+    spline = curve.BSpline()
+    assert spline.Degree() == 2 and spline.NbPoles() == len(poles), name
+    assert spline.NbKnots() == len(knots) and spline.IsRational() == rational, name
+    assert not spline.IsPeriodic() and not spline.IsClosed(), name
+    assert curve.FirstParameter() == 2 and curve.LastParameter() == 7, name
+    for i, (knot, count) in enumerate(zip(knots, multiplicities), 1):
+        assert spline.Knot(i) == knot and spline.Multiplicity(i) == count, name
+    for i, (pole, weight) in enumerate(zip(poles, weights), 1):
+        actual = spline.Pole(i)
+        assert math.isclose(spline.Weight(i), weight, rel_tol=1e-14), name
+        assert max(abs(a-b) for a,b in zip((actual.X(), actual.Y(), actual.Z()), pole)) < 1e-13, name
+
+    expanded = [k for k,m in zip(knots,multiplicities) for _ in range(m)]
+    # Cox basis recurrence is independent of the reader's homogeneous de Boor
+    # evaluator. Include interior knots and values on both adjacent spans.
+    def basis(i, degree, t):
+        if degree == 0:
+            return float(expanded[i] <= t < expanded[i+1])
+        left = expanded[i+degree] - expanded[i]
+        right = expanded[i+degree+1] - expanded[i+1]
+        return ((t-expanded[i])/left*basis(i, degree-1, t) if left else 0) + ((expanded[i+degree+1]-t)/right*basis(i+1, degree-1, t) if right else 0)
+
+    for t in (2,2.25,2.99,3,3.01,4.5,4.99,5,5.01,6.75):
+        coefficients = [basis(i, 2, t)*w for i,w in enumerate(weights)]
+        expected = [sum(c*p[axis] for c,p in zip(coefficients, poles))/sum(coefficients) for axis in range(3)]
+        actual = curve.Value(t)
+        assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),expected)) < 1e-12, (name,t)
+
 with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
     subprocess.run([sys.argv[1], directory], check=True)
     for name, expected in CASES.items():
@@ -300,6 +357,8 @@ with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
             topology = TopTools_IndexedMapOfShape()
             TopExp.MapShapes_s(shape, kind, topology)
             assert topology.Extent() == count, (name, kind, topology.Extent(), count)
+        if name.startswith("spline-"):
+            check_source_spline(name, shape)
         if name in SOURCE_TOLERANT_CIRCLE_RADII:
             edges = TopTools_IndexedMapOfShape()
             TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
@@ -326,5 +385,13 @@ with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
                 operation(shape, properties, Eps=1e-12)
             else:
                 operation(shape, properties)
-            assert math.isclose(properties.Mass(), target, rel_tol=IMPORTED_PCURVE_REL_TOL.get(name, 1e-9), abs_tol=1e-12), (name, properties.Mass(), target)
+            actual = properties.Mass()
+            if name.startswith("spline-"):
+                # LinearProperties uses fixed-order quadrature. Adaptive
+                # curve-length integration retains the analytic 1e-9 check.
+                edges = TopTools_IndexedMapOfShape()
+                TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
+                curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(1)))
+                actual = GCPnts_AbscissaPoint.Length_s(curve, 2., 7., 1e-12)
+            assert math.isclose(actual, target, rel_tol=IMPORTED_PCURVE_REL_TOL.get(name, 1e-9), abs_tol=1e-12), (name, actual, target)
         print(name, "valid, topology and measures verified")

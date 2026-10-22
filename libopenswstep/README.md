@@ -12,6 +12,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Source geometry | STEP representation |
 | --- | --- |
 | LINE, CIRCLE and ELLIPSE wire edges, including supported source trim wrappers | `EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION`, with shared `VERTEX_POINT` and `EDGE_CURVE` instances |
+| Complete clamped open polynomial/rational B_CURVE wire edges with certified endpoint separation | Exact `B_SPLINE_CURVE_WITH_KNOTS` and, for positive homogeneous weights, `RATIONAL_B_SPLINE_CURVE` |
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
@@ -45,6 +46,26 @@ Neither mode widens the reader's binding or ordinary boundary checks.
 Natural conic parameters remain radians. Source vertex/edge identities are reused within the exported
 body. Conic intervals longer than one turn are rejected because a single
 `EDGE_CURVE` cannot preserve their turn count.
+
+Open B-spline wire edges support their complete natural domain, in either
+direction, including full-domain source trim wrappers and nonuniform knots.
+Degree, distinct knots, multiplicities and control order remain unchanged.
+Rational controls contain weighted coordinates: each pole is divided by its
+positive weight, and the weights are serialized separately in the STEP complex
+entity. Polynomial controls are written directly. Three spatial coordinates are
+required; two-dimensional parameter curves are not treated as 3D wire curves.
+The source classification bytes are not assumed to be equivalent STEP enums.
+
+Both end knots must be clamped with degree-plus-one multiplicity, and the spline
+must be open and nonperiodic. Every interior Cartesian control point must lie
+strictly between the two supporting planes normal to the endpoint chord, with
+clearance for source tolerance and coordinate roundoff. The positive-weight
+convex hull property then excludes either endpoint everywhere inside the curve,
+so the STEP edge limits retain the complete selected source interval. This
+conservative certificate can reject valid curves; it does not certify global
+wire simplicity. Every interior control consumes one shared comparison check.
+Partial-domain, closed or periodic splines and B-spline face boundaries remain
+unsupported. No fitting, resampling or tessellation replaces the source curve.
 
 Body binding validates recorded incidence, directed intervals, finite curve
 membership samples, loop closure and shared-edge endpoints. The exporter also
@@ -388,7 +409,7 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-General 3D NURBS curves/surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
+NURBS curves outside the open-wire subset and NURBS surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
 uncertified curved-hole envelopes, curved outer contours with curved holes,
 nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
@@ -450,7 +471,8 @@ and polygon checks. The shared polygon budget counts nonadjacent segments within
 each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Convex line/arc contours consume one check per corner.
 Circular containment and hole-pair comparisons consume one check each from the
-same budget. Convex curved-hole envelopes consume one check per edge plus
+same budget. Each open B-spline wire interior control point consumes one
+endpoint separation check. Convex curved-hole envelopes consume one check per edge plus
 one per convex corner; both original and envelope-augmented mixed-boundary
 validation passes share this budget. Convex curved contours with circular holes consume one additional
 check per circular-hole/outer-edge pair, polygon-vertex/outer-edge pair and
@@ -528,6 +550,14 @@ OCCT is exclusively a test dependency and is never linked into the export librar
 Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
+Ten additional B-spline wire round trips cover polynomial/rational Bezier and
+nonuniform multi-span curves, reversed edges, full-domain trim wrappers and
+translated nonplanar controls. They check OCCT validity, topology, retained
+degree/poles/weights/knots and source parameter values using an independent Cox
+basis recurrence. Adaptive OCCT curve-length integration checks the polynomial
+parabola and exact rational quarter circle against their analytic lengths with
+the existing 1e-9 relative tolerance.
+
 The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 53 export successfully, including twenty-three face-bearing
 bodies with 388 faces; 30 successes contain only wire/point geometry. All 53
@@ -563,6 +593,7 @@ Run `doxygen Doxyfile` from this directory to generate public API HTML at
 
 - Siemens *Parasolid XT Format Reference*, July 2022: sections 4.3.3–4.3.10
   (body through vertex), 5.2.1.1–5.2.1.3 (line/circle/ellipse),
+  5.2.1.4 (B_curve, p. 38; degree, knots and homogeneous controls),
   5.2.2.1–5.2.2.3 (plane/cylinder/cone), 5.2.2.5 (torus), 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (curve/surface senses),
   5.2.1.8 (SP_curve, p. 51), 5.3.4.1 (attaching geometry to topology) and
   5.3.11 (Edge, p. 98).

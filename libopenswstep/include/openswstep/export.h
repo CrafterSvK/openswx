@@ -57,7 +57,8 @@ struct ExportOptions {
   /// cut-pair check. Concave minor-arc contours share chord-polygon, join-cone
   /// and nonadjacent envelope checks, including a preceding convex attempt.
   /// Automatic closed tolerant-ring recovery charges both its preflight and
-  /// final Bernstein certificates to this same budget.
+  /// final Bernstein certificates to this same budget. Open B-spline wires
+  /// consume one endpoint separation check per interior control point.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -96,31 +97,39 @@ struct StepDocument {
 };
 
 /// @brief Binds and exports one body in source coordinates, without
-/// tessellation. Supports LINE/CIRCLE/ELLIPSE wire bodies, point-only acorns,
-/// and planar polygon faces with LINE edges, one outer loop and disjoint,
-/// nonnested polygonal and full-circle hole loops. Source loop order does not
-/// determine the outer loop.
-/// Planar faces also support one-edge full CIRCLE/ELLIPSE disks and circular
-/// faces with disjoint polygonal and/or circular holes. Complete CYLINDER/CONE
-/// bands use two coaxial full-circle loops at distinct axial levels and
-/// positive cut radii. CYLINDER/CONE also support a single four-edge loop with
-/// two coaxial circular arcs and two straight LINE generators, spanning less
-/// than one full turn. Generators follow the respective cylinder/cone profile.
-/// Full-azimuth CYLINDER bands also support monotone CIRCLE/ELLIPSE arc
-/// profiles with isolated axial LINE steps. Whole supporting conics must
-/// project onto the cylinder circle; complete profile axial ranges must be
-/// separated by more than two tolerances. Overlapping ranges remain
-/// unsupported. Exact transverse and axial flux terms are retained for solid
-/// patches and variable-height complete cylinder bands. SPHERE faces use one
-/// full latitude circle for a cap or two full coaxial latitude circles for a
-/// band, away from the poles. Winding selects either cap, including caps larger
-/// than a hemisphere. Regular ring TORUS bands use two coaxial full-circle
-/// cuts; winding selects the meridian interval, including its periodic seam and
-/// complementary band. Each complete cut can also comprise monotone arcs on
-/// one supporting circle, retaining the individual source edges. Unbounded
-/// SPUN_SURF circular generators in an axial meridian plane of a regular ring
-/// torus use the equivalent TOROIDAL_SURFACE with corrected normal orientation.
-/// Bounded generators, tilted/skew circle planes and other generators remain
+/// tessellation. Supports LINE/CIRCLE/ELLIPSE wire bodies and complete open
+/// B_CURVE wires with clamped knot axes and three spatial coordinates. Rational
+/// homogeneous controls become Cartesian poles plus positive STEP weights;
+/// degree, knot values/multiplicities and directed source endpoints are
+/// retained. All interior control points must lie strictly between the endpoint
+/// planes normal to the endpoint chord, with tolerance/roundoff clearance.
+/// Positive weights then exclude ambiguous interior occurrences of the edge
+/// endpoints. This is not a wire self-intersection certificate. Partial
+/// domains, periodic or closed splines, and B-spline face boundaries remain
+/// unsupported. Supports point-only acorns, and planar polygon faces with LINE
+/// edges, one outer loop and disjoint, nonnested polygonal and full-circle hole
+/// loops. Source loop order does not determine the outer loop. Planar faces
+/// also support one-edge full CIRCLE/ELLIPSE disks and circular faces with
+/// disjoint polygonal and/or circular holes. Complete CYLINDER/CONE bands use
+/// two coaxial full-circle loops at distinct axial levels and positive cut
+/// radii. CYLINDER/CONE also support a single four-edge loop with two coaxial
+/// circular arcs and two straight LINE generators, spanning less than one full
+/// turn. Generators follow the respective cylinder/cone profile. Full-azimuth
+/// CYLINDER bands also support monotone CIRCLE/ELLIPSE arc profiles with
+/// isolated axial LINE steps. Whole supporting conics must project onto the
+/// cylinder circle; complete profile axial ranges must be separated by more
+/// than two tolerances. Overlapping ranges remain unsupported. Exact transverse
+/// and axial flux terms are retained for solid patches and variable-height
+/// complete cylinder bands. SPHERE faces use one full latitude circle for a cap
+/// or two full coaxial latitude circles for a band, away from the poles.
+/// Winding selects either cap, including caps larger than a hemisphere. Regular
+/// ring TORUS bands use two coaxial full-circle cuts; winding selects the
+/// meridian interval, including its periodic seam and complementary band. Each
+/// complete cut can also comprise monotone arcs on one supporting circle,
+/// retaining the individual source edges. Unbounded SPUN_SURF circular
+/// generators in an axial meridian plane of a regular ring torus use the
+/// equivalent TOROIDAL_SURFACE with corrected normal orientation. Bounded
+/// generators, tilted/skew circle planes and other generators remain
 /// unsupported. Planar faces also support a single convex
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
 /// two-edge segments/lenses. Convex LINE/CIRCLE outer contours also support
@@ -169,10 +178,10 @@ struct StepDocument {
 /// explicit errors. Existing finite membership checks are retained; no global
 /// intersection or full CAD-kernel validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
-/// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
-/// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus),
-/// 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (senses), 5.2.1.8 (SP_curve, p. 51),
-/// 5.3.4.1 (geometry attachment) and 5.3.11 (Edge, p. 98).
+/// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.1.4 (B_curve, p.
+/// 38), 5.2.2.1-5.2.2.3 (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5
+/// (torus), 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (senses), 5.2.1.8 (SP_curve, p.
+/// 51), 5.3.4.1 (geometry attachment) and 5.3.11 (Edge, p. 98).
 /// @param model Borrowed model with stream-local node identities.
 /// @param body Explicit BODY identity in this model.
 /// @param options Units, tolerances and bounded work/storage settings.

@@ -239,6 +239,65 @@ inline void RemoveNode(ModelFixture& f, uint32_t id) {
   std::erase_if(f.report.nodes,
                 [id](const auto& node) { return node.index == id; });
 }
+// Polynomial parabola or exact rational quarter circle. The multi-span variant
+// exercises nonuniform knots, nonplanar controls and unequal positive weights.
+inline ModelFixture SplineWire(bool rational = false, bool multi = false,
+                               bool reverse = false, bool wrapped = false,
+                               bool translated = false) {
+  std::vector<Vector3> points =
+      rational && !multi
+          ? std::vector<Vector3>{{1, 0, 0}, {1, 1, 0}, {0, 1, 0}}
+          : std::vector<Vector3>{{0, 0, 0}, {1, 1, 0}, {2, 0, 0}};
+  if (multi) points = {{0, 0, 0}, {1, 1, 0}, {2, -1, 1}, {3, 1, 1}, {4, 0, 0}};
+  if (translated)
+    for (auto& p : points) p = {p.y + 10, p.z - 20, p.x + 30};
+  const auto a = reverse ? points.back() : points.front();
+  const auto b = reverse ? points.front() : points.back();
+  auto f = Polyhedron({a, b}, {});
+  RemoveNode(f, 4000);
+  f.Add(134, 4000,
+        {Pointer("nurbs", 8000, 136),
+         ByteValue("sense", reverse ? '-' : '+', FieldType::kCharacter)});
+  f.Add(136, 8000,
+        {Integer("degree", 2, FieldType::kShort),
+         Integer("n_vertices", static_cast<int64_t>(points.size())),
+         Integer("vertex_dim", rational ? 4 : 3, FieldType::kShort),
+         Integer("n_knots", multi ? 4 : 2), ByteValue("knot_type", 0),
+         Logical("periodic", false), Logical("closed", false),
+         Logical("rational", rational), ByteValue("curve_form", 0),
+         Pointer("bspline_vertices", 8001, 45), Pointer("knots", 8002, 128),
+         Pointer("knot_mult", 8003, 127)});
+  std::vector<ScalarValue> controls;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    const double weight = !rational ? 1
+                          : multi   ? (i % 2 ? 2 : 1)
+                                    : (i == 1 ? std::sqrt(.5) : 1);
+    for (double value : {points[i].x, points[i].y, points[i].z})
+      controls.emplace_back(value * weight);
+    if (rational) controls.emplace_back(weight);
+  }
+  f.Add(45, 8001, {Array("vertices", FieldType::kDouble, std::move(controls))});
+  f.Add(128, 8002,
+        {Array("knots", FieldType::kDouble,
+               multi ? std::vector<ScalarValue>{2., 3., 5., 7.}
+                     : std::vector<ScalarValue>{2., 7.})});
+  f.Add(127, 8003,
+        {Array("multiplicities", FieldType::kShort,
+               multi ? std::vector<ScalarValue>{int64_t{3}, int64_t{1},
+                                                int64_t{1}, int64_t{3}}
+                     : std::vector<ScalarValue>{int64_t{3}, int64_t{3}})});
+  if (wrapped) {
+    f.Add(133, 8004,
+          {Pointer("basis_curve", 4000, 1008),
+           Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+           Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+           Numbers("parm_1", {reverse ? 7. : 2.}),
+           Numbers("parm_2", {reverse ? 2. : 7.}),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    Set(f, 100, "curve", 8004);
+  }
+  return f;
+}
 // Groups source faces into one face's ordered loop list, retaining fin/edge
 // identities. The first face in each group supplies the surface and sense.
 inline void MergeFaceLoops(ModelFixture& f,

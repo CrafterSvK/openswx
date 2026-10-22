@@ -18,6 +18,7 @@
 #include "../src/cone_patch.h"
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
+#include "../src/nurbs_wire.h"
 #include "../src/spun_torus.h"
 #include "../src/tolerant_circle.h"
 #include "../src/torus_boundary.h"
@@ -83,6 +84,134 @@ TEST(OpenSwStep, ExportsSheetAndLineWireDeterministically) {
       wire.value().text.find("EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION("),
       std::string::npos);
   CheckReferences(wire.value());
+}
+TEST(OpenSwStep, ExportsExactPolynomialAndRationalSplineWires) {
+  for (bool rational : {false, true})
+    for (bool multi : {false, true})
+      for (bool reverse : {false, true})
+        for (bool wrapped : {false, true}) {
+          const auto fixture =
+              test::SplineWire(rational, multi, reverse, wrapped);
+          const auto result = Export(fixture);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          const auto& document = result.value();
+          EXPECT_EQ(document.statistics.edges, 1);
+          EXPECT_EQ(document.statistics.vertices, 2);
+          EXPECT_EQ(document.statistics.faces, 0);
+          EXPECT_NE(document.text.find("B_SPLINE_CURVE_WITH_KNOTS("),
+                    std::string::npos);
+          EXPECT_EQ(document.text.find("RATIONAL_B_SPLINE_CURVE(") !=
+                        std::string::npos,
+                    rational);
+          EXPECT_NE(document.text.find(multi ? "(3,1,1,3),(2.,3.,5.,7.)"
+                                             : "(3,3),(2.,7.)"),
+                    std::string::npos);
+          EXPECT_EQ(document.text.find("TRIMMED_CURVE("), std::string::npos);
+          CheckReferences(document);
+          const auto again = Export(fixture);
+          ASSERT_TRUE(again.ok());
+          EXPECT_EQ(again.value().text, document.text);
+          const auto source = test::Serialize(fixture);
+          const auto binary = ExportParasolid(source.bytes, NodeId{1},
+                                              Options(), &source.catalog);
+          ASSERT_TRUE(binary.ok()) << binary.error().message;
+          EXPECT_EQ(binary.value().text, document.text);
+        }
+}
+TEST(OpenSwStep, BoundsSplineSerializationAndControlChecks) {
+  const auto fixture = test::SplineWire(true, true);
+  const auto baseline = Export(fixture);
+  ASSERT_TRUE(baseline.ok()) << baseline.error().message;
+  auto options = Options();
+  options.max_polygon_checks = 3;
+  options.max_entities = baseline.value().statistics.entities;
+  options.max_output_bytes = baseline.value().text.size();
+  const auto exact = Export(fixture, options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  EXPECT_EQ(exact.value().text, baseline.value().text);
+  --options.max_polygon_checks;
+  auto result = Export(fixture, options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  options.max_polygon_checks = 3;
+  --options.max_entities;
+  result = Export(fixture, options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  ++options.max_entities;
+  --options.max_output_bytes;
+  result = Export(fixture, options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsUncertifiedSplineWireDomainsAndEndpointAmbiguity) {
+  const auto model = ModelBuilder::Build(test::SplineWire(true).report);
+  ASSERT_TRUE(model.ok());
+  const auto& spline = std::get<NurbsCurveGeometry>(
+      model.value()
+          .geometry()[*model.value().FindNode(NodeId{4000})->geometry]
+          .payload);
+  uint64_t checks = 100;
+  const auto valid = internal::ValidateNurbsWire(spline, 7, 2, 1e-7, checks);
+  ASSERT_TRUE(valid.ok()) << valid.error().message;
+  EXPECT_EQ(checks, 99);
+  const auto partial = internal::ValidateNurbsWire(spline, 2, 5, 1e-7, checks);
+  ASSERT_FALSE(partial.ok());
+  EXPECT_EQ(partial.error().code, ErrorCode::kUnsupportedFormat);
+  for (int change = 0; change < 4; ++change) {
+    auto other = spline;
+    if (change == 0) other.axis.closed = true;
+    if (change == 1) {
+      other.axis.closed = true;
+      other.axis.periodic = true;
+    }
+    if (change == 2) {
+      // An interior control at the start point defeats endpoint separation.
+      for (std::size_t i = 0; i < 3; ++i)
+        other.controls.values[4 + i] =
+            other.controls.values[i] * other.controls.values[7];
+    }
+    if (change == 3) {
+      other.axis.knots = {1, 2, 7, 8};
+      other.axis.multiplicities = {1, 2, 2, 1};
+    }
+    const auto result = internal::ValidateNurbsWire(other, 2, 7, 1e-7, checks);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  auto wrapped = test::SplineWire(false, false, false, true);
+  // Keep the vertex and trim point consistent with the interior parameter.
+  for (auto& node : wrapped.report.nodes) {
+    if (node.index == 501) node.fields[0].values = {1., .5, 0.};
+    if (node.index == 8004) {
+      node.fields[2].values = {1., .5, 0.};
+      node.fields[4].values = {4.5};
+    }
+  }
+  const auto partial_export = Export(wrapped);
+  ASSERT_FALSE(partial_export.ok());
+  EXPECT_EQ(partial_export.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, RejectsMalformedSplineWireControlsAndKnots) {
+  for (int change = 0; change < 5; ++change) {
+    SCOPED_TRACE(change);
+    auto fixture = test::SplineWire(true);
+    for (auto& node : fixture.report.nodes) {
+      if (node.index == 8001 && change == 0) node.fields[0].values[7] = 0.;
+      if (node.index == 8001 && change == 1)
+        node.fields[0].values[4] = std::numeric_limits<double>::infinity();
+      if (node.index == 8001 && change == 2) node.fields[0].values.pop_back();
+      if (node.index == 8002 && change == 3) node.fields[0].values[1] = 2.;
+      if (node.index == 8003 && change == 4)
+        node.fields[0].values[1] = int64_t{2};
+    }
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+    // Some malformed records are retained as untyped source nodes by the
+    // reader, so binding reports unavailable geometry before serialization.
+    EXPECT_TRUE(result.error().code == ErrorCode::kInvalidRecord ||
+                result.error().code == ErrorCode::kUnsupportedFormat);
+  }
 }
 TEST(OpenSwStep, RequiresUnitsAndBoundsOutput) {
   auto options = Options();

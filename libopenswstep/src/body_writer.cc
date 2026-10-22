@@ -17,6 +17,7 @@
 #include "curved_hole.h"
 #include "cylinder_band.h"
 #include "cylinder_patch.h"
+#include "nurbs_wire.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
 #include "spun_torus.h"
@@ -201,10 +202,12 @@ Result<Id> BodyWriter::Curve(NodeId id) {
     result = writer_.Add("ELLIPSE(''," + Reference(frame) + ',' +
                          writer_.Number(ellipse->major_radius) + ',' +
                          writer_.Number(ellipse->minor_radius) + ')');
+  } else if (const auto* spline = std::get_if<NurbsCurveGeometry>(&geometry)) {
+    result = WriteNurbsCurve(writer_, *spline);
   } else {
-    return Result<Id>::Err(Error(
-        id, ErrorCode::kUnsupportedFormat,
-        "Curve export currently supports LINE, CIRCLE and ELLIPSE bases"));
+    return Result<Id>::Err(Error(id, ErrorCode::kUnsupportedFormat,
+                                 "Curve export requires LINE, CIRCLE, ELLIPSE "
+                                 "or supported B_CURVE bases"));
   }
   if (const auto found = recovered_edges_.find(key);
       found != recovered_edges_.end()) {
@@ -244,6 +247,14 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
   const bool conic =
       std::holds_alternative<CircleGeometry>(basis.value()->payload) ||
       std::holds_alternative<EllipseGeometry>(basis.value()->payload);
+  if (const auto* spline =
+          std::get_if<NurbsCurveGeometry>(&basis.value()->payload)) {
+    const auto valid = ValidateNurbsWire(
+        *spline, first, last, options_.tolerance, polygon_checks_remaining_);
+    if (!valid.ok())
+      return Result<Id>::Err(
+          Error(edge, valid.error().code, valid.error().message.c_str()));
+  }
   if (conic && std::abs(last - first) > 2 * std::numbers::pi)
     return Result<Id>::Err(
         Error(edge, ErrorCode::kUnsupportedFormat,
@@ -1101,10 +1112,11 @@ Id BodyWriter::ParameterCurve(const NurbsCurveGeometry& curve, Id surface) {
   }
   multiplicities += ')';
   knots += ')';
-  const auto spline = writer_.Add(
-      "B_SPLINE_CURVE_WITH_KNOTS(''," + std::to_string(curve.axis.degree) +
-      ',' + References(points) + ",.UNSPECIFIED.," + Logical(curve.axis.closed) +
-      ",.F.," + multiplicities + ',' + knots + ",.UNSPECIFIED.)");
+  const auto spline =
+      writer_.Add("B_SPLINE_CURVE_WITH_KNOTS(''," +
+                  std::to_string(curve.axis.degree) + ',' + References(points) +
+                  ",.UNSPECIFIED.," + Logical(curve.axis.closed) + ",.F.," +
+                  multiplicities + ',' + knots + ",.UNSPECIFIED.)");
   const auto context = writer_.Add(
       "(GEOMETRIC_REPRESENTATION_CONTEXT(2) REPRESENTATION_CONTEXT('','2D'))");
   const auto representation =
