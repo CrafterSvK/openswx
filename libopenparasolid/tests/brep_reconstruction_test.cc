@@ -2523,5 +2523,222 @@ TEST(ParasolidDeltaApply, SeparatesStatusNamespacesAndEnforcesStateLimits) {
   EXPECT_EQ(invalid.error().code, ErrorCode::kInvalidOptions);
 }
 
+ModelFixture BoundaryGeometryFace(bool reverse, bool negative_basis = false) {
+  auto f = ClosedTrimFace(true, negative_basis);
+  const uint32_t loop = reverse ? 21 : 20;
+  const uint32_t dummy = reverse ? 10 : 11;
+  Set(f, 30, "loop", loop);
+  Set(f, loop, "next", 0);
+  Set(f, dummy, "loop", 0);
+  Set(f, dummy, "forward", 0);
+  Set(f, dummy, "backward", 0);
+  std::erase_if(f.report.nodes, [loop](const auto& node) {
+    return node.node_type == 15 && node.index != loop;
+  });
+  return f;
+}
+std::vector<ShellBoundaryGroup> BoundaryGroups(const Model& model) {
+  const auto face = TraverseFaceBoundary(model, NodeId{30});
+  EXPECT_TRUE(face.ok());
+  if (!face.ok()) return {};
+  ShellBoundary shell;
+  shell.faces.push_back(face.value());
+  const auto incidence = AnalyzeShellEdgeIncidence(shell);
+  EXPECT_TRUE(incidence.ok());
+  if (!incidence.ok()) return {};
+  return incidence.value().components[0].boundary_groups;
+}
+TEST(ParasolidBoundaryGeometry, OwnsSourceBindingsAndReversesPathTangents) {
+  for (bool reverse : {false, true}) {
+    for (bool negative : {false, true}) {
+      const auto fixture = BoundaryGeometryFace(reverse, negative);
+      const auto model = ModelBuilder::Build(fixture.report);
+      ASSERT_TRUE(model.ok());
+      const auto face = BindFaceTrimming(model.value(), NodeId{30}, 1e-10);
+      ASSERT_TRUE(face.ok()) << face.error().message;
+      auto groups = BoundaryGroups(model.value());
+      ASSERT_EQ(groups.size(), 1);
+      std::vector<FaceTrimming> faces{face.value()};
+      const auto result = BindBoundaryPathsGeometry(
+          model.value(), groups, faces, 1e-10, {1, 1, 1, 1, 1});
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      ASSERT_EQ(result.value().size(), 1);
+      ASSERT_EQ(result.value()[0].edges.size(), 1);
+      const auto& edge = result.value()[0].edges[0];
+      EXPECT_EQ(edge.use.fin, NodeId{reverse ? 11u : 10u});
+      EXPECT_EQ(edge.use.sense, TopologySense::kForward);
+      EXPECT_EQ(edge.source.start, faces[0].loops[0].fins[0].start);
+      faces.clear();
+      groups.clear();
+      for (double fraction : {0., .25, .75, 1.}) {
+        const auto value =
+            EvaluateBoundBoundaryPathEdge(model.value(), edge, fraction, 1e-10);
+        const auto source =
+            EvaluateBoundFin(model.value(), edge.source,
+                             reverse ? 1 - fraction : fraction, 1e-10);
+        ASSERT_TRUE(value.ok()) << value.error().message;
+        ASSERT_TRUE(source.ok());
+        EXPECT_NEAR(value.value().curve.position.x,
+                    source.value().curve.position.x, 1e-10);
+        EXPECT_NEAR(value.value().curve.position.y,
+                    source.value().curve.position.y, 1e-10);
+        EXPECT_NEAR(
+            value.value().curve.first_derivative.x,
+            (reverse ? -1 : 1) * source.value().curve.first_derivative.x,
+            1e-10);
+        EXPECT_NEAR(
+            value.value().curve.first_derivative.y,
+            (reverse ? -1 : 1) * source.value().curve.first_derivative.y,
+            1e-10);
+        EXPECT_NEAR(value.value().uv.u, source.value().uv.u, 1e-10);
+      }
+    }
+  }
+}
+TEST(ParasolidBoundaryGeometry, RepeatedPathsHonorAggregateBudgets) {
+  const auto fixture = BoundaryGeometryFace(false);
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const auto face = BindFaceTrimming(model.value(), NodeId{30}, 1e-10);
+  ASSERT_TRUE(face.ok());
+  const std::vector<FaceTrimming> faces{face.value()};
+  auto groups = BoundaryGroups(model.value());
+  ASSERT_EQ(groups.size(), 1);
+  groups.push_back(groups.front());
+  auto result = BindBoundaryPathsGeometry(model.value(), groups, faces, 1e-10,
+                                          {1, 1, 1, 2, 2});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().size(), 2);
+  result = BindBoundaryPathsGeometry(model.value(), groups, faces, 1e-10,
+                                     {1, 1, 1, 1, 2});
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  result = BindBoundaryPathsGeometry(model.value(), groups, faces, 1e-10,
+                                     {1, 1, 1, 2, 1});
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  for (int field = 0; field < 5; ++field) {
+    BoundaryPathBindingOptions options;
+    uint64_t* limit = field == 0   ? &options.max_faces
+                      : field == 1 ? &options.max_loops
+                      : field == 2 ? &options.max_fins
+                      : field == 3 ? &options.max_paths
+                                   : &options.max_edges;
+    *limit = 0;
+    result = BindBoundaryPathsGeometry(model.value(), {}, {}, 0, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+  for (int field = 0; field < 3; ++field) {
+    auto extra_faces = faces;
+    if (field == 0) extra_faces.push_back(faces[0]);
+    if (field == 1) extra_faces[0].loops.push_back(faces[0].loops[0]);
+    if (field == 2)
+      extra_faces[0].loops[0].fins.push_back(faces[0].loops[0].fins[0]);
+    const auto limited =
+        BindBoundaryPathsGeometry(model.value(), std::span(groups).first(1),
+                                  extra_faces, 1e-10, {1, 1, 1, 2, 2});
+    ASSERT_FALSE(limited.ok());
+    EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  }
+  EXPECT_TRUE(BindBoundaryPathsGeometry(model.value(), {}, {}, 0).ok());
+}
+TEST(ParasolidBoundaryGeometry,
+     RejectsForeignUsesBranchesAndOpenCyclesAtomically) {
+  const auto fixture = BoundaryGeometryFace(false);
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const auto face = BindFaceTrimming(model.value(), NodeId{30}, 1e-10);
+  ASSERT_TRUE(face.ok());
+  for (int bad = 0; bad < 7; ++bad) {
+    std::vector<FaceTrimming> faces{face.value()};
+    auto groups = BoundaryGroups(model.value());
+    ASSERT_EQ(groups.size(), 1);
+    if (bad == 0) groups[0].path[0].fin = NodeId{999};
+    if (bad == 1) groups[0].path[0].edge = NodeId{999};
+    if (bad == 2) groups[0].path[0].start_vertex = NodeId{100};
+    if (bad == 3) faces[0].loops[0].fins.push_back(faces[0].loops[0].fins[0]);
+    if (bad == 4) groups[0].kind = BoundaryGroupKind::kBranched;
+    if (bad == 5) faces[0].loops[0].fins[0].end = .5;
+    if (bad == 6) groups[0].path.clear();
+    const auto result =
+        BindBoundaryPathsGeometry(model.value(), groups, faces, 1e-10);
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, bad == 4   ? ErrorCode::kUnsupportedFormat
+                                   : bad == 5 ? ErrorCode::kInvalidRecord
+                                              : ErrorCode::kInvalidOptions);
+  }
+  const std::vector<FaceTrimming> faces{face.value()};
+  const auto groups = BoundaryGroups(model.value());
+  EXPECT_FALSE(
+      BindBoundaryPathsGeometry(model.value(), groups, faces, -1).ok());
+  EXPECT_FALSE(
+      BindBoundaryPathsGeometry(model.value(), groups, faces,
+                                std::numeric_limits<double>::quiet_NaN())
+          .ok());
+}
+TEST(ParasolidBoundaryGeometry, RetainsOwnedIntersectionSolverSettings) {
+  const auto fixture = IntersectionFace(false, true);
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const auto face =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-10, {},
+                       IntersectionEvaluationOptions{1e-10, 1e-12});
+  ASSERT_TRUE(face.ok()) << face.error().message;
+  const auto use = face.value().loops[0].fins[0].use;
+  ShellBoundaryGroup group;
+  group.kind = BoundaryGroupKind::kChain;
+  group.edges = {use.edge};
+  group.end_vertices = {use.start_vertex, use.end_vertex};
+  group.path = {
+      {use.edge, use.fin, use.start_vertex, use.end_vertex, use.sense}};
+  std::vector<FaceTrimming> faces{face.value()};
+  const auto result = BindBoundaryPathsGeometry(
+      model.value(), std::span(&group, 1), faces, 1e-10);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  faces.clear();
+  const auto& edge = result.value()[0].edges[0];
+  ASSERT_TRUE(edge.source.intersection);
+  const auto midpoint =
+      EvaluateBoundBoundaryPathEdge(model.value(), edge, .5, 1e-10);
+  ASSERT_TRUE(midpoint.ok()) << midpoint.error().message;
+  EXPECT_NEAR(midpoint.value().curve.position.x, std::sqrt(.5), 1e-10);
+  EXPECT_NEAR(midpoint.value().curve.position.y, std::sqrt(.5), 1e-10);
+  auto unsupported = edge;
+  unsupported.source.intersection.reset();
+  EXPECT_FALSE(
+      EvaluateBoundBoundaryPathEdge(model.value(), unsupported, .5, 1e-10)
+          .ok());
+}
+TEST(ParasolidBoundaryGeometry, ChecksJoinGapsWithTheRequestedPathTolerance) {
+  auto fixture = Face();
+  Set(fixture, 10, "other", 12);
+  Set(fixture, 11, "other", 13);
+  Set(fixture, 11, "edge", 3);
+  Fin(fixture, 12, 100, 10);
+  Fin(fixture, 13, 101, 11);
+  Set(fixture, 13, "sense", '+');
+  Set(fixture, 13, "edge", 3);
+  fixture.Add(16, 3,
+              {Pointer("owner", 6, 1029), Pointer("previous", 0, 16),
+               Pointer("next", 0, 16), Pointer("halfedge", 13, 17),
+               Pointer("curve", 400, 1008)});
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval intervals[]{{NodeId{10}, 0, 1.375},
+                                         {NodeId{11}, .625, 0}};
+  const auto face = BindFaceTrimming(model.value(), NodeId{30}, intervals, .75);
+  ASSERT_TRUE(face.ok()) << face.error().message;
+  const auto groups = BoundaryGroups(model.value());
+  ASSERT_EQ(groups.size(), 1);
+  const std::vector<FaceTrimming> faces{face.value()};
+  const auto result =
+      BindBoundaryPathsGeometry(model.value(), groups, faces, .5);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_EQ(result.error().message, "Boundary path endpoints do not join");
+  EXPECT_TRUE(
+      BindBoundaryPathsGeometry(model.value(), groups, faces, .75).ok());
+}
 }  // namespace
 }  // namespace openparasolid

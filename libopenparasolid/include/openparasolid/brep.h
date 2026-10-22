@@ -113,6 +113,43 @@ struct FinGeometryEvaluation {
 [[nodiscard]] Result<FinGeometryEvaluation> EvaluateBoundFin(
     const Model& model, const BoundFinGeometry& fin, double fraction,
     double tolerance);
+struct BoundBoundaryPathEdge {
+  BoundaryPathEdge use;
+  // Owned, unchanged source binding. Interval direction is reversed during
+  // evaluation when the path and source fin senses differ.
+  BoundFinGeometry source;
+};
+struct BoundBoundaryPath {
+  BoundaryGroupKind kind = BoundaryGroupKind::kCycle;
+  std::vector<BoundBoundaryPathEdge> edges;
+};
+struct BoundaryPathBindingOptions {
+  uint64_t max_faces = 10000;
+  uint64_t max_loops = 10000;
+  uint64_t max_fins = 100000;
+  uint64_t max_paths = 10000;
+  uint64_t max_edges = 100000;
+};
+// Connects previously analyzed unbranched groups to previously bound faces.
+// Indexes source fins once. Each path must cover its listed edges exactly once
+// and match source fin IDs, edge direction and vertices. Repeated source fins
+// across different paths are allowed (for different shell/region occurrences).
+// Checks endpoints/midpoints on source surfaces and consecutive 3D endpoints,
+// including cycle closure, with the caller's finite nonnegative tolerance.
+// Positive budgets bound the aggregate face/loop/fin scan and total
+// paths/steps. Branched groups return unsupported; no partial result on any
+// failure. Does not revalidate body topology or the original face bindings,
+// select new curve branches, infer face/hole orientation or certify whole-curve
+// validity.
+[[nodiscard]] Result<std::vector<BoundBoundaryPath>> BindBoundaryPathsGeometry(
+    const Model& model, std::span<const ShellBoundaryGroup> groups,
+    std::span<const FaceTrimming> faces, double tolerance,
+    const BoundaryPathBindingOptions& options = {});
+// Fraction in [0,1]; curve tangent is dP/d(path fraction). Retains the source
+// surface mapping and owned solver settings, including through reversed trims.
+[[nodiscard]] Result<FinGeometryEvaluation> EvaluateBoundBoundaryPathEdge(
+    const Model& model, const BoundBoundaryPathEdge& edge, double fraction,
+    double tolerance);
 struct BodyFaceBindingOptions {
   BodyValidationOptions topology;
   FaceTraversalOptions face;

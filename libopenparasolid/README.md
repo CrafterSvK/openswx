@@ -2249,6 +2249,69 @@ paths and their 30 edge steps against source natural edge endpoints and fin
 IDs. Earlier incidence, grouping and geometry outcomes remain unchanged.
 Private inputs, scripts and reports remain outside the repository.
 
+## Binding ordered boundary paths to geometry
+
+`BindBoundaryPathsGeometry(model, groups, faces, tolerance, options)` connects
+previously analyzed unbranched groups to existing `FaceTrimming` bindings.
+Obtain the groups from `AnalyzeShellEdgeIncidence` and the faces from face/body
+binding. The query builds one source-fin index for the batch, returning owned
+`BoundBoundaryPath` values in request order. It requires an explicit finite
+nonnegative tolerance in source units.
+
+Each `BoundBoundaryPathEdge` owns its `BoundaryPathEdge` use and an unchanged
+copy of the source `BoundFinGeometry`. When path sense differs from source fin
+sense, evaluation reverses the source interval. It preserves the original
+curve, face, surface and optional intersection solver profile; no new curve
+branch or tolerance is chosen. Repeated path occurrences across shells or
+regions may reuse the same source fin, while duplicate fin uses within a path
+and ambiguous duplicate source bindings are rejected.
+
+Use `EvaluateBoundBoundaryPathEdge(model, edge, fraction, tolerance)` for a
+fraction in `[0,1]`. The result includes the source surface mapping and a curve
+tangent `dP/d(path fraction)`, including reversal. The API is available in
+`openparasolid/brep.h`:
+
+```cpp
+auto paths = openparasolid::BindBoundaryPathsGeometry(
+    model, groups, body_binding.faces, tolerance);
+if (!paths.ok()) return paths.error();
+for (const auto& path : paths.value()) {
+  for (const auto& edge : path.edges) {
+    auto midpoint = openparasolid::EvaluateBoundBoundaryPathEdge(
+        model, edge, 0.5, tolerance);
+    if (!midpoint.ok()) return midpoint.error();
+    // Consume midpoint.value().curve and midpoint.value().uv.
+  }
+}
+```
+
+Every path must cover its listed edge IDs exactly once and match source fin
+IDs, natural edge sense and vertices. Binding checks endpoints and midpoint
+on the source surfaces, the 3D gap between consecutive steps, and cycle
+closure. Chain endpoint metadata must agree. These sampled checks do not
+establish whole-curve membership, intersection freedom, face/hole orientation
+or a valid solid. The query does not revalidate body topology or the original
+face bindings; its inputs must already have been traversed and bound.
+
+The positive `BoundaryPathBindingOptions` budgets default to 10,000 source
+faces, aggregate source loops and requested paths, plus 100,000 aggregate
+source fins and requested path steps. Isolated source loops consume one fin
+budget entry. Repeated paths also consume repeated step budget entries. Exact
+limits are accepted; zero limits return `kInvalidOptions`, and exhaustion
+returns `kResourceLimit`. Coverage/incidence mismatches are invalid options;
+branched groups return `kUnsupportedFormat`. Sample errors retain their code;
+geometric join/closure gaps return `kInvalidRecord`. Any failure returns no
+partial batch. Empty batches still validate options and source index budgets.
+
+Tests cover reversed fins and descending trims, owned bindings, intersection
+profiles, malformed/foreign uses, aggregate limits, cycles and tighter join
+tolerances. The private comparison retains all 56 automatic body bindings and
+the last body with eight caller-selected intervals. Its nine boundary paths
+bind all 30 steps, and 150 point/tangent evaluations match the corresponding
+source-fin evaluations with the required direction changes. No dependencies
+or tessellation are introduced. Private inputs, tools and reports remain
+outside the repository.
+
 ## Inspecting validated body topology
 
 ```bash
