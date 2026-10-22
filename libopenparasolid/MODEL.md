@@ -26,6 +26,9 @@ if (node && node->geometry) {
 
 The input must be a complete partition or transmit report. Delta streams must
 first be applied to a base state; repeated delta indices are not a model index.
+`ApplyDelta` in `openparasolid/delta.h` supplies an explicit-plan application
+engine. Its logical snapshot is accepted here, with virtual source offsets;
+automatic wire-history planning remains unavailable.
 The builder checks node identities, schema/field shapes, scalar codecs, byte
 ranges and resource bounds before linking data. Duplicate IDs and malformed
 reports return `Result::Err`. No partially built `Model` is returned on a fatal
@@ -64,6 +67,9 @@ anchors; see [edge fin rings](README.md#edge-fin-rings).
 `TraverseVertexIncidence` reads listed anchor/isolated-loop fin chains while
 retaining vertex owner and point IDs; see
 [vertex incidence](README.md#vertex-incidence).
+`ValidateBodyTopology` in `openparasolid/brep.h` joins those traversals with
+owner-list and whole-model incidence checks. `BindFaceTrimming` connects loop
+uses to directed curve intervals and surface UV; see the README for limits.
 These APIs validate selected connectivity and list ownership without changing the
 model or claiming complete body/geometric validation or a proof of manifoldness.
 
@@ -114,6 +120,7 @@ The first typed alternatives are:
   original basis parameters.
 - Spun surface (`SPUN_SURF`), retaining its profile ID, axis/base and nullable
   parameter bounds and auxiliary metadata.
+- Offset surface (`OFFSET_SURF`), retaining its basis surface and signed distance.
 - Swept surface (`SWEPT_SURF`), retaining its section ID, sweep direction and
   nullable internal scale.
 - Intersection curve (`INTERSECTION`), retaining its surface IDs, chart,

@@ -30,6 +30,16 @@ Result<BuiltGeometry> Built(T object, uint64_t count) {
 }  // namespace
 Result<BuiltGeometry> BuildAnalytic(const DecodedNode& node, ModelFields& f) {
   switch (node.node_type) {
+    case 60: {
+      OffsetSurfaceGeometry p;
+      if (!f.Reference("surface", p.surface) || !f.Number("offset", p.distance))
+        return Result<BuiltGeometry>::Err(f.Error());
+      if (!p.surface.value)
+        return Result<BuiltGeometry>::Err(
+            {ErrorCode::kInvalidRecord, node.offset,
+             "Offset surface requires a non-null basis"});
+      return Built(p, 1);
+    }
     case 29: {
       PointGeometry p;
       if (!f.Vector("position", p.position))

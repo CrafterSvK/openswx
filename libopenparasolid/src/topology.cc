@@ -951,7 +951,7 @@ Result<ChildBodyBoundary> TopologyReader::ReadChild(
                     std::to_string(parent.value) + ": " + error.message;
     return Result<ChildBodyBoundary>::Err(std::move(error));
   }
-  auto& value = compound.value();
+  auto value = std::move(compound).value();
   const auto found = std::find_if(
       value.children.begin(), value.children.end(),
       [id](const ChildBodyRange& range) { return range.body == id; });

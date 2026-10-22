@@ -117,6 +117,10 @@ struct TrimmedCurveGeometry {
   double parameter_1 = 0;
   double parameter_2 = 0;
 };
+struct OffsetSurfaceGeometry {
+  NodeId surface;
+  double distance = 0;
+};
 struct SpunSurfaceGeometry {
   NodeId profile;
   Vector3 base;
@@ -166,7 +170,7 @@ using GeometryPayload =
                  TorusGeometry, NurbsCurveGeometry, NurbsSurfaceGeometry,
                  SurfaceCurveGeometry, TrimmedCurveGeometry,
                  SpunSurfaceGeometry, SweptSurfaceGeometry,
-                 IntersectionCurveGeometry>;
+                 IntersectionCurveGeometry, OffsetSurfaceGeometry>;
 struct GeometryObject {
   NodeId source;
   /// Raw sense byte, including '?'; points have no sense field.

@@ -65,7 +65,8 @@ const char* GeometryName(const GeometryPayload& geometry) noexcept {
       "point",         "line",         "circle",        "ellipse",
       "plane",         "cylinder",     "cone",          "sphere",
       "torus",         "nurbs_curve",  "nurbs_surface", "surface_curve",
-      "trimmed_curve", "spun_surface", "swept_surface", "intersection_curve"};
+      "trimmed_curve", "spun_surface", "swept_surface", "intersection_curve",
+      "offset_surface"};
   static_assert(std::size(names) == std::variant_size_v<GeometryPayload>);
   return geometry.valueless_by_exception() ? "unknown"
                                            : names[geometry.index()];

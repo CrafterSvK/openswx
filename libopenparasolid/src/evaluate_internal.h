@@ -21,6 +21,14 @@ namespace openparasolid::internal {
                                               bool reverse);
 [[nodiscard]] Result<Vector3> UnitSurfaceNormal(
     const SurfaceEvaluation& sample, bool reverse);
+[[nodiscard]] Result<GeometryPayload> ResolveOffsetSurface(
+    const Model& model, NodeId surface,
+    std::optional<SurfaceParameterSeed> parameters = std::nullopt);
+[[nodiscard]] Result<SurfaceParameters> InvertOffsetSurface(
+    const Model& model, NodeId surface, Vector3 point, double tolerance,
+    std::optional<SurfaceParameterSeed> seed = std::nullopt);
+[[nodiscard]] Result<SurfaceEvaluation> EvaluateOffsetSurface(
+    const Model& model, NodeId surface, double u, double v);
 // The public dispatchers validate that all parameters are finite.
 [[nodiscard]] Result<CurveEvaluation> EvaluateNurbsCurve(
     const NurbsCurveGeometry& curve, double parameter);

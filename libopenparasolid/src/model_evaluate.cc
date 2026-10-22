@@ -232,6 +232,8 @@ Result<SurfaceEvaluation> EvaluateSurface(const Model& model, NodeId surface,
   }
   const auto geometry = Geometry(model, surface);
   if (!geometry.ok()) return Result<SurfaceEvaluation>::Err(geometry.error());
+  if (std::holds_alternative<OffsetSurfaceGeometry>(geometry.value()->payload))
+    return internal::EvaluateOffsetSurface(model, surface, u, v);
   if (const auto* swept =
           std::get_if<SweptSurfaceGeometry>(&geometry.value()->payload)) {
     const auto sampled = SampleSection(model, swept->section, u);
@@ -281,6 +283,10 @@ Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
                                         Vector3 point, double tolerance) {
   const auto geometry = Geometry(model, surface);
   if (!geometry.ok()) return Result<SurfaceParameters>::Err(geometry.error());
+  if (std::holds_alternative<OffsetSurfaceGeometry>(
+          geometry.value()->payload)) {
+    return internal::InvertOffsetSurface(model, surface, point, tolerance);
+  }
   return InvertSurface(geometry.value()->payload, point, tolerance);
 }
 Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
@@ -288,6 +294,11 @@ Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
                                         SurfaceParameterSeed seed) {
   const auto geometry = Geometry(model, surface);
   if (!geometry.ok()) return Result<SurfaceParameters>::Err(geometry.error());
+  if (std::holds_alternative<OffsetSurfaceGeometry>(
+          geometry.value()->payload)) {
+    return internal::InvertOffsetSurface(model, surface, point, tolerance,
+                                         seed);
+  }
   return InvertSurface(geometry.value()->payload, point, tolerance, seed);
 }
 }  // namespace openparasolid

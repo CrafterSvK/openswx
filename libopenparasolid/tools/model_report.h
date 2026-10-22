@@ -48,7 +48,10 @@ inline json GeometryJson(const GeometryObject& geometry) {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, PointGeometry>)
           out["position"] = VectorJson(p.position);
-        else if constexpr (std::is_same_v<T, IntersectionCurveGeometry>) {
+        else if constexpr (std::is_same_v<T, OffsetSurfaceGeometry>) {
+          out["surface"] = p.surface.value;
+          out["distance"] = p.distance;
+        } else if constexpr (std::is_same_v<T, IntersectionCurveGeometry>) {
           out["surfaces"] = {p.surfaces[0].value, p.surfaces[1].value};
           out["chart"] = {
               {"source", p.chart.source.value},

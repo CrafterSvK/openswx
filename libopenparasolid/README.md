@@ -11,8 +11,112 @@ The [model builder](MODEL.md) adds an owned reference graph and typed analytic/
 NURBS data for complete partition and transmit streams. Use
 `parasolid_inspect --geometry --summary part.x_b` to inspect its findings.
 Geometry mode and existing options also support `OPENPARASOLID_*` environment
-settings, with command-line precedence. Delta application and B-Rep validation
-remain separate work.
+settings, with command-line precedence. Integrated body incidence validation,
+face parameter binding and explicit-plan delta application are described below. Automatic delta-history resolution and
+full geometric BRep certification remain separate work.
+
+## Integrated body validation and face binding
+
+`openparasolid/brep.h` connects the previously independent topology queries.
+`ValidateBodyTopology(model, body, options)` returns a `ValidatedBodyTopology`
+with the owned body boundary, radial edge boundaries and vertex incidences.
+It verifies body edge/vertex lists and their reciprocal links, both face
+sides, complete loop/radial/vertex incidence, and source entities claiming the
+selected body but missing from its lists. Compound groups are checked when
+present, including unlisted children claiming the parent. Returned edges and
+vertices are sorted by ID; region hierarchies retain source order.
+
+`BodyValidationOptions.traversal` contains the existing aggregate body and
+child limits. `max_model_nodes` (300,000), `max_model_references` (5,000,000),
+`max_radial_fins` (100,000) and
+`max_vertex_fins` (100,000) bound the whole-model scan and the additional
+aggregate incidence queries. Every limit is positive. Local traversal errors
+retain their codes/offsets; completeness errors return `kInvalidRecord`.
+This certifies selected recorded incidence, without proving connectedness,
+manifoldness, geometric membership, positive volume or tolerance validity.
+Geometry/construction lists and external or omitted states remain outside it.
+
+`BindFaceTrimming(model, face, intervals, tolerance, options)` binds the source
+loop hierarchy to exact curve IDs and directed parameter intervals, without
+tessellation. Supply one `FinParameterInterval` per non-isolated fin, including
+explicit unwrapped periodic branches. The automatic overload omits `intervals`
+and resolves lines and source trim intervals whose endpoint correspondence is
+unambiguous within tolerance. Other branches/types return
+`kUnsupportedFormat`, allowing an explicit interval rather than a guessed arc.
+
+The resulting `FaceTrimming` owns its loops and `BoundFinGeometry` records.
+Fin curves take precedence over edge curves. Known accurate-edge curve sense
+must agree with the directed interval. Vertex points are compared with
+the interval endpoints. Endpoints and midpoint must lie on the face surface
+within the finite nonnegative source-unit tolerance. Isolated vertices are
+mapped to UV. `EvaluateBoundFin(model, binding, fraction, tolerance)` accepts
+fractions in [0,1], returns position, derivative with respect to that fraction,
+and surface UV. Directed reversal therefore reverses/scales the tangent.
+SP-curves use their transmitted 2D curve and must reference the face's surface;
+other curves use the existing bounded surface inversion. No periodic UV
+continuation, outer/hole classification or inside/outside test is inferred.
+Finite membership checks do not prove agreement at every parameter.
+
+Synthetic regressions cover missing owner lists and incidence, both face
+sides, source loops, directed/reversed intervals, UV curves, mismatched
+surfaces and explicit periodic branches. All 163 bodies in the existing
+130-stream selection pass the integrated topology validation. Automatic
+binding also passes 45 selected real faces with 206 line/trim-line fin uses
+on supported analytic surfaces at tolerance 1e-7. This is selected coverage,
+not evidence that all procedural surfaces or arbitrary parameter branches
+are supported. Private inputs and comparison tools stay outside the repo.
+
+## Analytic offset surfaces
+
+`OFFSET_SURF` is now typed as `OffsetSurfaceGeometry{surface, distance}`;
+full inspector model JSON includes its basis surface and signed distance.
+Other source flags and internal scale remain in the raw report.
+Model-based surface evaluation, normals and inversion support offsets of
+planes, cylinders, cones, spheres and regular ring tori. Parameterisation is
+preserved, including inherited basis domains, nested offsets and basis sense.
+Offset dependency chains
+are iterative, with cycle detection and a 64-layer bound. Singular radius or
+torus transitions and unsupported bases produce explicit errors; general
+NURBS/blend offsets are not approximated. Tests compare offsets to oriented
+basis normals, derivatives to finite differences, and forward/inverse UVs.
+The library remains MIT and STL-only.
+
+## Explicit delta state application
+
+`openparasolid/delta.h` adds an atomic state-application engine.
+`CreateDeltaState(base_report, revision, limits)` creates an owned checked
+baseline. `ApplyDelta(state, delta_report, plan, limits)` accepts a complete
+decoded delta report and an explicit `DeltaApplicationPlan`: base/target
+revision keys, ordered create/replace/delete operations referring to
+`delta_nodes` occurrences, and `(wire index, reference status) -> state ID`
+mappings. Occurrences used for replacement must represent complete node
+images; inherited or partial-field semantics must be resolved beforehand.
+Revision keys and operation/identity interpretation are supplied by
+the caller; they are not inferred from PMARKs or packet order.
+
+The engine preserves status namespaces, converts status-framed signed integer
+words by bit pattern, and rejects stale revisions, repeated targets or source
+occurrences, invalid shapes, missing mappings, absent deletion targets and
+node-type-changing replacements. Final snapshots may contain unknown-class
+findings; geometry issues remain model findings. Dangling or wrong-class
+references are rejected. Limits bound
+input operations/references, live nodes and field/value counts. Application is
+transactional: errors do not modify either input or return a partial state.
+
+`DeltaState.snapshot` can be passed directly to `ModelBuilder`. Its offsets
+after application are virtual logical addresses, not positions in the original
+base or delta file. Preserve the original reports for wire provenance.
+Synthetic tests cover creation, replacement, deletion, namespace remapping,
+signed words, stale states, malformed occurrences, limits and rollback.
+
+**Automatic reconstruction of an arbitrary delta stream is still unavailable.**
+The supplied reference material does not establish the required mapping from
+PMARK history and pointer status to identity and operation semantics. The
+explicit-plan engine does not guess that missing interpretation. A documented
+mapping or a matching base/delta pair with known final state is needed to add
+and independently validate the automatic planner. Other unsupported geometry
+families likewise remain explicit; the new APIs do not claim a complete
+Parasolid kernel.
 
 ## Ordered loop boundaries
 

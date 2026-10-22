@@ -72,7 +72,11 @@ struct SurfaceEvaluation {
     const GeometryPayload& geometry, double u, double v);
 
 /// Resolves a surface by ID, including SPUN_SURF or SWEPT_SURF with an
-/// analytic or 3D NURBS generator. u is the original curve parameter. For a
+/// analytic or 3D NURBS generator, and supported analytic OFFSET_SURF chains.
+/// Offset bases may be planes, cylinders, cones, spheres or regular ring tori;
+/// basis sense affects signed offsets, with a 64-layer/cycle bound. General
+/// NURBS/blend offsets and singular offset transitions remain unsupported.
+/// u is the original curve parameter. For a
 /// spun surface v is an unbounded angle in radians about the stored unit axis;
 /// for a swept surface v is signed displacement along its stored unit sweep.
 /// Spun start/end parameters bound u; the profile's own domain and resource
