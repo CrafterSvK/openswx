@@ -128,7 +128,7 @@ namespace {
 Result<BodyWireBinding> Bind(
     const Model& model, NodeId body,
     std::optional<std::span<const WireParameterInterval>> intervals,
-    double tolerance, const BodyWireBindingOptions& options) {
+    double tolerance, const BodyWireBindingOptions& options, bool partial) {
   if (!std::isfinite(tolerance) || tolerance < 0 || !options.max_edges)
     return Result<BodyWireBinding>::Err(
         Error("Invalid body wire options", ErrorCode::kInvalidOptions));
@@ -159,23 +159,24 @@ Result<BodyWireBinding> Bind(
               Error("Body wire binding limit", ErrorCode::kResourceLimit));
         wires.push_back(&wire);
       }
-  if (intervals && wires.size() != parameters.size())
+  if (intervals && !partial && wires.size() != parameters.size())
     return Result<BodyWireBinding>::Err(
         Error("Wire intervals must cover exactly the selected wires",
               ErrorCode::kInvalidOptions));
-  if (intervals)
-    for (const auto* wire : wires)
-      if (!parameters.contains(wire->edge.value))
-        return Result<BodyWireBinding>::Err(Error(
-            "Missing or foreign wire interval", ErrorCode::kInvalidOptions));
+  for (const auto& parameter : parameters)
+    if (!seen.contains(parameter.first))
+      return Result<BodyWireBinding>::Err(
+          Error("Foreign wire interval", ErrorCode::kInvalidOptions));
+
   std::sort(wires.begin(), wires.end(),
             [](const auto* a, const auto* b) { return a->edge < b->edge; });
   std::vector<BoundWireGeometry> bindings;
   for (const auto* wire : wires) {
     auto binding = [&]() -> Result<BoundWireGeometry> {
-      if (intervals)
-        return BindWire(model, *wire, parameters.find(wire->edge.value)->second,
-                        tolerance, options.intersection);
+      const auto supplied = parameters.find(wire->edge.value);
+      if (supplied != parameters.end())
+        return BindWire(model, *wire, supplied->second, tolerance,
+                        options.intersection);
       const auto& edges = topology.value().edges;
       const auto edge = std::lower_bound(
           edges.begin(), edges.end(), wire->edge,
@@ -208,11 +209,17 @@ Result<BodyWireBinding> BindBodyWires(
     const Model& model, NodeId body,
     std::span<const WireParameterInterval> intervals, double tolerance,
     const BodyWireBindingOptions& options) {
-  return Bind(model, body, intervals, tolerance, options);
+  return Bind(model, body, intervals, tolerance, options, false);
 }
 Result<BodyWireBinding> BindBodyWires(const Model& model, NodeId body,
                                       double tolerance,
                                       const BodyWireBindingOptions& options) {
-  return Bind(model, body, std::nullopt, tolerance, options);
+  return Bind(model, body, std::nullopt, tolerance, options, false);
+}
+Result<BodyWireBinding> BindBodyWiresWithOverrides(
+    const Model& model, NodeId body,
+    std::span<const WireParameterInterval> overrides, double tolerance,
+    const BodyWireBindingOptions& options) {
+  return Bind(model, body, overrides, tolerance, options, true);
 }
 }  // namespace openparasolid

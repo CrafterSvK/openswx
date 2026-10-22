@@ -190,6 +190,16 @@ struct BodyWireBinding {
 [[nodiscard]] Result<BodyWireBinding> BindBodyWires(
     const Model& model, NodeId body, double tolerance,
     const BodyWireBindingOptions& options = {});
+// Supplied intervals replace inference only for their selected wire edges.
+// Other wires are resolved automatically; empty overrides retain automatic
+// behavior. Duplicate, invalid, foreign and face-owned edge IDs are rejected.
+// Keeps complete topology validation, aggregate limits and atomic membership
+// checks. Overrides do not enable unsupported curve evaluators or bypass trim
+// domains, direction, vertex matching or ring closure checks.
+[[nodiscard]] Result<BodyWireBinding> BindBodyWiresWithOverrides(
+    const Model& model, NodeId body,
+    std::span<const WireParameterInterval> overrides, double tolerance,
+    const BodyWireBindingOptions& options = {});
 // Fraction is in [0,1]; tangent is dP/d(fraction), including interval reversal.
 // Uses the owned solver settings. Inherits curve domain/resource checks;
 // does not revalidate topology, endpoints or closure after binding.

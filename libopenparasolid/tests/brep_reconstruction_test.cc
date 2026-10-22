@@ -763,8 +763,7 @@ ModelFixture WireFromFace(ModelFixture f) {
   }
   return f;
 }
-ModelFixture TwoWireBody() {
-  auto f = Wire();
+ModelFixture TwoWireBody(ModelFixture f = Wire()) {
   Set(f, 2, "next", 3);
   f.Add(16, 3,
         {Pointer("owner", 6, 1029), Pointer("previous", 2, 16),
@@ -941,6 +940,10 @@ TEST(ParasolidBodyWireBinding,
         BindBodyWires(model.value(), NodeId{1}, intervals, 1e-12);
     ASSERT_TRUE(result.ok()) << result.error().message;
     EXPECT_DOUBLE_EQ(result.value().wires[0].end, intervals[0].end);
+    const auto partial = BindBodyWiresWithOverrides(model.value(), NodeId{1}, intervals, 1e-12);
+    ASSERT_TRUE(partial.ok()) << partial.error().message;
+    EXPECT_DOUBLE_EQ(partial.value().wires[0].end, intervals[0].end);
+
     const auto point =
         EvaluateBoundWire(model.value(), result.value().wires[0], 0);
     ASSERT_TRUE(point.ok());
@@ -1076,6 +1079,10 @@ TEST(ParasolidBodyWireBinding, SourceTrimsKeepDomainsAndExplicitEndpointToleranc
   const auto domain = BindBodyWires(model.value(), NodeId{1}, beyond, 1e-3);
   ASSERT_FALSE(domain.ok());
   EXPECT_EQ(domain.error().code, ErrorCode::kInvalidOptions);
+  const auto partial_domain = BindBodyWiresWithOverrides(
+      model.value(), NodeId{1}, beyond, 1e-3);
+  ASSERT_FALSE(partial_domain.ok());
+  EXPECT_EQ(partial_domain.error().code, ErrorCode::kInvalidOptions);
 }
 TEST(ParasolidBodyWireBinding, EvaluatorRejectsBadFractionsAndTangentOverflow) {
   const auto f = Wire();
@@ -1447,6 +1454,129 @@ ModelFixture SplineFace(bool on_surface, bool rational = false,
     Set(f, 2, "curve", 410);
   }
   return f;
+}
+TEST(ParasolidPartialWireBinding, OverridesPartialSplineAndInfersOtherWires) {
+  auto f = TwoWireBody(WireFromFace(SplineFace(false)));
+  for (auto& node : f.report.nodes)
+    if (node.index == 201) node.fields[0].values = {.5, 0., 0.};
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const WireParameterInterval overrides[]{{NodeId{2}, -2, .5}};
+  EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, 1e-12).ok());
+  EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, overrides, 1e-12).ok());
+  EXPECT_FALSE(BindBodyWiresWithOverrides(model.value(), NodeId{1}, {}, 1e-12).ok());
+  const auto result = BindBodyWiresWithOverrides(model.value(), NodeId{1}, overrides, 1e-12);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().wires.size(), 2);
+  EXPECT_EQ(result.value().wires[0].use.edge.value, 2);
+  EXPECT_EQ(result.value().wires[0].start, -2);
+  EXPECT_EQ(result.value().wires[0].end, .5);
+  EXPECT_EQ(result.value().wires[1].use.edge.value, 3);
+  EXPECT_EQ(result.value().wires[1].start, 2);
+  EXPECT_EQ(result.value().wires[1].end, 3);
+  const auto sample =
+      EvaluateBoundWire(model.value(), result.value().wires[0], .5);
+  ASSERT_TRUE(sample.ok());
+  EXPECT_NEAR(sample.value().position.x, .25, 1e-12);
+  EXPECT_NEAR(sample.value().first_derivative.x, .5, 1e-12);
+}
+TEST(ParasolidPartialWireBinding,
+     EmptyAndCompleteOverridesRetainAutomaticResults) {
+  const auto f = TwoWireBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto automatic = BindBodyWires(model.value(), NodeId{1}, 0);
+  ASSERT_TRUE(automatic.ok());
+  const WireParameterInterval all[]{{NodeId{3}, 2, 3}, {NodeId{2}, 0, 1}};
+  for (bool complete : {false, true}) {
+    const auto result = BindBodyWiresWithOverrides(
+        model.value(), NodeId{1},
+        complete ? std::span<const WireParameterInterval>{all}
+                 : std::span<const WireParameterInterval>{},
+        0);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    ASSERT_EQ(result.value().wires.size(), automatic.value().wires.size());
+    for (std::size_t i = 0; i < result.value().wires.size(); ++i) {
+      EXPECT_EQ(result.value().wires[i].use.edge,
+                automatic.value().wires[i].use.edge);
+      EXPECT_EQ(result.value().wires[i].start,
+                automatic.value().wires[i].start);
+      EXPECT_EQ(result.value().wires[i].end, automatic.value().wires[i].end);
+    }
+  }
+}
+TEST(ParasolidPartialWireBinding, RejectsInvalidForeignAndFaceOwnedOverrides) {
+  const auto f = TwoWireBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (int bad = 0; bad < 5; ++bad) {
+    std::vector<WireParameterInterval> overrides{{NodeId{2}, 0, 1}};
+    if (bad == 0) overrides.push_back(overrides.front());
+    if (bad == 1) overrides[0].edge = NodeId{99};
+    if (bad == 2) overrides[0].start = 1;
+    if (bad == 3) overrides[0].end = std::numeric_limits<double>::infinity();
+    if (bad == 4) overrides[0].edge = NodeId{};
+    const auto result =
+        BindBodyWiresWithOverrides(model.value(), NodeId{1}, overrides, 0);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+  const auto sheet = Sheet(Face());
+  const auto face_model = ModelBuilder::Build(sheet.report);
+  ASSERT_TRUE(face_model.ok());
+  const WireParameterInterval face_edge[]{{NodeId{2}, 0, 1}};
+  const auto foreign =
+      BindBodyWiresWithOverrides(face_model.value(), NodeId{1}, face_edge, 0);
+  ASSERT_FALSE(foreign.ok());
+  EXPECT_EQ(foreign.error().code, ErrorCode::kInvalidOptions);
+}
+TEST(ParasolidPartialWireBinding, OverridesKeepMembershipAndLateFailureChecks) {
+  for (int bad = 0; bad < 3; ++bad) {
+    auto f = TwoWireBody();
+    if (bad == 2) Set(f, 3, "curve", 0);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const WireParameterInterval overrides[]{{NodeId{2}, bad == 0 ? 1. : 0.,
+                                             bad == 0   ? 0.
+                                             : bad == 1 ? 2.
+                                                        : 1.}};
+    const auto result =
+        BindBodyWiresWithOverrides(model.value(), NodeId{1}, overrides, 0);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, bad == 2 ? ErrorCode::kUnsupportedFormat
+                                            : ErrorCode::kInvalidRecord);
+    EXPECT_NE(
+        result.error().message.find(bad == 2 ? "wire edge 3" : "wire edge 2"),
+        std::string::npos);
+  }
+}
+TEST(ParasolidPartialWireBinding, LimitsAndEmptySelectionOptionsRemainStrict) {
+  const auto f = TwoWireBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  BodyWireBindingOptions options;
+  options.max_edges = 1;
+  const WireParameterInterval one[]{{NodeId{2}, 0, 1}};
+  const WireParameterInterval two[]{{NodeId{2}, 0, 1}, {NodeId{3}, 2, 3}};
+  for (bool both : {false, true}) {
+    const auto result = BindBodyWiresWithOverrides(
+        model.value(), NodeId{1},
+        both ? std::span<const WireParameterInterval>{two}
+             : std::span<const WireParameterInterval>{one},
+        0, options);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  }
+  const auto sheet = Sheet(Face());
+  const auto empty_model = ModelBuilder::Build(sheet.report);
+  ASSERT_TRUE(empty_model.ok());
+  EXPECT_TRUE(
+      BindBodyWiresWithOverrides(empty_model.value(), NodeId{1}, {}, 0).ok());
+  options.intersection = IntersectionEvaluationOptions{};
+  const auto result = BindBodyWiresWithOverrides(empty_model.value(), NodeId{1},
+                                                 {}, 0, options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
 }
 TEST(ParasolidAutomaticWireBinding,
      SplinesAndSurfaceCurvesKeepCompleteKnotDomains) {

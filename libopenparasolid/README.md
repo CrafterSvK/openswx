@@ -185,15 +185,32 @@ for rings, transmitted trim intervals, and complete NURBS/SP domains with
 unambiguous endpoint correspondence. With explicit intersection settings it
 also recovers intersection endpoint parameters from chart points or verified
 chord-plane solutions, retaining chart units and work limits. No partial
-spline inversion or additional turns are guessed. Unsupported or ambiguous
-wires still require the explicit overload; an explicit empty interval span
-retains the complete-coverage requirement.
+spline inversion or additional turns are guessed. Ambiguous intervals still
+require caller input; an explicit empty interval span retains the complete
+coverage requirement.
 
 Both paths reuse the existing explicit wire membership checks. Inference
 runs after full topology validation and respects the same aggregate edge
 limit. Source trim points must agree with their stored parameters. Projected
 line parameters must be representable as doubles before conversion. A single
 unsupported wire fails the whole query with body/edge context.
+
+`BindBodyWiresWithOverrides(model, body, overrides, tolerance, options)` accepts
+intervals for selected wire edges and infers all unspecified wires. Empty
+overrides reproduce automatic binding; the complete explicit overload still
+requires every wire interval. This allows a caller-selected partial spline
+interval or extra conic turns while ordinary wires remain automatic.
+
+Overrides use the same direction, trim-domain, vertex, ring-closure and sampled
+tangent checks as complete explicit binding. Duplicate/invalid IDs and edges
+outside the selected shell wires (including face-owned edges) are invalid
+options. Topology validation, solver settings, positive aggregate limits,
+sorted results and atomic error behavior remain unchanged. Supplying an
+interval does not enable an unsupported evaluator, and an unsupported
+unspecified wire still fails the query. Tests combine a partial spline with an
+automatically resolved line and cover empty/full overrides, explicit turn
+counts, invalid/foreign/face-owned intervals, direction and endpoint failures,
+trim-domain checks, late unsupported curves and resource bounds.
 
 `BodyWireBinding` owns the validated topology and a `wires` vector sorted by
 edge ID. Each `BoundWireGeometry` retains the source `WireEdgeUse`, directed
@@ -239,6 +256,8 @@ private selection contains one shell wire edge, a vertex-free circle. With an
 explicit one-turn interval, it binds and evaluates at five fractions. The
 other 56 body occurrences have empty wire selections. Automatic inference
 reproduces the same circular binding and five samples without caller intervals.
+Empty and complete wire overrides reproduce the same corpus results; the one
+wire cannot exercise mixed overrides, which are covered by synthetic tests.
 Its synthetic regressions additionally cover reversed lines, directed conic
 seams, rational/nonrational and unclamped NURBS/SP domains, explicit partial
 spline fallback, trim metadata, empty selections, limits and parameter overflow.
