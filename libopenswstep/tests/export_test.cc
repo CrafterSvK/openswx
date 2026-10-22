@@ -698,6 +698,106 @@ TEST(OpenSwStep, ParsesConicalSolidsThroughTheBinaryEntryPoint) {
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 4);
 }
+TEST(OpenSwStep, ExportsExactToroidalBandsAndClosedSolids) {
+  for (const bool named_seams : {false, true}) {
+    const auto result = Export(test::ToroidalBand(true, named_seams));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 3);
+    EXPECT_EQ(result.value().statistics.edges, 2);
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    EXPECT_NE(result.value().text.find("=TOROIDAL_SURFACE("),
+              std::string::npos);
+    CheckReferences(result.value());
+  }
+  for (const bool complement : {false, true}) {
+    const auto result = Export(test::ToroidalBand(false, false, complement));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    EXPECT_EQ(result.value().statistics.solids, 0);
+  }
+}
+TEST(OpenSwStep, HandlesToroidalCutOrderAndReversedAxes) {
+  for (const auto& f :
+       {test::ReversedToroidalBand(), test::ReversedToroidalBand(true),
+        test::RotateAndTranslate(test::ToroidalBand())}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, ParsesToroidalSolidsThroughTheBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::ToroidalBand(true, true));
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
+}
+TEST(OpenSwStep, ChecksToroidalCutsWindingAndRegularRingRestrictions) {
+  auto tilted = test::ToroidalBand(false);
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4001)
+      node.fields[1].values = {0., std::sin(1e-6), std::cos(1e-6)};
+  const auto tilt = Export(tilted);
+  ASSERT_FALSE(tilt.ok());
+  EXPECT_NE(tilt.error().message.find("tilted"), std::string::npos);
+  auto coincident = test::ToroidalBand(false);
+  for (auto& node : coincident.report.nodes)
+    if (node.index == 4001) {
+      node.fields[0].values = {0., 0., 0.};
+      node.fields[3].values = {4.};
+    }
+  const auto cuts = Export(coincident);
+  ASSERT_FALSE(cuts.ok());
+  EXPECT_NE(cuts.error().message.find("coincide"), std::string::npos);
+  auto winding = test::ToroidalBand(false);
+  test::Set(winding, 4001, "sense", '-');
+  const auto direction = Export(winding);
+  ASSERT_FALSE(direction.ok());
+  EXPECT_NE(direction.error().message.find("winding"), std::string::npos);
+  for (const double major : {0.5, 1.}) {
+    auto nonring = test::ToroidalBand(false);
+    for (auto& node : nonring.report.nodes) {
+      if (node.index == 702) node.fields[2].values = {major};
+      if (node.index == 4000) node.fields[3].values = {major + 1};
+      if (node.index == 4001) node.fields[3].values = {major};
+    }
+    const auto result = Export(nonring);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(result.error().message.find("regular ring"), std::string::npos);
+  }
+}
+TEST(OpenSwStep, BoundsToroidalCutComparisonsAcrossMixedSupportedFaces) {
+  auto options = Options();
+  options.max_polygon_checks = 4;
+  const auto exact = Export(test::ToroidalTube(), options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  EXPECT_EQ(exact.value().statistics.faces, 4);
+  options.max_polygon_checks = 3;
+  const auto limited = Export(test::ToroidalTube(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
+  auto inverted = test::ToroidalBand();
+  for (uint32_t i = 0; i < 3; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto result = Export(inverted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("signed volume"), std::string::npos);
+  for (const auto& f :
+       {test::InwardToroidalBand(), test::ToroidalProfileBand(false),
+        test::ToroidalProfileBand(true)}) {
+    const auto sheet = Export(f);
+    ASSERT_TRUE(sheet.ok()) << sheet.error().message;
+  }
+}
 class StepFileTest : public testing::Test {
  protected:
   std::filesystem::path root;

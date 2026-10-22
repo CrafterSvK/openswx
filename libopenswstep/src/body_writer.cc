@@ -13,6 +13,7 @@
 #include "conic_boundary.h"
 #include "planar_boundary.h"
 #include "step_writer.h"
+#include "torus_boundary.h"
 
 namespace openswstep::internal {
 namespace {
@@ -25,6 +26,7 @@ struct FaceData {
   const PlaneGeometry* plane = nullptr;
   const CylinderGeometry* cylinder = nullptr;
   const ConeGeometry* cone = nullptr;
+  const TorusGeometry* torus = nullptr;
   bool natural_sense = true;
   std::vector<std::vector<Vector3>> polygons;
   std::optional<std::size_t> outer_loop = 0;
@@ -32,6 +34,7 @@ struct FaceData {
   long double axial_height = 0;
   Vector3 reference_point;
   std::optional<CircularBand> cone_band;
+  std::optional<TorusBand> torus_band;
 };
 struct EdgeUse {
   std::size_t face;
@@ -246,6 +249,18 @@ Result<std::vector<ConicBoundary>> BodyWriter::ConicLoops(
 Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
   const auto loops = ConicLoops(face);
   if (!loops.ok()) return Result<bool>::Err(loops.error());
+  if (face.torus) {
+    const auto band =
+        ValidateTorusLoops(loops.value(), *face.torus, face.natural_sense,
+                           options_.tolerance, polygon_checks_remaining_);
+    if (!band.ok())
+      return Result<bool>::Err(Error(face.source->face, band.error().code,
+                                     band.error().message.c_str()));
+    face.torus_band = band.value();
+    face.reference_point = loops.value().front().center;
+    face.outer_loop = std::nullopt;
+    return Result<bool>::Ok(true);
+  }
   if (face.cone) {
     const auto band =
         ValidateConeLoops(loops.value(), *face.cone, face.natural_sense,
@@ -301,10 +316,12 @@ Result<bool> BodyWriter::PrepareFaces() {
     const auto* cylinder =
         std::get_if<CylinderGeometry>(&surface.value()->payload);
     const auto* cone = std::get_if<ConeGeometry>(&surface.value()->payload);
-    if (!plane && !cylinder && !cone)
-      return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
-                                     "Face export currently supports PLANE and "
-                                     "full-band CYLINDER/CONE surfaces"));
+    const auto* torus = std::get_if<TorusGeometry>(&surface.value()->payload);
+    if (!plane && !cylinder && !cone && !torus)
+      return Result<bool>::Err(
+          Error(source.face, ErrorCode::kUnsupportedFormat,
+                "Face export currently supports PLANE and "
+                "full-band CYLINDER/CONE and ring TORUS surfaces"));
     if (!source.face_sense ||
         (*source.face_sense != '+' && *source.face_sense != '-') ||
         !surface.value()->sense ||
@@ -316,8 +333,9 @@ Result<bool> BodyWriter::PrepareFaces() {
     face.plane = plane;
     face.cylinder = cylinder;
     face.cone = cone;
+    face.torus = torus;
     face.natural_sense = source.face_sense == surface.value()->sense;
-    if (cylinder || cone || source.loops.front().fins.size() == 1) {
+    if (cylinder || cone || torus || source.loops.front().fins.size() == 1) {
       const auto conic = PrepareConicFace(face);
       if (!conic.ok()) return conic;
       faces_.push_back(std::move(face));
@@ -513,9 +531,12 @@ Result<bool> BodyWriter::CheckSolid() {
   long double volume6 = 0;
   for (std::size_t i = 0; i < faces_.size(); ++i) {
     const auto& face = faces_[i];
-    if (face.cylinder || face.cone || face.conic_area > 0) {
+    if (face.cylinder || face.cone || face.torus || face.conic_area > 0) {
       const auto sign = face.natural_sense != reversed_[i] ? 1.L : -1.L;
-      if (face.cone) {
+      if (face.torus) {
+        volume6 +=
+            sign * TorusBandVolume6(*face.torus, *face.torus_band, origin);
+      } else if (face.cone) {
         const auto& band = *face.cone_band;
         const auto& axis = face.cone->axis;
         const auto distance =
@@ -597,7 +618,14 @@ Result<Id> BodyWriter::Face(std::size_t index) {
         "(''," + Reference(loop) + ',' + Logical(!reversed_[index]) + ')'));
   }
   Id surface = 0;
-  if (face.cone) {
+  if (face.torus) {
+    const auto& torus = *face.torus;
+    const auto placement =
+        writer_.Placement(torus.center, torus.axis, torus.x_axis);
+    surface = writer_.Add("TOROIDAL_SURFACE(''," + Reference(placement) + ',' +
+                          writer_.Number(torus.major_radius) + ',' +
+                          writer_.Number(torus.minor_radius) + ')');
+  } else if (face.cone) {
     const auto& cone = *face.cone;
     // Use a positive STEP semi-angle. A narrowing source cone retains its
     // geometry and outward normal by reversing the exported axis instead.

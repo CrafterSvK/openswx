@@ -17,7 +17,19 @@ from OCP.TopExp import TopExp
 from OCP.TopTools import TopTools_IndexedMapOfShape
 
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
+TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 CASES = {
+    "toroidal-tube": (4, 6, 4, 1, "volume", TOROIDAL_SOLID_VOLUME - math.pi),
+    "toroidal-inward": (2, 3, 1, 0, "area", 3 * math.pi**2 + 2 * math.pi),
+    "toroidal-half": (2, 3, 1, 0, "area", 6 * math.pi**2),
+    "toroidal-profile-seam": (2, 3, 1, 0, "area", 3 * math.pi**2 - 2 * math.pi * math.sqrt(2)),
+    "toroidal-solid": (2, 3, 3, 1, "volume", TOROIDAL_SOLID_VOLUME),
+    "toroidal-solid-seams": (2, 3, 3, 1, "volume", TOROIDAL_SOLID_VOLUME),
+    "toroidal-band": (2, 3, 1, 0, "area", 3 * math.pi**2 + 2 * math.pi),
+    "toroidal-complement": (2, 3, 1, 0, "area", 9 * math.pi**2 - 2 * math.pi),
+    "oblique-toroidal-solid": (2, 3, 3, 1, "volume", TOROIDAL_SOLID_VOLUME),
+    "toroidal-loop-order": (2, 3, 3, 1, "volume", TOROIDAL_SOLID_VOLUME),
+    "toroidal-axis": (2, 3, 3, 1, "volume", TOROIDAL_SOLID_VOLUME),
     "frustum": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
     "frustum-apex-origin": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
     "frustum-narrowing": (2, 3, 3, 1, "volume", 26 * math.pi / 3),

@@ -353,7 +353,7 @@ inline ModelFixture RotateAndTranslate(ModelFixture f) {
   for (auto& node : f.report.nodes) {
     if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
         node.node_type != 32 && node.node_type != 50 && node.node_type != 51 &&
-        node.node_type != 52)
+        node.node_type != 52 && node.node_type != 54)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
@@ -692,6 +692,67 @@ inline ModelFixture FrustumAtApexOrigin() {
       node.fields[0].values = {0., 0., -3.};
       node.fields[2].values = {0.};
     }
+  return f;
+}
+inline ModelFixture ToroidalBand(bool solid = true, bool named_seams = false,
+                                 bool complement = false, bool tube = false) {
+  auto f = Cylinder(tube, named_seams, solid, !solid);
+  for (auto& node : f.report.nodes) {
+    if (node.index == 4000) node.fields[3].values = {4.};
+    if (node.index == 4001 || (tube && node.index == 4003))
+      node.fields[0].values = {0., 0., 1.};
+    if (node.index == 701) node.fields[0].values = {0., 0., 1.};
+    if (named_seams && node.index == 500) node.fields[0].values = {4., 0., 0.};
+    if (named_seams && node.index == 501) node.fields[0].values = {3., 0., 1.};
+    if (named_seams && tube && node.index == 503)
+      node.fields[0].values = {1., 0., 1.};
+  }
+  RemoveNode(f, 702);
+  f.Add(54, 702,
+        {Numbers("center", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector),
+         Numbers("major_radius", {3}), Numbers("minor_radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  if (complement) {
+    Set(f, 4000, "sense", '-');
+    Set(f, 4001, "sense", '-');
+  }
+  return f;
+}
+inline ModelFixture ReversedToroidalBand(bool axis = false) {
+  auto f = ToroidalBand();
+  if (axis) {
+    for (auto& node : f.report.nodes)
+      if (node.index == 702) node.fields[1].values = {0., 0., -1.};
+  } else {
+    Set(f, 302, "loop", 605);
+    Set(f, 605, "next", 604);
+    Set(f, 604, "next", 0);
+  }
+  return f;
+}
+inline ModelFixture ToroidalTube() {
+  return ToroidalBand(true, true, false, true);
+}
+inline ModelFixture InwardToroidalBand() {
+  auto f = ToroidalBand(false, false, true);
+  Set(f, 302, "sense", '-');
+  return f;
+}
+inline ModelFixture ToroidalProfileBand(bool across_seam) {
+  auto f = ToroidalBand(false);
+  const auto q = std::sqrt(0.5);
+  for (auto& node : f.report.nodes) {
+    if (node.index == 4000 && across_seam) {
+      node.fields[0].values = {0., 0., q};
+      node.fields[3].values = {3 - q};
+    }
+    if (node.index == 4001) {
+      node.fields[0].values = {0., 0., across_seam ? -q : 0.};
+      node.fields[3].values = {across_seam ? 3 - q : 2.};
+    }
+  }
   return f;
 }
 inline ModelFixture Acorn() {

@@ -16,6 +16,18 @@ int main(int argc, char** argv) {
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
           {"tetra", test::Tetrahedron()},
+          {"toroidal-solid", test::ToroidalBand()},
+          {"toroidal-tube", test::ToroidalTube()},
+          {"toroidal-inward", test::InwardToroidalBand()},
+          {"toroidal-half", test::ToroidalProfileBand(false)},
+          {"toroidal-profile-seam", test::ToroidalProfileBand(true)},
+          {"toroidal-solid-seams", test::ToroidalBand(true, true)},
+          {"toroidal-band", test::ToroidalBand(false)},
+          {"toroidal-complement", test::ToroidalBand(false, false, true)},
+          {"oblique-toroidal-solid",
+           test::RotateAndTranslate(test::ToroidalBand())},
+          {"toroidal-loop-order", test::ReversedToroidalBand()},
+          {"toroidal-axis", test::ReversedToroidalBand(true)},
           {"frustum", test::Frustum()},
           {"frustum-apex-origin", test::FrustumAtApexOrigin()},
           {"frustum-narrowing", test::Frustum(true)},
