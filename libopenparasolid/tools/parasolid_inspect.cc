@@ -17,6 +17,7 @@
 #include "openparasolid/parser.h"
 #include "openparasolid/version.h"
 #include "schema_report.h"
+#include "topology_report.h"
 
 namespace {
 using nlohmann::json;
@@ -128,7 +129,7 @@ void Usage(std::ostream &output) {
       << "Usage: parasolid_inspect [--summary] [--max-records N] "
          "[--nodes] [--geometry] [--schema-catalog FILE.json] [--max-fields N] "
          "[--max-values N] [--max-delta-entries N] "
-         "[--body-geometry ID --binding-tolerance X] "
+         "[--body-topology ID] [--body-geometry ID --binding-tolerance X] "
          "[--fin-intervals ID:START:END,...] [--wire-intervals ID:START:END,...] "
          "[--intersection-chart-tolerance X --intersection-solve-tolerance X] "
          "<file.x_b|file.bin>\n"
@@ -216,6 +217,11 @@ int main(int argc, char *argv[]) {
               {"offset", model.error().offset},
               {"message", model.error().message}};
           status = 2;
+          if (settings.body_topology) {
+            report["body_topology"] = nullptr;
+            report["body_topology_error"] = report["model_error"];
+            report["body_topology_error"]["body"] = *settings.body_topology;
+          }
           if (settings.body_geometry) {
             report["body_geometry"] = nullptr;
             report["body_geometry_error"] = report["model_error"];
@@ -227,6 +233,36 @@ int main(int argc, char *argv[]) {
           if (!model.value().references_verified() ||
               !model.value().typed_geometry_complete())
             status = 2;
+          if (settings.body_topology) {
+            const auto topology = [&]()
+                -> openparasolid::Result<openparasolid::ValidatedBodyTopology> {
+              if (!parsed.value().complete ||
+                  (parsed.value().header.kind !=
+                       openparasolid::StreamKind::kTransmit &&
+                   parsed.value().header.kind !=
+                       openparasolid::StreamKind::kPartition))
+                return openparasolid::
+                    Result<openparasolid::ValidatedBodyTopology>::Err(
+                        {openparasolid::ErrorCode::kUnsupportedFormat, 0,
+                         "Body topology requires a complete transmit or "
+                         "partition stream"});
+              return openparasolid::ValidateBodyTopology(
+                  model.value(),
+                  openparasolid::NodeId{*settings.body_topology});
+            }();
+            if (topology.ok()) {
+              report["body_topology"] = openparasolid::cli::BodyTopologyReport(
+                  topology.value(), summary);
+            } else {
+              report["body_topology"] = nullptr;
+              report["body_topology_error"] = {
+                  {"body", *settings.body_topology},
+                  {"code", openparasolid::ToString(topology.error().code)},
+                  {"offset", topology.error().offset},
+                  {"message", topology.error().message}};
+              status = 2;
+            }
+          }
           if (settings.body_geometry) {
             report["body_geometry"] = nullptr;
             openparasolid::BodyGeometryBindingOptions binding_options;

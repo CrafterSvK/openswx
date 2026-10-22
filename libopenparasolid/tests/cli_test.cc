@@ -12,6 +12,7 @@
 
 #include "../tools/body_report.h"
 #include "../tools/model_report.h"
+#include "../tools/topology_report.h"
 #include "model_test_helpers.h"
 #include "test_helpers.h"
 
@@ -108,6 +109,70 @@ TEST(ParasolidBodyReport, KeepsCountsSettingsAndDirectedBindingData) {
   EXPECT_FALSE(summary.contains("faces"));
   EXPECT_FALSE(summary.contains("vertices"));
 }
+TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
+  ValidatedBodyTopology topology;
+  topology.boundary.body = NodeId{1};
+  topology.boundary.kind = BodyKind::kSheet;
+  RegionBoundary region;
+  region.region = NodeId{2};
+  region.body = NodeId{1};
+  ShellBoundary shell;
+  shell.shell = NodeId{3};
+  FaceBoundary face;
+  face.face = NodeId{4};
+  face.surface = NodeId{5};
+  face.face_sense = '-';
+  LoopBoundary loop;
+  loop.loop = NodeId{6};
+  const FinUse fin{NodeId{7},
+                   NodeId{8},
+                   NodeId{9},
+                   NodeId{10},
+                   NodeId{11},
+                   NodeId{12},
+                   TopologySense::kReverse};
+  loop.fins.push_back(fin);
+  face.loops.push_back(loop);
+  LoopBoundary isolated;
+  isolated.loop = NodeId{13};
+  isolated.isolated_vertex = IsolatedLoopVertex{NodeId{14}, NodeId{9}};
+  face.loops.push_back(isolated);
+  shell.faces.push_back(face);
+  shell.face_uses = {{0, ShellFaceSide::kBack}, {0, ShellFaceSide::kFront}};
+  shell.wire_edges.push_back({NodeId{15}, NodeId{9}, NodeId{10}, NodeId{11}});
+  shell.isolated_vertex = IsolatedShellVertex{NodeId{16}, NodeId{17}};
+  region.shells.push_back(shell);
+  topology.boundary.regions.push_back(region);
+  topology.edges.push_back({NodeId{8},
+                            NodeId{9},
+                            NodeId{10},
+                            NodeId{11},
+                            {{fin, NodeId{6}}, {fin, NodeId{}}}});
+  topology.vertices.push_back(
+      {NodeId{9},
+       NodeId{1},
+       NodeId{18},
+       {{NodeId{7}, NodeId{6}, fin}, {NodeId{14}, NodeId{13}, std::nullopt}}});
+  const auto report = cli::BodyTopologyReport(topology, false);
+  EXPECT_EQ(report["kind"], "sheet");
+  EXPECT_EQ(report["counts"]["faces"], 1);
+  EXPECT_EQ(report["counts"]["face_uses"], 2);
+  EXPECT_EQ(report["counts"]["radial_fins"], 2);
+  const auto s = report["regions"][0]["shells"][0];
+  EXPECT_EQ(s["face_uses"][1]["side"], "front");
+  EXPECT_EQ(s["faces"][0]["loops"][0]["fins"][0]["fin_curve"], 12);
+  EXPECT_EQ(s["faces"][0]["loops"][1]["isolated_vertex"]["fin"], 14);
+  EXPECT_EQ(s["isolated_vertex"]["point"], 17);
+  EXPECT_EQ(s["wires"][0]["start_vertex"], 9);
+  EXPECT_EQ(report["edges"][0]["fins"][0]["sense"], "reverse");
+  EXPECT_EQ(report["edges"][0]["fins"][1]["loop"], 0);
+  EXPECT_TRUE(report["vertices"][0]["fins"][1]["edge_use"].is_null());
+  const auto summary = cli::BodyTopologyReport(topology, true);
+  EXPECT_EQ(summary["counts"], report["counts"]);
+  EXPECT_FALSE(summary.contains("regions"));
+  EXPECT_FALSE(summary.contains("edges"));
+  EXPECT_FALSE(summary.contains("vertices"));
+}
 std::string Quote(const fs::path& path) {
   std::string result = "'";
   for (char c : path.string())
@@ -156,6 +221,9 @@ TEST_F(ParasolidInspectCliTest,
   EXPECT_EQ(report["body_geometry_error"]["body"], 1);
   EXPECT_FALSE(
       report["body_geometry_error"]["message"].get<std::string>().empty());
+  ASSERT_EQ(Run("--body-topology=1 --summary"), 2);
+  EXPECT_TRUE(Report()["body_topology"].is_null());
+  EXPECT_EQ(Report()["body_topology_error"]["body"], 1);
   EXPECT_EQ(Run("--body-geometry 1"), 1);
   EXPECT_EQ(Run("--body-geometry 0 --binding-tolerance 0"), 1);
 }
@@ -216,6 +284,20 @@ TEST_F(ParasolidInspectCliTest,
   EXPECT_EQ(Report()["body_geometry_overrides"],
             (json{{"fin_count", 1}, {"wire_count", 1}}));
   EXPECT_EQ(Run(arguments + " --body-geometry=1 --fin-intervals=7:0:0"), 1);
+  ASSERT_EQ(Run(arguments + " --body-topology=1 --body-geometry=99"), 2);
+  EXPECT_TRUE(Report()["body_topology"].is_object());
+  EXPECT_TRUE(Report()["body_geometry"].is_null());
+  ASSERT_EQ(Run("--schema-catalog " + Quote(path) + " --body-topology=1"), 0);
+  EXPECT_EQ(Report()["body_topology"]["kind"], "wire");
+  EXPECT_TRUE(Report()["body_topology"]["edges"].empty());
+  ASSERT_EQ(
+      Run("--schema-catalog " + Quote(path) + " --body-topology=1 --summary"),
+      0);
+  EXPECT_FALSE(Report()["body_topology"].contains("edges"));
+  ASSERT_EQ(Run(arguments + " --body-topology=99 --body-geometry=1"), 2);
+  EXPECT_TRUE(Report()["body_geometry"].is_object());
+  EXPECT_TRUE(Report()["body_topology"].is_null());
+  EXPECT_EQ(Report()["body_topology_error"]["body"], 99);
   // An unrelated untyped curve keeps the model's diagnostic exit status,
   // while the selected empty body still binds successfully.
   bytes.resize(bytes.size() - 4);
@@ -235,6 +317,10 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run(arguments + " --body-geometry=1 --summary"), 2);
   EXPECT_TRUE(Report()["body_geometry"].is_object());
   EXPECT_EQ(Report()["model"]["invalid_geometry_count"], 1);
+  ASSERT_EQ(
+      Run("--schema-catalog " + Quote(path) + " --body-topology=1 --summary"),
+      2);
+  EXPECT_TRUE(Report()["body_topology"].is_object());
 }
 TEST_F(ParasolidInspectCliTest, WritesCandidateReferencesAndUnknownRanges) {
   ASSERT_EQ(Run(), 0);
@@ -548,6 +634,9 @@ TEST_F(ParasolidInspectCliTest,
   EXPECT_EQ(Report()["complete"], true);
   EXPECT_TRUE(Report()["model"].is_null());
   EXPECT_EQ(Report()["model_error"]["code"], "unsupported_format");
+  ASSERT_EQ(Run("--body-topology=1 --summary"), 2);
+  EXPECT_TRUE(Report()["body_topology"].is_null());
+  EXPECT_EQ(Report()["body_topology_error"]["code"], "unsupported_format");
   bytes = test::Header();
   test::U16(bytes, 29);
   bytes.push_back(255);
@@ -555,6 +644,11 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run("--geometry"), 2);
   EXPECT_EQ(Report()["complete"], false);
   EXPECT_TRUE(Report()["model"].is_null());
+  ASSERT_EQ(Run("--body-topology=1 --summary"), 2);
+  EXPECT_EQ(Report()["complete"], false);
+  EXPECT_TRUE(Report()["body_topology"].is_null());
+  EXPECT_EQ(Report()["body_topology_error"]["body"], 1);
+
 }
 TEST_F(ParasolidInspectCliTest,
        GeometryModeReportsSemanticIssuesWithLimitedStatus) {

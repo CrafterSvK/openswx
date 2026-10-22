@@ -84,6 +84,7 @@ struct InspectSettings {
   std::optional<std::filesystem::path> input;
   std::optional<std::filesystem::path> catalog;
   std::optional<uint32_t> body_geometry;
+  std::optional<uint32_t> body_topology;
   std::optional<double> binding_tolerance;
   std::optional<IntersectionEvaluationOptions> intersection;
   std::vector<FinParameterInterval> fin_intervals;
@@ -107,6 +108,7 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"nodes", "0"},
       {"geometry", "0"},
       {"body-geometry", ""},
+      {"body-topology", ""},
       {"fin-intervals", ""},
       {"wire-intervals", ""},
       {"binding-tolerance", ""},
@@ -122,6 +124,7 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"nodes", "OPENPARASOLID_NODES"},
       {"geometry", "OPENPARASOLID_GEOMETRY"},
       {"body-geometry", "OPENPARASOLID_BODY_GEOMETRY"},
+      {"body-topology", "OPENPARASOLID_BODY_TOPOLOGY"},
       {"fin-intervals", "OPENPARASOLID_FIN_INTERVALS"},
       {"wire-intervals", "OPENPARASOLID_WIRE_INTERVALS"},
       {"binding-tolerance", "OPENPARASOLID_BINDING_TOLERANCE"},
@@ -201,6 +204,17 @@ inline Result<InspectSettings> ParseInspectSettings(
     if (text.empty() || parsed.ec != std::errc{} ||
         parsed.ptr != text.data() + text.size() || *target == 0)
       return invalid("Invalid positive integer setting: " + std::string(name));
+  }
+  if (!raw["body-topology"].empty()) {
+    uint32_t id = 0;
+    const auto& text = raw["body-topology"];
+    const auto parsed =
+        std::from_chars(text.data(), text.data() + text.size(), id);
+    if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() ||
+        !id)
+      return invalid("Invalid positive topology body ID");
+    settings.body_topology = id;
+    settings.geometry = true;
   }
   if (!raw["body-geometry"].empty()) {
     uint32_t id = 0;

@@ -2005,6 +2005,51 @@ failure propagation, and vertex-free rings with different parameter seams.
 The 57-body private regression selection retains all 56 automatic successes
 and the remaining success with eight explicit fin intervals.
 
+## Inspecting validated body topology
+
+```bash
+parasolid_inspect --body-topology 1 --summary part.x_b
+parasolid_inspect --body-topology 1 part.x_b
+parasolid_inspect --body-topology 1 --body-geometry 1 \
+  --binding-tolerance 1e-7 part.x_b
+```
+
+`--body-topology ID` (environment: `OPENPARASOLID_BODY_TOPOLOGY`) selects a
+positive source BODY ID and enables sequential parsing and model construction.
+It calls `ValidateBodyTopology` without requiring a binding tolerance, typed
+curve evaluation or interval overrides. The input must be a complete ordinary
+transmit or partition stream. Existing parser/model limits and the topology
+API's default traversal, model-scan, radial-fin and vertex-fin budgets remain
+active. CLI values override environment values; an empty value clears an
+inherited selection. Invalid IDs are option errors (exit 1).
+
+Successful output adds `body_topology` with body ID, recorded body kind,
+`validation_scope: "recorded_body_topology"` and counts of regions, shells,
+distinct faces, front/back face uses, shell wire uses, distinct edges, radial
+fins (including dummy anchors), and vertices. Full output retains source
+region/shell hierarchy, ordered face loops and fins, wire endpoints/curves,
+isolated loop/shell vertices, radial edge rings and vertex incidence chains.
+Fin records preserve both edge and fin curve references and natural edge
+sense. IDs use zero for null references; no curve parameters or vertex
+positions are inferred. `--summary` omits arrays and retains counts and scope.
+
+Failure produces null `body_topology` and `body_topology_error` with body ID,
+code, source offset and message, returning 2. Existing unrelated model findings
+also retain exit 2 even if the selected topology validates successfully.
+Topology and geometry queries may be combined, including different body IDs;
+each result records its selection and is evaluated independently. In particular,
+a geometry failure leaves successful topology available. Combining both queries
+adds a separate topology-validation pass with its own existing budgets.
+
+Recorded solid/sheet/wire kinds do not certify manifoldness, geometric closure,
+volume, or the final state of a delta history. Region kinds do not classify
+outer and inner shells. Tests cover summaries, source incidence serialization,
+independent successes/failures, invalid IDs, environment precedence, delta and
+incomplete streams, and unrelated model findings. All 57 body topologies in the
+39-stream private selection validate through the CLI; automatic geometry
+binding remains at 56/57, with the last body requiring explicit intervals.
+Private inputs and generated reports remain outside the repository.
+
 ## Inspecting bound body geometry
 
 The inspector exposes automatic combined body binding with a positive source

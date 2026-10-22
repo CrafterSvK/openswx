@@ -176,5 +176,27 @@ TEST(ParasolidInspectOptions, BoundsIntervalTextAndEntryCount) {
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
 }
+TEST(ParasolidInspectOptions, TopologyEnablesModelWithoutBindingTolerance) {
+  const auto result = Parse({"--body-topology=7", "part.x_b"},
+                            {{"OPENPARASOLID_BODY_TOPOLOGY", "invalid"}});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().body_topology, 7);
+  EXPECT_TRUE(result.value().nodes);
+  EXPECT_TRUE(result.value().geometry);
+  EXPECT_FALSE(result.value().body_geometry);
+  EXPECT_FALSE(result.value().binding_tolerance);
+  EXPECT_TRUE(Parse({"part.x_b"}, {{"OPENPARASOLID_BODY_TOPOLOGY", "1"}}).ok());
+  for (const char* id : {"0", "-1", "4294967296", "1x", "nan"}) {
+    const std::string flag = "--body-topology=" + std::string(id);
+    EXPECT_FALSE(Parse({flag, "part.x_b"}).ok());
+  }
+  EXPECT_FALSE(
+      Parse({"--body-topology=1", "--binding-tolerance=0", "part.x_b"}).ok());
+  const auto both = Parse({"--body-topology=1", "--body-geometry=2",
+                           "--binding-tolerance=0", "part.x_b"});
+  ASSERT_TRUE(both.ok());
+  EXPECT_EQ(both.value().body_topology, 1);
+  EXPECT_EQ(both.value().body_geometry, 2);
+}
 }  // namespace
 }  // namespace openparasolid::cli
