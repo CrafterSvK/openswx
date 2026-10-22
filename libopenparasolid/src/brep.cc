@@ -567,22 +567,48 @@ Result<FaceTrimming> BindFaceTrimming(
                                            0, ErrorCode::kInvalidOptions));
   return Result<FaceTrimming>::Ok(std::move(result));
 }
-Result<FaceTrimming> BindFaceTrimming(
-    const Model& model, NodeId face, double tolerance,
+Result<FaceTrimming> BindFaceTrimmingWithOverrides(
+    const Model& model, NodeId face,
+    std::span<const FinParameterInterval> overrides, double tolerance,
     const FaceTraversalOptions& options,
     const std::optional<IntersectionEvaluationOptions>& intersection) {
   if (intersection) {
     if (auto error = internal::ValidateIntersectionOptions(*intersection))
       return Result<FaceTrimming>::Err(*error);
   }
-  if (!std::isfinite(tolerance) || tolerance < 0)
-    return Result<FaceTrimming>::Err(Error("Invalid automatic trim tolerance",
-                                           0, ErrorCode::kInvalidOptions));
+  if (!std::isfinite(tolerance) || tolerance < 0 || !options.max_loops ||
+      !options.max_fins)
+    return Result<FaceTrimming>::Err(
+        Error("Invalid automatic trim options", 0, ErrorCode::kInvalidOptions));
   auto boundary = TraverseFaceBoundary(model, face, options);
   if (!boundary.ok()) return Result<FaceTrimming>::Err(boundary.error());
+  if (overrides.size() > options.max_fins)
+    return Result<FaceTrimming>::Err(
+        Error("Face interval override limit", 0, ErrorCode::kResourceLimit));
+  std::unordered_map<uint32_t, FinParameterInterval> supplied;
+  for (const auto& p : overrides) {
+    if (!std::isfinite(p.start) || !std::isfinite(p.end) || p.start == p.end ||
+        !supplied.emplace(p.fin.value, p).second)
+      return Result<FaceTrimming>::Err(Error(
+          "Duplicate or invalid fin override", 0, ErrorCode::kInvalidOptions));
+  }
+  std::size_t listed = 0;
+  for (const auto& loop : boundary.value().loops)
+    for (const auto& fin : loop.fins)
+      if (supplied.contains(fin.fin.value)) ++listed;
+  if (listed != supplied.size())
+    return Result<FaceTrimming>::Err(
+        Error("Overrides reference fins outside selected face edges", 0,
+              ErrorCode::kInvalidOptions));
   std::vector<FinParameterInterval> intervals;
   for (const auto& loop : boundary.value().loops)
     for (const auto& use : loop.fins) {
+      const auto specified = supplied.find(use.fin.value);
+      if (specified != supplied.end()) {
+        intervals.push_back(specified->second);
+        supplied.erase(specified);
+        continue;
+      }
       const NodeId curve_id =
           use.fin_curve.value ? use.fin_curve : use.edge_curve;
       const auto* curve = Geometry(model, curve_id);
@@ -645,6 +671,13 @@ Result<FaceTrimming> BindFaceTrimming(
     }
   return BindFaceTrimming(model, face, intervals, tolerance, options,
                           intersection);
+}
+Result<FaceTrimming> BindFaceTrimming(
+    const Model& model, NodeId face, double tolerance,
+    const FaceTraversalOptions& options,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  return BindFaceTrimmingWithOverrides(model, face, {}, tolerance, options,
+                                       intersection);
 }
 
 }  // namespace openparasolid

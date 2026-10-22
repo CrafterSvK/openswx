@@ -85,6 +85,16 @@ struct FinGeometryEvaluation {
     const FaceTraversalOptions& options = {},
     const std::optional<IntersectionEvaluationOptions>& intersection =
         std::nullopt);
+// Resolves all unspecified fins automatically. Overrides use the same directed
+// interval and membership checks as the complete explicit overload. Duplicate,
+// foreign or isolated-loop fin IDs are invalid options. Empty overrides retain
+// automatic behavior; unsupported unspecified branches remain errors.
+[[nodiscard]] Result<FaceTrimming> BindFaceTrimmingWithOverrides(
+    const Model& model, NodeId face,
+    std::span<const FinParameterInterval> overrides, double tolerance,
+    const FaceTraversalOptions& options = {},
+    const std::optional<IntersectionEvaluationOptions>& intersection =
+        std::nullopt);
 // Fraction is in [0,1]. Tangent is dP/d(fraction), including directed reversal.
 // Uses transmitted SP-curve UVs when available; otherwise bounded surface
 // inversion. Uses the binding's owned intersection settings when supplied.
@@ -121,6 +131,12 @@ struct BodyFaceBinding {
     const BodyFaceBindingOptions& options = {});
 [[nodiscard]] Result<BodyFaceBinding> BindBodyFaces(
     const Model& model, NodeId body, double tolerance,
+    const BodyFaceBindingOptions& options = {});
+// Body-wide partial intervals; unspecified fins use automatic inference.
+// Keeps full topology validation, aggregate limits and atomic error behavior.
+[[nodiscard]] Result<BodyFaceBinding> BindBodyFacesWithOverrides(
+    const Model& model, NodeId body,
+    std::span<const FinParameterInterval> overrides, double tolerance,
     const BodyFaceBindingOptions& options = {});
 }  // namespace openparasolid
 #endif  // OPENPARASOLID_BREP_H_

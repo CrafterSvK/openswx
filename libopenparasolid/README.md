@@ -137,6 +137,42 @@ Synthetic tests cover shared front/back uses, multi-face aggregate budgets,
 isolated loops, explicit intervals, stored intersection settings, topology
 failure, late geometry failure and bodies without faces.
 
+## Partial fin intervals
+
+`BindFaceTrimmingWithOverrides` and `BindBodyFacesWithOverrides` accept a span
+of directed `FinParameterInterval` values for selected fins. Each supplied
+interval replaces automatic inference for that fin; all unspecified fins are
+resolved automatically. This lets callers supply the few known branch choices
+needed for otherwise ambiguous SP/NURBS/intersection curves. Empty overrides
+retain the automatic behavior; the existing complete explicit overloads still
+require every non-isolated fin interval.
+
+```cpp
+auto face_bound = BindFaceTrimmingWithOverrides(
+    model, face, overrides, tolerance, face_options, solver_options);
+auto body_bound = BindBodyFacesWithOverrides(
+    model, body, overrides, tolerance, body_options);
+```
+
+Overrides retain the complete explicit path's direction, vertex, surface and
+sampled membership checks. Invalid or duplicate intervals, foreign fin IDs and
+isolated-loop fins are rejected. The body path groups overrides by unique face
+and keeps complete topology validation, aggregate resource limits and atomic
+results. Unspecified unsupported branches remain errors. Solver settings are
+retained in the bound fins. An interval does not enable an unsupported surface
+or curve evaluator, and source trim parameters are still enforced.
+
+Synthetic tests bind a previously unsupported SP-curve fin with one override
+while resolving the other fin automatically. They also cover mixed intersection
+bindings, strict direction checks, foreign/isolated IDs and resource limits.
+In the 39-stream private selection, 591 reversed-order overrides taken from
+previously validated bindings reproduce all 1,752 fin intervals in 367 faces.
+All 51 previously supported body occurrences still bind, including 30 without
+faces.
+The other six bodies retain their unsupported result with empty overrides.
+This checks mixed binding and regressions; it does not establish missing branch
+choices for those six real cases.
+
 ## Intersection curves in face bindings
 
 Both `BindFaceTrimming` overloads accept optional `IntersectionEvaluationOptions`

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 
 #include "model_test_helpers.h"
@@ -796,6 +797,151 @@ void ParameterCurve(ModelFixture& f) {
   f.Add(128, 413, {Array("knots", FieldType::kDouble, {0., 1.})});
   f.Add(127, 414,
         {Array("multiplicities", FieldType::kShort, {int64_t{2}, int64_t{2}})});
+}
+ModelFixture PartialIntervalBody() {
+  auto f = Sheet(Face());
+  ParameterCurve(f);
+  f.Add(137, 500,
+        {Pointer("surface", 300, 1006), Pointer("b_curve", 410, 134),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 10, "curve", 500);
+  return f;
+}
+TEST(ParasolidPartialIntervals, SuppliesOnlyTheFinThatNeedsAnInterval) {
+  const auto f = PartialIntervalBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval p[]{{NodeId{10}, 0, 1}};
+  EXPECT_FALSE(BindFaceTrimming(model.value(), NodeId{30}, 1e-12).ok());
+  const auto complete = BindFaceTrimming(model.value(), NodeId{30}, p, 1e-12);
+  ASSERT_FALSE(complete.ok());
+  EXPECT_EQ(complete.error().code, ErrorCode::kInvalidOptions);
+  const auto face =
+      BindFaceTrimmingWithOverrides(model.value(), NodeId{30}, p, 1e-12);
+  ASSERT_TRUE(face.ok()) << face.error().message;
+  const auto body =
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, p, 1e-12);
+  ASSERT_TRUE(body.ok()) << body.error().message;
+  const auto& fins = body.value().faces[0].loops[0].fins;
+  ASSERT_EQ(fins.size(), 2);
+  EXPECT_EQ(fins[0].curve.value, 500);
+  EXPECT_EQ(fins[1].curve.value, 400);
+  EXPECT_EQ(fins[1].start, 1);
+  EXPECT_EQ(fins[1].end, 0);
+  const auto point = EvaluateBoundFin(model.value(), fins[0], .25, 1e-12);
+  ASSERT_TRUE(point.ok());
+  EXPECT_NEAR(point.value().uv.u, .25, 1e-12);
+}
+TEST(ParasolidPartialIntervals,
+     RejectsInvalidOrForeignOverridesBeforeInference) {
+  const auto f = PartialIntervalBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (int bad = 0; bad < 5; ++bad) {
+    std::vector<FinParameterInterval> p{{NodeId{10}, 0, 1}};
+    if (bad == 0) p.push_back(p[0]);
+    if (bad == 1) p[0].fin = NodeId{999};
+    if (bad == 2) p[0].start = p[0].end;
+    if (bad == 3) p[0].start = std::numeric_limits<double>::quiet_NaN();
+    if (bad == 4) p[0].end = .9;
+    const auto face =
+        BindFaceTrimmingWithOverrides(model.value(), NodeId{30}, p, 1e-12);
+    const auto body =
+        BindBodyFacesWithOverrides(model.value(), NodeId{1}, p, 1e-12);
+    ASSERT_FALSE(face.ok()) << bad;
+    ASSERT_FALSE(body.ok()) << bad;
+    const auto code =
+        bad == 4 ? ErrorCode::kInvalidRecord : ErrorCode::kInvalidOptions;
+    EXPECT_EQ(face.error().code, code);
+    EXPECT_EQ(body.error().code, code);
+  }
+}
+TEST(ParasolidPartialIntervals, KeepsUnspecifiedBranchesAndDirectionsStrict) {
+  auto f = PartialIntervalBody();
+  Set(f, 11, "curve", 500);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval one[]{{NodeId{10}, 0, 1}};
+  const auto missing =
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, one, 1e-12);
+  ASSERT_FALSE(missing.ok());
+  EXPECT_EQ(missing.error().code, ErrorCode::kUnsupportedFormat);
+  const auto plain = ModelBuilder::Build(Sheet(Face()).report);
+  ASSERT_TRUE(plain.ok());
+  const FinParameterInterval wrong[]{{NodeId{11}, 0, 1}};
+  const auto direction =
+      BindBodyFacesWithOverrides(plain.value(), NodeId{1}, wrong, 1e-12);
+  ASSERT_FALSE(direction.ok());
+  EXPECT_EQ(direction.error().code, ErrorCode::kInvalidRecord);
+}
+TEST(ParasolidPartialIntervals,
+     GroupsOverridesAcrossUniqueBodyFacesAndBoundsInput) {
+  const auto f = TwoFaceBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval p[]{
+      {NodeId{11}, -.25 + 2 * std::numbers::pi, -.25}};
+  BodyFaceBindingOptions options;
+  options.max_fins = 2;
+  options.face.max_fins = 1;
+  const auto body =
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, p, 1e-12, options);
+  ASSERT_TRUE(body.ok()) << body.error().message;
+  EXPECT_EQ(body.value().faces.size(), 2);
+  options.max_fins = 1;
+  const auto aggregate =
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, p, 1e-12, options);
+  ASSERT_FALSE(aggregate.ok());
+  EXPECT_EQ(aggregate.error().code, ErrorCode::kResourceLimit);
+  const FinParameterInterval excessive[]{{NodeId{10}, 0, 1},
+                                         {NodeId{11}, 1, 0}};
+  const auto body_input = BindBodyFacesWithOverrides(model.value(), NodeId{1},
+                                                     excessive, 1e-12, options);
+  const auto face_input = BindFaceTrimmingWithOverrides(
+      model.value(), NodeId{30}, excessive, 1e-12, {1, 1});
+  ASSERT_FALSE(body_input.ok());
+  ASSERT_FALSE(face_input.ok());
+  EXPECT_EQ(body_input.error().code, ErrorCode::kResourceLimit);
+  EXPECT_EQ(face_input.error().code, ErrorCode::kResourceLimit);
+}
+TEST(ParasolidPartialIntervals, CarriesIntersectionSettingsIntoOverriddenFins) {
+  auto f = Sheet(IntersectionFace(false));
+  Set(f, 2, "curve", 400);
+  Set(f, 10, "curve", 401);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval p[]{{NodeId{10}, 0, 1}};
+  BodyFaceBindingOptions options;
+  options.intersection = IntersectionEvaluationOptions{1e-12, 1e-12};
+  const auto result =
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, p, 1e-12, options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& fin = result.value().faces[0].loops[0].fins[0];
+  ASSERT_TRUE(fin.intersection.has_value());
+  const auto point = EvaluateBoundFin(model.value(), fin, .5, 1e-12);
+  ASSERT_TRUE(point.ok());
+  EXPECT_NEAR(point.value().curve.position.x, .5, 1e-12);
+}
+TEST(ParasolidPartialIntervals, IsolatedLoopFinsCannotHaveIntervals) {
+  auto f = TwoFaceBody();
+  Set(f, 21, "next", 22);
+  f.Add(15, 22,
+        {Pointer("face", 31, 14), Pointer("halfedge", 12, 17),
+         Pointer("next", 0, 15)});
+  Fin(f, 12, 100, 0, 22, 12);
+  Set(f, 12, "edge", 0);
+  Set(f, 10, "next_at_vx", 12);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval p[]{{NodeId{12}, 0, 1}};
+  const auto face =
+      BindFaceTrimmingWithOverrides(model.value(), NodeId{31}, p, 1e-12);
+  const auto body =
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, p, 1e-12);
+  ASSERT_FALSE(face.ok());
+  ASSERT_FALSE(body.ok());
+  EXPECT_EQ(face.error().code, ErrorCode::kInvalidOptions);
+  EXPECT_EQ(body.error().code, ErrorCode::kInvalidOptions);
 }
 TEST(ParasolidFaceBinding,
      UsesTransmittedUvAndRejectsAnotherSupportingSurface) {
