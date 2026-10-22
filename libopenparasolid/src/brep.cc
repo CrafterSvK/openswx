@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numbers>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -96,6 +97,81 @@ const GeometryObject* Geometry(const Model& model, NodeId id) {
 }
 double Distance(Vector3 a, Vector3 b) {
   return std::hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+}
+// Accurate conics are simple periodic curves: the curve sense and fin sense
+// select the directed arc, including a full turn for a topologically closed
+// edge.
+Result<FinParameterInterval> ConicInterval(const Model& model,
+                                           const GeometryObject& curve,
+                                           const FinUse& use) {
+  if (use.fin_curve.value || !curve.sense ||
+      (*curve.sense != '+' && *curve.sense != '-'))
+    return Result<FinParameterInterval>::Err(
+        Error("Conic interval requires accurate edge orientation", 0,
+              ErrorCode::kUnsupportedFormat));
+  const bool increasing =
+      (*curve.sense == '+') == (use.sense == TopologySense::kForward);
+  constexpr double turn = 2 * std::numbers::pi;
+  if (!use.start_vertex.value && !use.end_vertex.value)
+    return Result<FinParameterInterval>::Ok(
+        {use.fin, 0, increasing ? turn : -turn});
+  if (!use.start_vertex.value || !use.end_vertex.value)
+    return Result<FinParameterInterval>::Err(
+        Error("Conic interval has only one endpoint", 0,
+              ErrorCode::kUnsupportedFormat));
+  Vector3 center, x, normal;
+  double major, minor;
+  if (const auto* circle = std::get_if<CircleGeometry>(&curve.payload)) {
+    center = circle->center;
+    x = circle->x_axis;
+    normal = circle->normal;
+    major = minor = circle->radius;
+  } else {
+    const auto& ellipse = std::get<EllipseGeometry>(curve.payload);
+    center = ellipse.center;
+    x = ellipse.x_axis;
+    normal = ellipse.normal;
+    major = ellipse.major_radius;
+    minor = ellipse.minor_radius;
+  }
+  const Vector3 y{normal.y * x.z - normal.z * x.y,
+                  normal.z * x.x - normal.x * x.z,
+                  normal.x * x.y - normal.y * x.x};
+  auto angle = [&](NodeId vertex) -> Result<double> {
+    auto point = Point(model, vertex);
+    if (!point.ok()) return Result<double>::Err(point.error());
+    const long double dx = static_cast<long double>(point.value().x) - center.x;
+    const long double dy = static_cast<long double>(point.value().y) - center.y;
+    const long double dz = static_cast<long double>(point.value().z) - center.z;
+    const long double xx = static_cast<long double>(x.x) * x.x +
+                           static_cast<long double>(x.y) * x.y +
+                           static_cast<long double>(x.z) * x.z;
+    const long double yy = static_cast<long double>(y.x) * y.x +
+                           static_cast<long double>(y.y) * y.y +
+                           static_cast<long double>(y.z) * y.z;
+    const long double cosine = (dx * x.x + dy * x.y + dz * x.z) / xx / major;
+    const long double sine = (dx * y.x + dy * y.y + dz * y.z) / yy / minor;
+    if (!std::isfinite(cosine) || !std::isfinite(sine) ||
+        (cosine == 0 && sine == 0))
+      return Result<double>::Err(Error("Invalid conic endpoint projection"));
+    return Result<double>::Ok(static_cast<double>(std::atan2(sine, cosine)));
+  };
+  auto start = angle(use.start_vertex), end = angle(use.end_vertex);
+  if (!start.ok()) return Result<FinParameterInterval>::Err(start.error());
+  if (!end.ok()) return Result<FinParameterInterval>::Err(end.error());
+  double span = end.value() - start.value();
+  if (use.start_vertex == use.end_vertex) {
+    span = increasing ? turn : -turn;
+  } else {
+    if (span == 0 || std::abs(span) == turn)
+      return Result<FinParameterInterval>::Err(
+          Error("Distinct conic vertices have ambiguous coincident parameters",
+                0, ErrorCode::kUnsupportedFormat));
+    if (increasing && span < 0) span += turn;
+    if (!increasing && span > 0) span -= turn;
+  }
+  return Result<FinParameterInterval>::Ok(
+      {use.fin, start.value(), start.value() + span});
 }
 }  // namespace
 Result<ValidatedBodyTopology> ValidateBodyTopology(
@@ -445,9 +521,20 @@ Result<FaceTrimming> BindFaceTrimming(const Model& model, NodeId face,
       const NodeId curve_id =
           use.fin_curve.value ? use.fin_curve : use.edge_curve;
       const auto* curve = Geometry(model, curve_id);
-      if (!curve || !use.start_vertex.value || !use.end_vertex.value)
+      if (!curve)
         return Result<FaceTrimming>::Err(
             Error("Curve interval needs explicit branch/endpoints", 0,
+                  ErrorCode::kUnsupportedFormat));
+      if (std::holds_alternative<CircleGeometry>(curve->payload) ||
+          std::holds_alternative<EllipseGeometry>(curve->payload)) {
+        auto interval = ConicInterval(model, *curve, use);
+        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
+        intervals.push_back(interval.value());
+        continue;
+      }
+      if (!use.start_vertex.value || !use.end_vertex.value)
+        return Result<FaceTrimming>::Err(
+            Error("Curve interval needs explicit endpoints", 0,
                   ErrorCode::kUnsupportedFormat));
       const auto start = Point(model, use.start_vertex),
                  end = Point(model, use.end_vertex);

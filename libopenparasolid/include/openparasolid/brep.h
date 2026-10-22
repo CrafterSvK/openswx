@@ -66,9 +66,10 @@ struct FinGeometryEvaluation {
     const Model& model, NodeId face,
     std::span<const FinParameterInterval> intervals, double tolerance,
     const FaceTraversalOptions& options = {});
-// Resolves intervals automatically for lines and trimmed curves whose endpoint
-// correspondence is unambiguous within tolerance. Periodic/untrimmed NURBS
-// branches and ambiguous closed endpoints require the explicit overload.
+// Resolves lines, unambiguous source trim intervals and accurate circle/ellipse
+// edges. Conic curve/fin senses select a single directed arc, or one full turn
+// for a closed/vertex-free edge. Coincident distinct vertices, fin conics and
+// periodic/untrimmed NURBS branches require the explicit overload.
 [[nodiscard]] Result<FaceTrimming> BindFaceTrimming(
     const Model& model, NodeId face, double tolerance,
     const FaceTraversalOptions& options = {});

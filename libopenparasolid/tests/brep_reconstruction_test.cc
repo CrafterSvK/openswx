@@ -93,6 +93,105 @@ ModelFixture Face() {
          ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
+ModelFixture ConicFace(bool ellipse, char sense = '+') {
+  auto f = Face();
+  Set(f, 2, "curve", 401);
+  std::vector<ModelField> fields{
+      Numbers("center", {2, -3, 0}, FieldType::kVector),
+      Numbers("normal", {0, 0, -1}, FieldType::kVector),
+      Numbers("x_axis", {0, 1, 0}, FieldType::kVector),
+      ByteValue("sense", sense, FieldType::kCharacter)};
+  if (ellipse) {
+    fields.push_back(Numbers("major_radius", {3}));
+    fields.push_back(Numbers("minor_radius", {2}));
+  } else {
+    fields.push_back(Numbers("radius", {3}));
+  }
+  f.Add(ellipse ? 32 : 31, 401, std::move(fields));
+  for (auto& n : f.report.nodes) {
+    if (n.index == 200 || n.index == 201) {
+      const double angle = n.index == 200 ? -0.25 : 0.25;
+      n.fields[0].values = {2 + (ellipse ? 2 : 3) * std::sin(angle),
+                            -3 + 3 * std::cos(angle), 0.};
+    }
+  }
+  return f;
+}
+TEST(ParasolidFaceBinding, AutomaticallyBindsOrientedConicsAcrossSeams) {
+  for (bool ellipse : {false, true}) {
+    for (char sense : {'+', '-'}) {
+      const auto f = ConicFace(ellipse, sense);
+      const auto model = ModelBuilder::Build(f.report);
+      ASSERT_TRUE(model.ok());
+      const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      const auto& fins = result.value().loops[0].fins;
+      ASSERT_EQ(fins.size(), 2);
+      const double span = sense == '+' ? 0.5 : 0.5 - 2 * std::numbers::pi;
+      EXPECT_NEAR(fins[0].start, -0.25, 1e-12);
+      EXPECT_NEAR(fins[0].end - fins[0].start, span, 1e-12);
+      EXPECT_NEAR(fins[1].end - fins[1].start, -span, 1e-12);
+      const auto midpoint =
+          EvaluateBoundFin(model.value(), fins[0], 0.5, 1e-12);
+      ASSERT_TRUE(midpoint.ok());
+      EXPECT_NEAR(midpoint.value().curve.position.x, 2, 1e-12);
+      EXPECT_NEAR(midpoint.value().curve.position.y, sense == '+' ? 0 : -6,
+                  1e-12);
+      EXPECT_NEAR(midpoint.value().curve.first_derivative.x,
+                  (ellipse ? 2 : 3) * span * (sense == '+' ? 1 : -1), 1e-12);
+    }
+  }
+}
+TEST(ParasolidFaceBinding, AutomaticallyBindsClosedAndVertexFreeConics) {
+  for (bool ellipse : {false, true}) {
+    for (bool vertex_free : {false, true}) {
+      for (char sense : {'+', '-'}) {
+        auto f = ConicFace(ellipse, sense);
+        Set(f, 10, "vertex", vertex_free ? 0 : 100);
+        Set(f, 11, "vertex", vertex_free ? 0 : 100);
+        Set(f, 10, "forward", 10);
+        Set(f, 10, "backward", 10);
+        Set(f, 11, "loop", 0);
+        Set(f, 11, "forward", 0);
+        Set(f, 11, "backward", 0);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        const auto& fin = result.value().loops[0].fins[0];
+        EXPECT_NEAR(fin.start, vertex_free ? 0 : -0.25, 1e-12);
+        EXPECT_NEAR(fin.end - fin.start,
+                    (sense == '+' ? 2 : -2) * std::numbers::pi, 1e-12);
+      }
+    }
+  }
+}
+TEST(ParasolidFaceBinding, RejectsAmbiguousOrInvalidAutomaticConics) {
+  for (int bad = 0; bad < 6; ++bad) {
+    auto f = ConicFace(false);
+    if (bad == 0) Set(f, 401, "sense", '?');
+    if (bad == 1) Set(f, 10, "vertex", 0);
+    if (bad == 2) Set(f, 10, "curve", 401);
+    if (bad >= 3) {
+      for (auto& n : f.report.nodes)
+        if (n.index == 201) {
+          if (bad == 3)
+            n.fields[0].values = {2 + 3 * std::sin(-0.25),
+                                  -3 + 3 * std::cos(-0.25), 0.};
+          if (bad == 4) n.fields[0].values = {2., -3., 0.};
+          if (bad == 5) n.fields[0].values = {2., 0., 1.};
+        }
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, (bad < 4 && bad != 1)
+                                       ? ErrorCode::kUnsupportedFormat
+                                       : ErrorCode::kInvalidRecord)
+        << bad;
+  }
+}
 TEST(ParasolidBrepValidation, OwnsCompleteWireBodyAndChecksAggregateLimits) {
   const auto result = [] {
     const auto f = Wire();

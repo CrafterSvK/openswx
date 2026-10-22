@@ -41,8 +41,13 @@ loop hierarchy to exact curve IDs and directed parameter intervals, without
 tessellation. Supply one `FinParameterInterval` per non-isolated fin, including
 explicit unwrapped periodic branches. The automatic overload omits `intervals`
 and resolves lines and source trim intervals whose endpoint correspondence is
-unambiguous within tolerance. Other branches/types return
-`kUnsupportedFormat`, allowing an explicit interval rather than a guessed arc.
+unambiguous within tolerance. Accurate circle/ellipse edges use curve and fin
+senses (XT section 5.2.8) to select the directed arc across periodic seams.
+Closed edges with the same endpoint vertex, and vertex-free edges, use one
+full turn; the latter start at parameter zero. Distinct vertices with coincident
+angular parameters, conics stored on fins, unknown senses and other curve types
+return `kUnsupportedFormat`. Supply explicit intervals for those cases or for
+caller-selected additional turns. No shortest-arc assumption is made.
 
 The resulting `FaceTrimming` owns its loops and `BoundFinGeometry` records.
 Fin curves take precedence over edge curves. Known accurate-edge curve sense
@@ -59,10 +64,14 @@ Finite membership checks do not prove agreement at every parameter.
 
 Synthetic regressions cover missing owner lists and incidence, both face
 sides, source loops, directed/reversed intervals, UV curves, mismatched
-surfaces and explicit periodic branches. All 163 bodies in the existing
-130-stream selection pass the integrated topology validation. Automatic
-binding also passes 45 selected real faces with 206 line/trim-line fin uses
-on supported analytic surfaces at tolerance 1e-7. This is selected coverage,
+surfaces, oriented conic arcs and closed/vertex-free periodic edges. All 163
+bodies in the existing 130-stream selection pass the integrated topology
+validation. At tolerance 1e-7, automatic binding succeeds for 4,475 of 4,540
+selected faces whose curves are lines, conics or trims of those curves and whose
+surfaces are supported analytics. These contain 21,190 fin uses, including
+6,083 direct conic uses (1,169 closed/vertex-free). The remaining 65 faces report
+30 surface-inversion domain failures, 21 curves requiring explicit endpoints
+and 14 ambiguous/nonmatching source trims. This is selected coverage,
 not evidence that all procedural surfaces or arbitrary parameter branches
 are supported. Private inputs and comparison tools stay outside the repo.
 
