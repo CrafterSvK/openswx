@@ -14,7 +14,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | LINE, CIRCLE and ELLIPSE wire edges, including supported source trim wrappers | `EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION`, with shared `VERTEX_POINT` and `EDGE_CURVE` instances |
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
-| Planar polygon faces bounded by LINE edges, including holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
+| Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with disjoint circular holes | Exact circular outer/inner bounds, including annuli and nonconcentric holes |
@@ -47,6 +47,18 @@ inside that outer loop. Source loop order is preserved; the outer loop need not
 come first. Crossings, touching or tolerance-ambiguous edges, nested holes and
 disconnected islands are rejected. Through holes in closed planar solids retain
 their interior walls and subtract from enclosed volume.
+
+Polygon faces may additionally contain complete one-edge circular holes, in
+any source-loop order and with named or vertex-free seams. These circles must
+be oppositely wound, have centers inside the polygon material and remain more
+than two source tolerances from every polygon segment and other circular hole.
+Analytic point-to-segment distances test the entire disk against concave outer
+boundaries and polygon holes; containment tests also exclude circles outside
+the outer polygon or nested inside a polygon hole. A circle enclosing a polygon
+hole is rejected. Each source circle remains an exact shared `EDGE_CURVE`.
+The net area subtracts both polygonal and circular holes and contributes
+analytically to the solid-volume check. Supported closed shells therefore also
+include polygonal prisms with complete cylindrical through bores.
 
 The mixed line/conic-arc subset supports one convex outer contour with at
 least two edges and distinct non-null source vertices. It checks nonnegative
@@ -126,8 +138,8 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS, nonconvex curved face boundaries, mixed curved/polygon hole loops,
-elliptical holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
+NURBS, nonconvex curved face boundaries, holes in multi-edge curved contours,
+circular outer boundaries with polygonal holes, elliptical holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -185,10 +197,12 @@ do not enable unsupported output geometry or bypass validation.
 Positive entity, output byte and polygon comparison budgets bound serialization
 and polygon checks. The shared polygon budget counts nonadjacent segments within
 each loop, all segment pairs between loops, and containment edge tests across
-the entire selected body. Convex line/arc contours consume one check per corner. Circular containment and hole-pair comparisons consume
-one check each from the same budget; each cylindrical/conical/toroidal cut pair consumes one
-check. Parser, model and body-binding budgets remain independently configurable
-in `ExportOptions`. The file adapter checks source file size before container
+the entire selected body. Convex line/arc contours consume one check per corner.
+Circular containment and hole-pair comparisons consume one check each from the
+same budget. Mixed polygon/circle boundaries also consume one check per
+circle-to-segment distance and per containment edge; each cylindrical/conical/
+toroidal cut pair consumes one check. Parser, model and body-binding budgets
+remain independently configurable in `ExportOptions`. The file adapter checks source file size before container
 inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
 
@@ -218,7 +232,7 @@ ctest --test-dir build-step -R 'OpenSwStep|StepFileTest' --output-on-failure
 GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
-and check sharing, ring seams, senses, polygon holes, through holes, cylindrical
+and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
 bands, conical frustums, toroidal intervals, convex circular/elliptic arc
 contours, invalid topology, budget boundaries and preserved source diagnostics.
 
@@ -241,13 +255,15 @@ Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 42 export successfully, including twelve face-bearing bodies
-with 60 faces; 30 successes contain only wire/point geometry. All 42 generated
-documents pass OCCT import and B-rep validity checks. The other 15 return
-unsupported-format errors. Elliptic-arc support preserves these 42 successes;
-its additional geometry cases are covered by synthetic half-ellipses, lenses,
-long arcs, split ellipses and rounded profiles. The remaining private bodies
-require additional geometry features before their complete export can succeed. These are raw body selections, including archival
+extracted streams: 44 export successfully, including fourteen face-bearing bodies
+with 103 faces; 30 successes contain only wire/point geometry. All 44 generated
+documents pass OCCT import and B-rep validity checks. The other 13 return
+unsupported-format errors. Mixed polygon/circular-hole support adds two complete
+bodies with 26 and 17 faces and preserves all 42 previous successes. Synthetic
+cases independently check mixed hole areas and cylindrical through-bore volumes,
+including named seams, reordered loops, concave boundaries and translated frames.
+The remaining private bodies require additional geometry features before their
+complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.
 
 Run `doxygen Doxyfile` from this directory to generate public API HTML at

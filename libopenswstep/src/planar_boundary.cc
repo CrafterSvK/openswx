@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <optional>
 #include <utility>
 
@@ -191,5 +192,98 @@ openparasolid::Result<std::size_t> ValidatePlanarLoops(
     }
   }
   return Return::Ok(*outer);
+}
+Result<PerforatedPolygon> ValidatePolygonCircularHoles(
+    std::span<const std::vector<Vector3>> polygons,
+    std::span<const ConicBoundary> circles,
+    const openparasolid::PlaneGeometry& plane, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks) {
+  using Return = Result<PerforatedPolygon>;
+  for (std::size_t i = 0; i < circles.size(); ++i) {
+    if (!circles[i].circle)
+      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                          "Polygon conic holes require CIRCLE bases"});
+    // A hole is a correctly wound single conic for the opposite face normal.
+    // Reuse the full-turn, entire-plane and radius checks of the conic subset.
+    const auto valid =
+        ValidatePlanarConics(circles.subspan(i, 1), plane, !natural_sense,
+                             tolerance, remaining_checks);
+    if (!valid.ok()) {
+      const auto outward =
+          ValidatePlanarConics(circles.subspan(i, 1), plane, natural_sense,
+                               tolerance, remaining_checks);
+      if (outward.ok())
+        return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                            "Circular outer loops with polygon boundaries "
+                            "are not supported"});
+      return Return::Err(valid.error());
+    }
+  }
+  const auto outer = ValidatePlanarLoops(polygons, plane, natural_sense,
+                                         tolerance, remaining_checks);
+  if (!outer.ok()) return Return::Err(outer.error());
+  const auto origin = polygons.front().front();
+  const auto& n = plane.normal;
+  const auto& x = plane.x_axis;
+  const Vector3 y{n.y * x.z - n.z * x.y, n.z * x.x - n.x * x.z,
+                  n.x * x.y - n.y * x.x};
+  const long double clearance = 2 * static_cast<long double>(tolerance);
+  std::vector<Loop> loops;
+  long double area = 0;
+  for (const auto& polygon : polygons) {
+    auto projected = ProjectLoop(polygon, plane, origin, tolerance);
+    if (!projected.ok()) return Return::Err(projected.error());
+    area += (natural_sense ? 1 : -1) * projected.value().area / 2;
+    loops.push_back(std::move(projected).value());
+  }
+  for (std::size_t i = 0; i < circles.size(); ++i) {
+    const auto& circle = circles[i];
+    const Point2 center{Project(circle.center, origin, x),
+                        Project(circle.center, origin, y)};
+    const long double radius = circle.major_radius;
+    for (std::size_t l = 0; l < loops.size(); ++l) {
+      const auto& loop = loops[l];
+      for (std::size_t e = 0; e < loop.points.size(); ++e) {
+        if (const auto error = Charge(remaining_checks))
+          return Return::Err(*error);
+        const auto a = loop.points[e],
+                   b = loop.points[(e + 1) % loop.points.size()];
+        const auto length = std::hypot(b.x - a.x, b.y - a.y);
+        const auto dx = (b.x - a.x) / length, dy = (b.y - a.y) / length;
+        const auto along = std::clamp(
+            (center.x - a.x) * dx + (center.y - a.y) * dy, 0.L, length);
+        const auto distance = std::hypot(center.x - a.x - along * dx,
+                                         center.y - a.y - along * dy);
+        if (!std::isfinite(distance) || distance <= radius + clearance)
+          return Return::Err(Invalid(
+              "Circular hole crosses, encloses, touches or is too close to "
+              "a polygon boundary"));
+      }
+      const auto inside = Contains(loop, center, remaining_checks);
+      if (!inside.ok()) return Return::Err(inside.error());
+      if (inside.value() != (l == outer.value()))
+        return Return::Err(
+            Invalid("Circular hole center is outside the polygon material"));
+    }
+    for (std::size_t j = 0; j < i; ++j) {
+      if (const auto error = Charge(remaining_checks))
+        return Return::Err(*error);
+      const auto& other = circles[j];
+      const auto separation = std::hypot(
+          static_cast<long double>(circle.center.x) - other.center.x,
+          static_cast<long double>(circle.center.y) - other.center.y,
+          static_cast<long double>(circle.center.z) - other.center.z);
+      if (!std::isfinite(separation) ||
+          separation <= radius + other.major_radius + clearance)
+        return Return::Err(
+            Invalid("Circular holes overlap, nest, touch or are too close"));
+    }
+    area -= std::numbers::pi_v<long double> * radius * radius;
+  }
+  if (!std::isfinite(area) || area <= 0)
+    return Return::Err(
+        Invalid("Perforated polygon area is nonpositive or "
+                "unrepresentable"));
+  return Return::Ok({outer.value(), area});
 }
 }  // namespace openswstep::internal

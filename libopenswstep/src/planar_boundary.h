@@ -8,6 +8,7 @@
 #include <span>
 #include <vector>
 
+#include "conic_boundary.h"
 #include "openparasolid/model.h"
 
 namespace openswstep::internal {
@@ -17,6 +18,21 @@ namespace openswstep::internal {
 // unchanged. Comparisons and containment edge tests consume the shared budget.
 [[nodiscard]] openparasolid::Result<std::size_t> ValidatePlanarLoops(
     std::span<const std::vector<openparasolid::Vector3>> polygons,
+    const openparasolid::PlaneGeometry& plane, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks);
+struct PerforatedPolygon {
+  std::size_t outer_loop;
+  long double area;
+};
+// Adds full circular holes to the polygon subset above. Circle centers must
+// lie in the material, with entire circles separated from every polygon edge
+// and other circle by more than two source tolerances. Each edge-distance,
+// containment-edge and circle-pair check consumes the shared budget. Returns
+// the outer index in the polygon span and the exact net planar area.
+[[nodiscard]] openparasolid::Result<PerforatedPolygon>
+ValidatePolygonCircularHoles(
+    std::span<const std::vector<openparasolid::Vector3>> polygons,
+    std::span<const ConicBoundary> circles,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
 }  // namespace openswstep::internal

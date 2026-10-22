@@ -794,6 +794,135 @@ TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
     ASSERT_TRUE(sheet.ok()) << sheet.error().message;
   }
 }
+TEST(OpenSwStep, ExportsPolygonFacesWithCircularAndPolygonalHoles) {
+  for (const bool polygon_hole : {false, true})
+    for (const bool hole_first : {false, true})
+      for (const bool seams : {false, true}) {
+        const auto result =
+            Export(test::PolygonCircularHoles(polygon_hole, hole_first, seams));
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.faces, 1);
+        EXPECT_EQ(result.value().statistics.edges, polygon_hole ? 10 : 6);
+        EXPECT_EQ(result.value().statistics.vertices, polygon_hole ? 10 : 6);
+        EXPECT_NE(result.value().text.find("=FACE_OUTER_BOUND("),
+                  std::string::npos);
+        CheckReferences(result.value());
+      }
+  for (const auto& fixture :
+       {test::PolygonCircularHoles(true, true, true, true),
+        test::RotateAndTranslate(test::PolygonCircularHoles(true))}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+  }
+}
+TEST(OpenSwStep, ExportsCircularThroughBoresWithExactPlanarCaps) {
+  for (const bool seams : {false, true}) {
+    const auto result = Export(test::CubeWithCircularBore(seams));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 7);
+    EXPECT_EQ(result.value().statistics.edges, 14);
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, RejectsCircularHolesOutsideOrTouchingPolygonMaterial) {
+  for (const Vector3 center :
+       {Vector3{-2, 4, 0}, Vector3{1, 4, 0}, Vector3{1 + 1e-7, 4, 0},
+        Vector3{6, 4, 0}, Vector3{4.5, 4, 0}}) {
+    auto fixture = test::PolygonCircularHoles(true);
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 14000)
+        node.fields[0].values = {center.x, center.y, center.z};
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+  // A circle may enclose an entire polygon hole without crossing its edges.
+  auto enclosing = test::PolygonCircularHoles(true);
+  for (auto& node : enclosing.report.nodes)
+    if (node.index == 14000) {
+      node.fields[0].values = {6., 4., 0.};
+      node.fields[3].values = {2.};
+    }
+  ASSERT_FALSE(Export(enclosing).ok());
+}
+TEST(OpenSwStep, RejectsOverlappingNestedOrIncorrectlyWoundMixedHoles) {
+  for (const double radius : {1., .25}) {
+    auto fixture = test::PolygonCircularHoles();
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 14001) {
+        node.fields[0].values = {3.5, 4., 0.};
+        node.fields[3].values = {radius};
+      }
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+  auto wrong = test::PolygonCircularHoles();
+  test::Set(wrong, 14000, "sense", '+');
+  const auto outward = Export(wrong);
+  ASSERT_FALSE(outward.ok());
+  EXPECT_EQ(outward.error().code, ErrorCode::kUnsupportedFormat);
+  auto negative = test::PolygonCircularHoles(true, true);
+  test::Set(negative, 300, "sense", '-');
+  for (auto& node : negative.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  const auto result = Export(negative);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+}
+TEST(OpenSwStep, RejectsUnsupportedAndNonplanarMixedConicHoles) {
+  auto ellipse = test::PolygonCircularHoles();
+  test::RemoveNode(ellipse, 14000);
+  ellipse.Add(
+      32, 14000,
+      {test::Numbers("center", {3, 4, 0}, FieldType::kVector),
+       test::Numbers("normal", {0, 0, 1}, FieldType::kVector),
+       test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+       test::Numbers("major_radius", {1}), test::Numbers("minor_radius", {.5}),
+       test::ByteValue("sense", '-', FieldType::kCharacter)});
+  const auto unsupported = Export(ellipse);
+  ASSERT_FALSE(unsupported.ok());
+  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+  auto tilted = test::PolygonCircularHoles();
+  constexpr double angle = 1e-6;
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 14000)
+      node.fields[1].values = {0., std::sin(angle), std::cos(angle)};
+  const auto outside = Export(tilted);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(outside.error().message.find("Complete conic boundary"),
+            std::string::npos);
+  for (const double span : {-std::numbers::pi, -4 * std::numbers::pi}) {
+    auto options = Options();
+    options.fin_intervals = {{NodeId{11000}, 0, span}};
+    EXPECT_FALSE(Export(test::PolygonCircularHoles(), options).ok());
+  }
+  for (const auto center : {Vector3{6, 7.5, 0}, Vector3{3.5, 5.5, 0}}) {
+    auto concave = test::PolygonCircularHoles(false, false, false, true);
+    for (auto& node : concave.report.nodes)
+      if (node.index == 14000)
+        node.fields[0].values = {center.x, center.y, center.z};
+    EXPECT_FALSE(Export(concave).ok());
+  }
+}
+TEST(OpenSwStep, BoundsMixedHoleChecksAndParsesBinarySources) {
+  auto options = Options();
+  // Square self-comparisons: 2; two circles: 2*(4 distances+4 ray tests);
+  // one circle-pair comparison: 1. All share the same per-body budget.
+  options.max_polygon_checks = 19;
+  const auto result = Export(test::PolygonCircularHoles(), options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  options.max_polygon_checks = 18;
+  const auto limited = Export(test::PolygonCircularHoles(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto fixture = test::Serialize(test::CubeWithCircularBore());
+  const auto binary =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(binary.ok()) << binary.error().message;
+  EXPECT_EQ(binary.value().statistics.solids, 1);
+}
 TEST(OpenSwStep, ExportsConvexLineArcAndSplitCircleBoundariesExactly) {
   for (const auto& fixture :
        {test::RoundedRectangle(), test::RoundedRectangle(true),
