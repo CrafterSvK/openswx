@@ -1770,6 +1770,80 @@ inline ModelFixture RoundedBorePrism() {
   }
   return f;
 }
+inline ModelFixture RotatePlanarProfile(ModelFixture f, double angle) {
+  const auto c = std::cos(angle), s = std::sin(angle);
+  for (auto& node : f.report.nodes) {
+    const auto& fields = f.report.schemas[node.schema_index].definition.fields;
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+      if (fields[i].type != FieldType::kVector) continue;
+      auto& values = node.fields[i].values;
+      const auto x = std::get<double>(values[0]),
+                 y = std::get<double>(values[1]);
+      values[0] = c * x - s * y;
+      values[1] = s * x + c * y;
+    }
+  }
+  return f;
+}
+inline ModelFixture ShiftEllipseFrames(ModelFixture f) {
+  for (auto& node : f.report.nodes)
+    if (node.node_type == 32)
+      for (auto& value : node.fields[2].values)
+        value = -std::get<double>(value);
+  return f;
+}
+inline ModelFixture EllipticRoundedHole(bool mixed = false,
+                                        bool circular_outer = false,
+                                        bool rotated = false) {
+  ModelFixture f;
+  if (circular_outer) {
+    ConicLoopSpec outer;
+    outer.major = 8;
+    f = ConicSheet({outer});
+  } else {
+    const std::vector<Vector3> points{
+        {-8, -5, 0}, {8, -5, 0}, {8, 5, 0}, {-8, 5, 0}};
+    f = PlanarFace(points, {{0, 1, 2, 3}});
+  }
+  auto hole =
+      TranslateProfile(EllipticProfile(RoundedRectangle(true)), {-4, -1.5, 0});
+  if (rotated) hole = RotatePlanarProfile(std::move(hole), .4);
+  AppendFaceLoops(f, ShiftEllipseFrames(std::move(hole)), 300, true, 10000);
+  if (mixed) {
+    auto square = PlanarFace({{5, 2, 0}, {5, 3, 0}, {6, 3, 0}, {6, 2, 0}},
+                             {{0, 1, 2, 3}});
+    AppendFaceLoops(f, square, 300, true, 20000);
+    ConicLoopSpec circle;
+    circle.center = {6, 0, 0};
+    circle.major = .25;
+    circle.reverse_fin = true;
+    AddConicFaceLoops(f, 300, {circle}, true, true, 30000);
+  }
+  return f;
+}
+inline ModelFixture EllipticSegmentHole(bool major = false,
+                                        bool rotated = false,
+                                        double stretch = 2) {
+  const auto side = 2 * stretch;
+  auto f = PlanarFace(
+      {{-side, -side, 0}, {side, -side, 0}, {side, side, 0}, {-side, side, 0}},
+      {{0, 1, 2, 3}});
+  auto hole =
+      EllipticProfile(major ? MajorCircularSegment() : HalfDisk(), stretch);
+  if (rotated) hole = RotatePlanarProfile(std::move(hole), .7);
+  AppendFaceLoops(f, ClockwiseHole(ShiftEllipseFrames(std::move(hole))), 300,
+                  true, 10000);
+  return f;
+}
+inline ModelFixture EllipticDiskHole() {
+  auto f = PlanarFace(
+      {{-2.5, -1.5, 0}, {2.5, -1.5, 0}, {2.5, 1.5, 0}, {-2.5, 1.5, 0}},
+      {{0, 1, 2, 3}});
+  AppendFaceLoops(
+      f, ClockwiseHole(ShiftEllipseFrames(EllipticProfile(SplitCircle()))), 300,
+      true, 10000);
+  return f;
+}
 struct Serialized {
   std::vector<uint8_t> bytes;
   SchemaCatalog catalog;

@@ -896,6 +896,118 @@ TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 6);
 }
+TEST(OpenSwStep, ExportsEllipticCurvedHolesWithOriginalFramesAndMixedLoops) {
+  for (const bool mixed : {false, true})
+    for (const bool circular_outer : {false, true})
+      for (const bool rotated : {false, true}) {
+        SCOPED_TRACE(::testing::Message()
+                     << "mixed=" << mixed << " circular_outer="
+                     << circular_outer << " rotated=" << rotated);
+        const auto f =
+            test::EllipticRoundedHole(mixed, circular_outer, rotated);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto binding =
+            BindBodyGeometry(model.value(), NodeId{1}, Options().tolerance);
+        ASSERT_TRUE(binding.ok()) << binding.error().message;
+        auto precise = Options();
+        for (const auto& face : binding.value().faces)
+          for (const auto& loop : face.loops)
+            for (const auto& fin : loop.fins)
+              precise.fin_intervals.push_back(
+                  {fin.use.fin, fin.start, fin.end});
+        // Keep the same source intervals after a world transform. Re-inferring
+        // near-tangent endpoints at large coordinates can be ambiguous.
+        for (const bool transformed : {false, true}) {
+          const auto result = transformed
+                                  ? Export(test::RotateAndTranslate(f), precise)
+                                  : Export(f);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          EXPECT_EQ(result.value().statistics.faces, 1);
+          EXPECT_EQ(result.value().statistics.edges,
+                    (circular_outer ? 1 : 4) + 8 + (mixed ? 5 : 0));
+          EXPECT_NE(result.value().text.find("ELLIPSE("), std::string::npos);
+          CheckReferences(result.value());
+        }
+      }
+  const auto disk = Export(test::EllipticDiskHole());
+  ASSERT_TRUE(disk.ok()) << disk.error().message;
+  EXPECT_EQ(disk.value().statistics.edges, 8);
+}
+TEST(OpenSwStep, PreservesEllipticHoleMajorArcsSeamsAndEccentricity) {
+  for (const bool major : {false, true})
+    for (const bool rotated : {false, true})
+      for (const double stretch : {2., 100.}) {
+        const auto result =
+            Export(test::EllipticSegmentHole(major, rotated, stretch));
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.edges, 6);
+        EXPECT_EQ(result.value().statistics.vertices, 6);
+      }
+  const auto fixture =
+      test::Serialize(test::EllipticRoundedHole(true, true, true));
+  const auto parsed =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().statistics.edges, 14);
+}
+TEST(OpenSwStep, ChecksCompleteEllipseHoleExtremaAndConservativeSeparation) {
+  // These endpoints fit, but the major elliptic arc extends to x=-2, y=-1.
+  auto escaped = test::PlanarFace(
+      {{-.1, -.1, 0}, {2.1, -.1, 0}, {2.1, 1.1, 0}, {-.1, 1.1, 0}},
+      {{0, 1, 2, 3}});
+  test::AppendFaceLoops(
+      escaped,
+      test::ClockwiseHole(test::EllipticProfile(test::MajorCircularSegment())),
+      300, false, 10000);
+  const auto outside = Export(escaped);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(outside.error().message.find("envelopes cannot certify"),
+            std::string::npos);
+  // The 2x1 ellipse lies inside this circle, but its rectangle does not.
+  test::ConicLoopSpec circle;
+  circle.major = 2.1;
+  auto close = test::ConicSheet({circle});
+  test::AppendFaceLoops(
+      close, test::ClockwiseHole(test::EllipticProfile(test::SplitCircle())),
+      300, false, 10000);
+  const auto uncertified = Export(close);
+  ASSERT_FALSE(uncertified.ok());
+  EXPECT_EQ(uncertified.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(uncertified.error().message.find("envelopes cannot certify"),
+            std::string::npos);
+}
+TEST(OpenSwStep, RetainsEllipseHoleProfileValidationAndWorkLimits) {
+  auto options = Options();
+  options.max_polygon_checks = 30;
+  const auto fixture = test::EllipticSegmentHole();
+  ASSERT_TRUE(Export(fixture, options).ok());
+  options.max_polygon_checks = 29;
+  const auto limited = Export(fixture, options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  auto tilted = fixture;
+  for (auto& node : tilted.report.nodes)
+    if (node.node_type == 32)
+      node.fields[1].values = {0., std::sin(1e-5), std::cos(1e-5)};
+  const auto outside = Export(tilted);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kInvalidRecord);
+  auto unordered = fixture;
+  for (auto& node : unordered.report.nodes)
+    if (node.node_type == 32) node.fields[3].values = {.5};
+  ASSERT_FALSE(Export(unordered).ok());
+  auto nonconvex = test::PlanarFace(
+      {{-10, -10, 0}, {10, -10, 0}, {10, 10, 0}, {-10, 10, 0}}, {{0, 1, 2, 3}});
+  test::AppendFaceLoops(
+      nonconvex,
+      test::ClockwiseHole(test::EllipticProfile(test::ConcaveArcFace())), 300,
+      false, 10000);
+  const auto rejected = Export(nonconvex);
+  ASSERT_FALSE(rejected.ok());
+  EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
+}
 TEST(OpenSwStep, ExportsConvexCurvedHolesWithPolygonalAndCircularOuterBounds) {
   for (const bool two : {false, true})
     for (const bool mixed : {false, true})
@@ -999,13 +1111,6 @@ TEST(OpenSwStep, BoundsCurvedHoleEnvelopeWorkAndPreservesSourceErrors) {
   // then miswound and must not become an accepted envelope-based export.
   test::Set(miswound, 300, "sense", '-');
   ASSERT_FALSE(Export(miswound).ok());
-  auto elliptic = test::PlanarFace(
-      {{-3, -3, 0}, {3, -3, 0}, {3, 3, 0}, {-3, 3, 0}}, {{0, 1, 2, 3}});
-  test::AppendFaceLoops(elliptic, test::ClockwiseHole(test::HalfEllipse()), 300,
-                        false, 10000);
-  const auto unsupported = Export(elliptic);
-  ASSERT_FALSE(unsupported.ok());
-  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
   const auto bytes =
       test::Serialize(test::ConvexCurvedHoles(true, true, true, true));
   const auto parsed =

@@ -41,9 +41,11 @@ Result<Envelope> ReadEnvelope(std::span<const PlanarCurve> curves,
   for (const auto& curve : curves)
     if (!curve.geometry ||
         (!std::holds_alternative<LineGeometry>(*curve.geometry) &&
-         !std::holds_alternative<CircleGeometry>(*curve.geometry)))
-      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                          "Convex curved holes require LINE/CIRCLE bases"});
+         !std::holds_alternative<CircleGeometry>(*curve.geometry) &&
+         !std::holds_alternative<EllipseGeometry>(*curve.geometry)))
+      return Return::Err(
+          {ErrorCode::kUnsupportedFormat, 0,
+           "Convex curved holes require LINE/CIRCLE/ELLIPSE bases"});
   const auto valid = ValidateConvexPlanarLoop(curves, plane, !natural_sense,
                                               tolerance, remaining);
   if (!valid.ok()) return Return::Err(valid.error());
@@ -67,11 +69,17 @@ Result<Envelope> ReadEnvelope(std::span<const PlanarCurve> curves,
     --remaining;
     for (std::size_t i = 0; i < axes.size(); ++i) {
       long double low, high;
-      if (const auto* circle = std::get_if<CircleGeometry>(curve.geometry)) {
-        const auto center = Project(circle->center, origin, axes[i]);
-        const auto a = circle->radius * Dot(circle->x_axis, axes[i]);
-        const auto b = circle->radius *
-                       Dot(Cross(circle->normal, circle->x_axis), axes[i]);
+      const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
+      const auto* ellipse = std::get_if<EllipseGeometry>(curve.geometry);
+      if (circle || ellipse) {
+        const auto center3 = circle ? circle->center : ellipse->center;
+        const auto normal = circle ? circle->normal : ellipse->normal;
+        const auto reference = circle ? circle->x_axis : ellipse->x_axis;
+        const auto major = circle ? circle->radius : ellipse->major_radius;
+        const auto minor = circle ? circle->radius : ellipse->minor_radius;
+        const auto center = Project(center3, origin, axes[i]);
+        const auto a = major * Dot(reference, axes[i]);
+        const auto b = minor * Dot(Cross(normal, reference), axes[i]);
         low = center - MaximumArcProjection(-a, -b, curve.start, curve.end);
         high = center + MaximumArcProjection(a, b, curve.start, curve.end);
       } else {

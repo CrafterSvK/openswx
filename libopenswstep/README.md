@@ -17,7 +17,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
-| Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
+| Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
 | Planar annular sectors with two concentric circular arcs and two radial lines | Exact single-loop `ADVANCED_FACE`, including nonconvex major sectors and analytic source-curve area |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
@@ -144,14 +144,23 @@ Net area subtracts both hole types. Closed supported mixtures include sector
 solids with polygonal through bores and unchanged analytic outer mantles.
 
 A polygonal or complete one-edge circular outer bound may also contain
-convex multi-edge `LINE`/`CIRCLE` holes, alongside polygonal and full-circle
+convex multi-edge `LINE`/`CIRCLE`/`ELLIPSE` holes, alongside polygonal and full-circle
 holes. The curved hole must wind against the effective face normal. The
 existing convexity and exact source-curve area checks validate each complete
 hole contour. Analytic directed-arc extrema produce enclosing rectangles in
 the face frame, expanded for source tolerance and coordinate roundoff. These
 rectangles certify strict containment and separation using the established
 polygon/full-circle checks. The original outer loops and other holes are
-validated before testing the additional envelopes.
+validated before testing the additional envelopes. Ellipse extrema retain the
+separate major/minor radius coefficients in each projected direction; tangent
+turning and area use the existing analytic ellipse checks. Rotated frames,
+major elliptic segments and split ellipses preserve their original parameters
+and source edges. This support requires a multi-edge contour; single-edge
+complete elliptical holes remain outside this subset.
+
+For nearly tangent contours at large world coordinates, explicit source fin
+intervals avoid ambiguity from re-inferring parameters at rounded endpoints.
+The same strict convexity, planarity and area checks still apply.
 
 Envelopes are used only for validation. They are never serialized and their
 areas are never subtracted from the face: net area uses each original curved
@@ -167,7 +176,7 @@ The envelope test is conservative: geometrically disjoint holes may have
 overlapping rectangles, or a valid curved hole's rectangle may leave its outer
 boundary. Such cases return an explicit unsupported-format error rather than
 claiming a validity certificate. Curved outer contours with multi-edge curved
-holes, nonconvex curved holes, elliptic curved holes and elliptic outer arcs
+holes, nonconvex curved holes, single-edge elliptical holes and elliptic outer arcs
 with holes remain unsupported. Existing hole-free elliptic contours and
 separate polygon/full-circle boundary subsets retain their established checks.
 
@@ -176,8 +185,8 @@ ellipse per loop. The exporter checks the maximum plane residual over the entire
 just the binding samples, and validates winding against the effective face
 normal. Circular outer/inner loops may appear in any source order. Every hole
 must lie inside the outer circle, and holes must be mutually disjoint; each
-separation must exceed two source tolerances. Elliptical holes remain
-unsupported.
+separation must exceed two source tolerances. Single-edge elliptical holes remain
+unsupported in this conic-loop subset.
 
 Complete cylindrical bands use two circular cut loops at distinct axial
 levels. Their radii, axis alignment, centre positions and opposite winding are
@@ -285,7 +294,7 @@ approximation is written.
 
 NURBS, other nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
 uncertified curved-hole envelopes, curved outer contours with curved holes,
-nonconvex/elliptic curved holes, elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
+nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -415,13 +424,15 @@ extracted streams: 50 export successfully, including twenty face-bearing
 bodies with 250 faces; 30 successes contain only wire/point geometry. All 50
 generated documents pass OCCT import and B-rep validity checks. The other seven
 return unsupported-format errors. Convex curved-hole support adds one complete
-body with 54 faces and 148 edges, preserving all 49 previous successes.
+body with 54 faces and 148 edges. Elliptic curved-hole support preserves all
+50 prior successes; remaining private bodies still require other geometry.
 
-Synthetic OCCT round trips independently check convex curved-hole and
-polygonal/mixed curved-hole areas, circular/polygonal cylinder-sector
+Synthetic OCCT round trips independently check circular/elliptic convex
+curved-hole and polygonal/mixed curved-hole areas, circular/polygonal cylinder-sector
 through-bore volumes and rounded through bores. They also check annular and
 conical sectors, major arcs, inward sheets, loop order, translated frames and
-parameter-seam crossings. Existing hole-free convex profiles retain their behavior and budget.
+parameter-seam crossings, rotated ellipse frames and eccentric profiles.
+Existing hole-free convex profiles retain their behavior and budget.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.

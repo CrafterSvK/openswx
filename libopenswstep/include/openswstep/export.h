@@ -105,23 +105,23 @@ struct StepDocument {
 /// Each circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair
 /// consumes one check, alongside polygon segment/containment comparisons.
 /// Polygonal or complete circular outer bounds also support convex multi-edge
-/// LINE/CIRCLE holes. Analytic, inflated enclosing rectangles conservatively
-/// certify containment and separation; only original curves and analytic areas
-/// are exported. Uncertified envelopes return unsupported-format errors, even
-/// for some valid close contours. Each curved edge consumes one extrema check
-/// plus its corner check; original and envelope-augmented mixed-boundary checks
-/// both share the budget. Planar annular sectors support two concentric
-/// circular arcs joined by two radial lines, including major sectors. Other
-/// nonconvex planar curved contours, holes in elliptic/nonconvex curved
-/// contours, curved outer contours with multi-edge curved holes,
-/// nonconvex/elliptic curved holes, uncertified envelopes, other
+/// LINE/CIRCLE/ELLIPSE holes. Analytic, inflated enclosing rectangles
+/// conservatively certify containment and separation; only original curves and
+/// analytic areas are exported. Uncertified envelopes return unsupported-format
+/// errors, even for some valid close contours. Each curved edge consumes one
+/// extrema check plus its corner check; original and envelope-augmented
+/// mixed-boundary checks both share the budget. Planar annular sectors support
+/// two concentric circular arcs joined by two radial lines, including major
+/// sectors. Other nonconvex planar curved contours, holes in elliptic/nonconvex
+/// curved contours, curved outer contours with multi-edge curved holes,
+/// nonconvex curved holes, uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, apex
-/// loops, explicit seam fins, horn/apple/lemon tori and elliptical holes remain
-/// unsupported. Sheet orientation is propagated across shared edges. Solid
-/// export requires one material region with one closed, connected shell,
-/// consistent face-side uses and positive signed volume. Foreign geometry,
-/// tolerant fin curves, isolated face loops, compound bodies, general bodies
-/// and other curve/surface types return explicit errors. Existing finite
+/// loops, explicit seam fins, horn/apple/lemon tori and single-edge elliptical
+/// holes remain unsupported. Sheet orientation is propagated across shared
+/// edges. Solid export requires one material region with one closed, connected
+/// shell, consistent face-side uses and positive signed volume. Foreign
+/// geometry, tolerant fin curves, isolated face loops, compound bodies, general
+/// bodies and other curve/surface types return explicit errors. Existing finite
 /// membership checks are retained; no global intersection or full CAD-kernel
 /// validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),

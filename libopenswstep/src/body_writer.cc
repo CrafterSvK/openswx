@@ -27,21 +27,22 @@ using namespace openparasolid;
 Vector3 Difference(Vector3 a, Vector3 b) {
   return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
-bool IsCircularHole(std::span<const PlanarCurve> curves,
-                    const PlaneGeometry& plane, bool natural_sense) {
-  bool circular = false;
+bool IsConicHole(std::span<const PlanarCurve> curves,
+                 const PlaneGeometry& plane, bool natural_sense) {
+  bool conic = false;
   for (const auto& curve : curves) {
     if (std::holds_alternative<LineGeometry>(*curve.geometry)) continue;
     const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
-    if (!circle) return false;
-    circular = true;
-    const auto& a = circle->normal;
+    const auto* ellipse = std::get_if<EllipseGeometry>(curve.geometry);
+    if (!circle && !ellipse) return false;
+    conic = true;
+    const auto& a = circle ? circle->normal : ellipse->normal;
     const auto& b = plane.normal;
     const auto alignment = a.x * b.x + a.y * b.y + a.z * b.z;
     if ((curve.end - curve.start) * alignment * (natural_sense ? 1 : -1) >= 0)
       return false;
   }
-  return circular;
+  return conic;
 }
 struct FaceData {
   const FaceTrimming* source = nullptr;
@@ -412,10 +413,10 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   }
   const bool inward =
       !curved_loops.empty() &&
-      std::all_of(
-          curved_loops.begin(), curved_loops.end(), [&face](const auto& loop) {
-            return IsCircularHole(loop, *face.plane, face.natural_sense);
-          });
+      std::all_of(curved_loops.begin(), curved_loops.end(),
+                  [&face](const auto& loop) {
+                    return IsConicHole(loop, *face.plane, face.natural_sense);
+                  });
   if (inward && face.source->loops.size() > 1) {
     const auto region = ValidateConvexCurvedHoles(
         curved_loops, polygons, holes, *face.plane, face.natural_sense,
