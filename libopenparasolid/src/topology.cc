@@ -29,6 +29,7 @@ class TopologyReader {
  public:
   explicit TopologyReader(const Model& model) : model_(model) {}
   Result<LoopBoundary> ReadLoop(NodeId id, const LoopTraversalOptions& options);
+  Result<EdgeBoundary> ReadEdge(NodeId id, const EdgeTraversalOptions& options);
   Result<FaceBoundary> ReadFace(NodeId id, const FaceTraversalOptions& options);
   Result<ShellBoundary> ReadShell(NodeId id,
                                   const ShellTraversalOptions& options,
@@ -61,6 +62,7 @@ class TopologyReader {
                 ShellBudget& budget, const ShellTraversalOptions& options);
   bool WireEdges(NodeId first, ShellBoundary& result, uint64_t limit);
   bool Dummy(const ModelNode& fin);
+  bool LoopLinks(const ModelNode& fin, NodeId loop);
   bool VertexNext(const ModelNode& fin);
   bool SeparateShell(const ShellBoundary& shell,
                      std::unordered_map<uint32_t, NodeId>& owners);
@@ -161,6 +163,81 @@ bool TopologyReader::EdgeUse(const ModelNode& fin, NodeId edge_id, NodeId other,
     return Fail(fin, "vertex",
                 "Forward vertex disagrees with oriented edge endpoints");
   return true;
+}
+bool TopologyReader::LoopLinks(const ModelNode& fin, NodeId loop) {
+  NodeId forward, backward, forward_loop, backward_loop, close_forward,
+      close_backward;
+  if (!Reference(fin, "forward", 17, false, forward) ||
+      !Reference(fin, "backward", 17, false, backward))
+    return false;
+  const auto& next = *model_.FindNode(forward);
+  const auto& previous = *model_.FindNode(backward);
+  if (!Reference(next, "loop", 15, false, forward_loop) ||
+      !Reference(previous, "loop", 15, false, backward_loop) ||
+      !Reference(next, "backward", 17, false, close_backward) ||
+      !Reference(previous, "forward", 17, false, close_forward))
+    return false;
+  if (forward_loop != loop || backward_loop != loop ||
+      close_forward != fin.id || close_backward != fin.id)
+    return Fail(fin, "forward/backward",
+                "Inconsistent local loop links of radial fin");
+  return true;
+}
+Result<EdgeBoundary> TopologyReader::ReadEdge(
+    NodeId id, const EdgeTraversalOptions& options) {
+  if (!options.max_fins)
+    return Result<EdgeBoundary>::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Edge traversal requires a positive fin limit"});
+  const auto* edge = Node(id, 16);
+  if (!edge) return Result<EdgeBoundary>::Err(*error_);
+  NodeId first;
+  if (!Reference(*edge, "halfedge", 17, false, first))
+    return Result<EdgeBoundary>::Err(*error_);
+  EdgeBoundary result;
+  result.edge = id;
+  NodeId current = first;
+  std::unordered_set<uint32_t> visited;
+  do {
+    const auto& fin = *model_.FindNode(current);
+    if (visited.contains(current.value)) {
+      Fail(fin, "other", "Radial fin cycle does not close at its primary fin");
+      return Result<EdgeBoundary>::Err(*error_);
+    }
+    if (visited.size() >= options.max_fins)
+      return Result<EdgeBoundary>::Err({ErrorCode::kResourceLimit,
+                                        fin.source_offset,
+                                        "Edge radial fin limit exceeded"});
+    visited.insert(current.value);
+    NodeId owner, next;
+    EdgeFinUse use;
+    if (!Reference(fin, "edge", 16, false, owner) ||
+        !Reference(fin, "other", 17, false, next) ||
+        !Reference(fin, "loop", 15, true, use.loop))
+      return Result<EdgeBoundary>::Err(*error_);
+    if (owner != id) {
+      Fail(fin, "edge", "Radial fin belongs to another edge");
+      return Result<EdgeBoundary>::Err(*error_);
+    }
+    if (!EdgeUse(fin, id, next, use.use))
+      return Result<EdgeBoundary>::Err(*error_);
+    if (!use.loop.value) {
+      if (result.fins.size() >= 2) {
+        Fail(fin, "loop", "A dummy fin must be a primary or secondary anchor");
+        return Result<EdgeBoundary>::Err(*error_);
+      }
+      if (!Dummy(fin)) return Result<EdgeBoundary>::Err(*error_);
+    } else if (!LoopLinks(fin, use.loop))
+      return Result<EdgeBoundary>::Err(*error_);
+    if (result.fins.empty()) {
+      result.start_vertex = use.use.start_vertex;
+      result.end_vertex = use.use.end_vertex;
+      result.curve = use.use.edge_curve;
+    }
+    result.fins.push_back(use);
+    current = next;
+  } while (current != first);
+  return Result<EdgeBoundary>::Ok(std::move(result));
 }
 Result<LoopBoundary> TopologyReader::ReadLoop(
     NodeId id, const LoopTraversalOptions& options) {
@@ -363,7 +440,7 @@ bool TopologyReader::Dummy(const ModelNode& fin) {
     NodeId target;
     if (!Reference(fin, role, type, true, target)) return false;
     if (target.value)
-      return Fail(fin, role, "Wire-edge anchor fin is not a dummy fin");
+      return Fail(fin, role, "Dummy fin retains loop or curve links");
   }
   // Wire anchors can retain vertex-chain links even though their loop-chain
   // roles are null. Check the local vertex link rather than discarding it.
@@ -794,6 +871,11 @@ Result<ChildBodyBoundary> TopologyReader::ReadChild(
 }
 
 }  // namespace
+Result<EdgeBoundary> TraverseEdgeBoundary(const Model& model, NodeId edge,
+                                          const EdgeTraversalOptions& options) {
+  return TopologyReader(model).ReadEdge(edge, options);
+}
+
 Result<LoopBoundary> TraverseLoopBoundary(const Model& model, NodeId loop,
                                           const LoopTraversalOptions& options) {
   return TopologyReader(model).ReadLoop(loop, options);

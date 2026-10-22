@@ -377,6 +377,60 @@ samples remain unavailable after the preceding corpus scan; the existing
 130-stream body comparison remains regression coverage. No dependencies or
 CLI settings are added; the library remains MIT and STL-only.
 
+## Edge fin rings
+
+`TraverseEdgeBoundary(model, edge_id, options)` in
+`openparasolid/topology.h` returns an owned `EdgeBoundary`: the edge ID,
+natural start/end vertex IDs, nullable edge curve, and all radial fins in
+`EDGE.halfedge` / `FIN.other` order. Each `EdgeFinUse` retains an oriented
+`FinUse` plus its source loop ID. A null loop identifies a dummy fin. Dummy
+anchors are included in the output, unlike externally visible halfedge uses.
+The result can outlive the model and can be copied or moved.
+
+The first two fins must be distinct positive primary and negative secondary
+anchors. Every listed fin must belong to this edge, retain a known sense and
+reference the endpoint corresponding to that sense. Endpoints must either
+both exist or both be null. The radial ring must close at its primary head
+without repeating another fin. Additional real fins may share an orientation;
+their count or senses do not establish manifoldness or geometric angular order.
+
+Real fins retain their loop and require locally reciprocal forward/backward
+links within that loop. This checks immediate neighbors without walking or
+certifying the entire loop. Dummy fins must be anchors and retain null
+loop/forward/backward/curve roles. As in shell traversal, actual writer data
+may retain non-null dummy vertex-chain links; those links are checked locally
+against another anchor at the same vertex. Complete vertex chains are not
+walked. Curve references may be null or remain untyped; tolerant-curve and
+edge-to-curve orientation rules are not inferred.
+
+`EdgeTraversalOptions.max_fins` defaults to 100,000 and must be positive. It
+bounds the entire visited radial ring, including dummy anchors. Zero returns
+`kInvalidOptions`, exhaustion `kResourceLimit`, malformed connectivity or
+missing/wrong targets `kInvalidRecord`, and unavailable roles, unknown senses
+or unreviewed classes `kUnsupportedFormat`. A cycle away from the primary head
+is rejected even at the exact fin limit. No error returns a partial boundary;
+the source model is unchanged.
+
+The API does not scan for unlisted fins claiming the edge, validate body-list
+membership, full loops/vertex incidence, shell closure, geometric validity or
+tolerances. It remains separate from existing loop/face/shell/body queries,
+whose traversal contracts and resource accounting are unchanged. The rules
+follow the XT Format Reference (July 2022, pp. 29 and 95-97), together with
+observed writer vertex links. The library remains MIT and STL-only.
+
+Synthetic tests cover radial source order, repeated senses, oriented endpoints,
+nullable/untyped curves, sheet/wire dummy anchors and their vertex links,
+resource limits, invalid cycles/owners/anchors/loop links, unavailable metadata,
+unknown senses, unlisted entities and owned results after source destruction.
+An independent raw-field walk of the same 130 selected private streams checks
+all 21,052 edges and 42,104 radial fins, including 188 dummy fins, 37 wire
+edges, 786 vertex-free edges and 60 non-null dummy vertex links. All 41,916
+real fin uses also match the previous loop results exactly. Every source fin
+with an edge reference is accounted for in that selection. No radial query
+errors remain. Those samples have two fins per edge; higher-arity rings are
+covered synthetically. Private inputs and comparison programs remain outside
+the repository.
+
 ## Curve evaluation
 
 `openparasolid/evaluate.h` evaluates an untrimmed line, circle, ellipse or NURBS

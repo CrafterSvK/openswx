@@ -25,6 +25,45 @@ struct FinUse {
   NodeId fin_curve;
   TopologySense sense = TopologySense::kForward;
 };
+struct EdgeFinUse {
+  FinUse use;
+  /// Null for a dummy fin. Non-null uses retain their source loop ID.
+  NodeId loop;
+};
+struct EdgeBoundary {
+  NodeId edge;
+  /// Natural edge direction, determined by primary/secondary anchor fins.
+  /// Both may be null for a ring edge.
+  NodeId start_vertex;
+  NodeId end_vertex;
+  NodeId curve;
+  /// EDGE.halfedge followed by FIN.other, including dummy fins. The first two
+  /// entries are the positive primary and negative secondary anchor fins.
+  std::vector<EdgeFinUse> fins;
+};
+struct EdgeTraversalOptions {
+  /// Positive bound on all visited radial fins, including dummy anchors.
+  uint64_t max_fins = 100000;
+};
+
+/// Reads an EDGE's full ordered radial fin ring, with natural endpoints and
+/// source edge/fin curve references. Requires at least the distinct positive
+/// primary and negative secondary anchors; every listed fin must reference
+/// this edge and its oriented endpoint. The FIN.other ring must close at its
+/// primary head without repeating another fin. Additional fins may share a
+/// sense; no manifoldness or angular order is inferred.
+/// A dummy must be an anchor, have null loop/forward/backward/curve roles and
+/// locally valid nullable vertex-chain links. Real fins require a loop and
+/// locally reciprocal forward/backward links within that loop. Does not walk
+/// entire loops or vertex chains, prove complete incidence by scanning for
+/// unlisted fins, or validate geometry, tolerances or edge-to-curve sense.
+/// Limits include dummy fins. Zero max_fins returns kInvalidOptions, exhaustion
+/// kResourceLimit, malformed connectivity/targets kInvalidRecord, unavailable
+/// roles/senses or unreviewed classes kUnsupportedFormat. Errors never return
+/// partial results. Results own their data and leave the model unchanged.
+[[nodiscard]] Result<EdgeBoundary> TraverseEdgeBoundary(
+    const Model& model, NodeId edge, const EdgeTraversalOptions& options = {});
+
 struct IsolatedLoopVertex {
   NodeId fin;
   NodeId vertex;

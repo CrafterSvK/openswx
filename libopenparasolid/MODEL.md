@@ -59,7 +59,9 @@ boundary; see [compound children](README.md#compound-body-children).
 `TraverseChildBodyBoundary` selects one child through that checked parent and
 preserves recorded region-parent IDs; see
 [child boundaries](README.md#child-body-boundaries).
-They validate selected connectivity and list ownership without changing the
+`TraverseEdgeBoundary` reads complete listed radial fin rings, including dummy
+anchors; see [edge fin rings](README.md#edge-fin-rings).
+These APIs validate selected connectivity and list ownership without changing the
 model or claiming complete body/geometric validation or a proof of manifoldness.
 
 ## Reference graph
