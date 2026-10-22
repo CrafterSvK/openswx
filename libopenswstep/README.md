@@ -16,7 +16,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
-| Convex planar LINE/CIRCLE contours with full circular holes | Exact curved outer bound and circular inner bounds, analytic disk clearance and net area |
+| Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
 | Planar annular sectors with two concentric circular arcs and two radial lines | Exact single-loop `ADVANCED_FACE`, including nonconvex major sectors and analytic source-curve area |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
@@ -126,7 +126,23 @@ vertex-free ring seams are preserved. Each outer corner, hole/outer-edge pair
 and hole/hole pair consumes one shared check. Net area subtracts all circular
 disks and contributes to the existing solid-volume integral. Closed supported
 mixtures therefore include cylinder-sector solids with cylindrical through
-bores. Elliptic outer arcs with holes, elliptical/polygonal/multi-edge holes and
+bores.
+
+The same curved outer subset also supports polygonal holes, including concave
+hole profiles and mixtures with complete circular holes. Every polygon vertex
+must remain more than two source tolerances inside all outer support lines.
+Because the outer region is convex, this also contains each entire straight
+edge and the polygon interior. Each vertex/outer-edge pair consumes one check.
+Polygon holes must wind against the effective normal, be simple, mutually
+separated and nonnested. These tests reuse the existing polygon segment and
+containment checks. Mixed disk/segment distance and containment tests exclude
+circle/polygon crossings, touching and nesting in either direction. Their
+shared-budget accounting is the same as in the polygon/full-circle subsets.
+Source loop order is retained even when polygonal or circular holes come first.
+Net area subtracts both hole types. Closed supported mixtures include sector
+solids with polygonal through bores and unchanged analytic outer mantles.
+
+Elliptic outer arcs with holes, elliptical or multi-edge curved holes and
 nonconvex curved contours with holes remain unsupported. Existing hole-free
 elliptic contours and separate polygon/full-circle boundary subsets retain
 their established checks.
@@ -244,7 +260,7 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, other nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
-polygonal/multi-edge holes in curved contours,
+multi-edge curved holes,
 elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
@@ -306,7 +322,8 @@ each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Convex line/arc contours consume one check per corner.
 Circular containment and hole-pair comparisons consume one check each from the
 same budget. Convex curved contours with circular holes consume one additional
-check per hole/outer-edge pair and hole/hole pair. Mixed polygon/circle
+check per circular-hole/outer-edge pair, polygon-vertex/outer-edge pair and
+circular-hole pair. Mixed polygon/circle
 boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
@@ -344,8 +361,8 @@ is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
 bands/patches, closed cylinder sectors, conical frustums/patches/sectors, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
-contours, circular holes in LINE/CIRCLE contours, cylindrical through bores
-in curved caps, invalid
+contours, polygonal/circular holes in LINE/CIRCLE contours, cylindrical and
+polygonal through bores in curved caps, invalid
 topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -370,12 +387,13 @@ The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 49 export successfully, including nineteen face-bearing
 bodies with 196 faces; 30 successes contain only wire/point geometry. All 49
 generated documents pass OCCT import and B-rep validity checks. The other eight
-return unsupported-format errors. Circular holes in convex curved contours add
-two complete bodies with 30 faces, preserving all 47 prior successes.
+return unsupported-format errors. Polygonal/mixed holes in convex curved
+contours preserve all 49 prior successes. Remaining private faces include
+multi-edge curved holes and nonconvex contours beyond this subset.
 
-Synthetic OCCT round trips independently check curved-hole areas and
-cylinder-sector through-bore volumes, as well as annular and conical sectors,
-major arcs, inward sheets, loop order, translated frames and parameter-seam
+Synthetic OCCT round trips independently check polygonal/mixed curved-hole
+areas and circular/polygonal cylinder-sector through-bore volumes, as well as
+annular and conical sectors, major arcs, inward sheets, loop order, translated frames and parameter-seam
 crossings. Existing hole-free convex profiles retain their behavior and budget.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival

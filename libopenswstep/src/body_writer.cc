@@ -339,46 +339,69 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
 Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   std::optional<std::size_t> outer_index;
   std::vector<ConicBoundary> holes;
+  std::vector<std::vector<Vector3>> polygons;
+  std::vector<PlanarCurve> curves;
   for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
     const auto& loop = face.source->loops[i];
     if (loop.fins.size() == 1) {
       const auto hole = ReadConicLoop(face.source->face, loop);
       if (!hole.ok()) return Result<bool>::Err(hole.error());
       holes.push_back(hole.value());
-    } else {
-      if (outer_index || loop.isolated_vertex)
+      continue;
+    }
+    if (loop.isolated_vertex || loop.fins.empty())
+      return Result<bool>::Err(
+          Error(face.source->face, ErrorCode::kUnsupportedFormat,
+                "Curved face loops require fin boundaries"));
+    std::set<uint32_t> vertices;
+    std::vector<PlanarCurve> candidate;
+    bool curved = false;
+    for (const auto& fin : loop.fins) {
+      if (fin.use.fin_curve.value)
         return Result<bool>::Err(
-            Error(face.source->face, ErrorCode::kUnsupportedFormat,
-                  "Curved planar faces require one multi-edge outer loop and "
-                  "complete circular holes"));
+            Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
+                  "Tolerant fin curves need an explicit STEP pcurve mapping"));
+      if (!fin.use.start_vertex.value || !fin.use.end_vertex.value ||
+          !vertices.insert(fin.use.start_vertex.value).second)
+        return Result<bool>::Err(Error(face.source->face,
+                                       ErrorCode::kUnsupportedFormat,
+                                       "Multi-edge planar loops require "
+                                       "distinct non-null source vertices"));
+      const auto basis = Basis(fin.curve);
+      if (!basis.ok()) return Result<bool>::Err(basis.error());
+      candidate.push_back({&basis.value()->payload, fin.start, fin.end});
+      curved = curved ||
+               !std::holds_alternative<LineGeometry>(basis.value()->payload);
+      uses_[fin.use.edge.value].push_back(
+          {faces_.size(), fin.use.sense == TopologySense::kForward});
+    }
+    if (curved) {
+      if (outer_index)
+        return Result<bool>::Err(Error(
+            face.source->face, ErrorCode::kUnsupportedFormat,
+            "Curved planar faces require exactly one curved outer contour"));
       outer_index = i;
+      curves = std::move(candidate);
+    } else {
+      std::vector<Vector3> polygon;
+      for (const auto& fin : loop.fins) {
+        const auto point = points_.find(fin.use.start_vertex.value);
+        if (point == points_.end())
+          return Result<bool>::Err(Error(fin.use.start_vertex,
+                                         ErrorCode::kInvalidRecord,
+                                         "Bound vertex point is unavailable"));
+        polygon.push_back(point->second);
+      }
+      polygons.push_back(std::move(polygon));
     }
   }
   if (!outer_index)
     return Result<bool>::Err(Error(face.source->face, ErrorCode::kInvalidRecord,
                                    "Curved planar face has no outer contour"));
-  std::set<uint32_t> vertices;
-  std::vector<PlanarCurve> curves;
-  for (const auto& fin : face.source->loops[*outer_index].fins) {
-    if (fin.use.fin_curve.value)
-      return Result<bool>::Err(
-          Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
-                "Tolerant fin curves need an explicit STEP pcurve mapping"));
-    if (!fin.use.start_vertex.value || !fin.use.end_vertex.value ||
-        !vertices.insert(fin.use.start_vertex.value).second)
-      return Result<bool>::Err(Error(
-          face.source->face, ErrorCode::kUnsupportedFormat,
-          "Multi-edge curved loops require distinct non-null source vertices"));
-    const auto basis = Basis(fin.curve);
-    if (!basis.ok()) return Result<bool>::Err(basis.error());
-    curves.push_back({&basis.value()->payload, fin.start, fin.end});
-    uses_[fin.use.edge.value].push_back(
-        {faces_.size(), fin.use.sense == TopologySense::kForward});
-  }
-  if (!holes.empty()) {
-    const auto boundary = ValidateConvexCircularHoles(
-        curves, holes, *face.plane, face.natural_sense, options_.tolerance,
-        polygon_checks_remaining_);
+  if (!holes.empty() || !polygons.empty()) {
+    const auto boundary = ValidateConvexPlanarHoles(
+        curves, polygons, holes, *face.plane, face.natural_sense,
+        options_.tolerance, polygon_checks_remaining_);
     if (!boundary.ok())
       return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                      boundary.error().message.c_str()));

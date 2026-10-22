@@ -1249,18 +1249,8 @@ inline ModelFixture QuarterDisk() {
   CircleBasis(f, 4000, {0, 0, 0});
   return f;
 }
-inline ModelFixture RoundedRectangle(bool reverse = false) {
-  std::vector<unsigned> polygon{0, 1, 2, 3, 4, 5, 6, 7};
-  if (reverse) std::reverse(polygon.begin(), polygon.end());
-  auto f = Polyhedron({{1, 0, 0},
-                       {3, 0, 0},
-                       {4, 1, 0},
-                       {4, 2, 0},
-                       {3, 3, 0},
-                       {1, 3, 0},
-                       {0, 2, 0},
-                       {0, 1, 0}},
-                      {polygon});
+inline void RoundRectangleEdges(ModelFixture& f,
+                                const std::vector<unsigned>& polygon) {
   struct Arc {
     unsigned first, last;
     Vector3 center;
@@ -1275,6 +1265,115 @@ inline ModelFixture RoundedRectangle(bool reverse = false) {
                     arc.first < arc.last ? '+' : '-');
     }
   }
+}
+inline ModelFixture RoundedRectangle(bool reverse = false) {
+  std::vector<unsigned> polygon{0, 1, 2, 3, 4, 5, 6, 7};
+  if (reverse) std::reverse(polygon.begin(), polygon.end());
+  auto f = Polyhedron({{1, 0, 0},
+                       {3, 0, 0},
+                       {4, 1, 0},
+                       {4, 2, 0},
+                       {3, 3, 0},
+                       {1, 3, 0},
+                       {0, 2, 0},
+                       {0, 1, 0}},
+                      {polygon});
+  RoundRectangleEdges(f, polygon);
+  return f;
+}
+inline ModelFixture RoundedPolygonFace(
+    const std::vector<std::vector<Vector3>>& holes, bool inward = false,
+    bool hole_first = false) {
+  std::vector<Vector3> points{{1, 0, 0}, {3, 0, 0}, {4, 1, 0}, {4, 2, 0},
+                              {3, 3, 0}, {1, 3, 0}, {0, 2, 0}, {0, 1, 0}};
+  std::vector<std::vector<unsigned>> loops{{0, 1, 2, 3, 4, 5, 6, 7}};
+  if (inward) std::reverse(loops.front().begin(), loops.front().end());
+  for (const auto& hole : holes) {
+    std::vector<unsigned> loop;
+    for (const auto point : hole) {
+      loop.push_back(static_cast<unsigned>(points.size()));
+      points.push_back(point);
+    }
+    if (inward) std::reverse(loop.begin(), loop.end());
+    loops.push_back(std::move(loop));
+  }
+  auto f = PlanarFace(points, loops, hole_first);
+  Set(f, 300, "sense", inward ? '-' : '+');
+  RoundRectangleEdges(f, loops.front());
+  return f;
+}
+inline ModelFixture RoundedPolygonHoles(bool mixed = false,
+                                        bool concave_hole = false,
+                                        bool hole_first = false,
+                                        bool inward = false,
+                                        bool named_seams = false) {
+  const std::vector<std::vector<Vector3>> holes =
+      concave_hole
+          ? std::vector<std::vector<Vector3>>{{{1, 1, 0},
+                                               {1, 2, 0},
+                                               {2, 2, 0},
+                                               {2, 1.5, 0},
+                                               {3, 1.5, 0},
+                                               {3, 1, 0}}}
+          : std::vector<std::vector<Vector3>>{
+                {{.75, 1, 0}, {.75, 2, 0}, {1.25, 2, 0}, {1.25, 1, 0}},
+                {{2.75, 1, 0}, {2.75, 2, 0}, {3.25, 2, 0}, {3.25, 1, 0}}};
+  auto f = RoundedPolygonFace(holes, inward, hole_first);
+  if (mixed) {
+    ConicLoopSpec circle;
+    circle.center = concave_hole ? Vector3{2, 2.4, 0} : Vector3{2, 1.5, 0};
+    circle.major = concave_hole ? .1 : .25;
+    circle.reverse_fin = !inward;
+    AddConicFaceLoops(f, 300, {circle}, named_seams, hole_first);
+  }
+  return f;
+}
+inline ModelFixture CylinderSectorWithPolygonBore() {
+  auto f = Polyhedron({{1, 0, 0},
+                       {0, 1, 0},
+                       {0, 0, 0},
+                       {.2, .2, 0},
+                       {.4, .2, 0},
+                       {.4, .4, 0},
+                       {.2, .4, 0},
+                       {1, 0, 2},
+                       {0, 1, 2},
+                       {0, 0, 2},
+                       {.2, .2, 2},
+                       {.4, .2, 2},
+                       {.4, .4, 2},
+                       {.2, .4, 2}},
+                      {{0, 2, 1},
+                       {3, 4, 5, 6},
+                       {7, 8, 9},
+                       {10, 13, 12, 11},
+                       {0, 1, 8, 7},
+                       {0, 7, 9, 2},
+                       {1, 2, 9, 8},
+                       {3, 10, 11, 4},
+                       {4, 11, 12, 5},
+                       {5, 12, 13, 6},
+                       {6, 13, 10, 3}},
+                      true);
+  MergeFaceLoops(f, {{0, 1}, {2, 3}});
+  std::vector<std::pair<uint32_t, double>> arcs;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    if ((a == 200 && b == 201) || (a == 207 && b == 208))
+      arcs.emplace_back(PointerValue(f, node.index, "curve"),
+                        a == 200 ? 0. : 2.);
+  }
+  for (const auto& [curve, level] : arcs) CircleBasis(f, curve, {0, 0, level});
+  RemoveNode(f, 704);
+  f.Add(51, 704,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
 inline ModelFixture RoundedRectangleWithCircularHoles(

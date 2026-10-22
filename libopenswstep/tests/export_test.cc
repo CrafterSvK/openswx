@@ -896,6 +896,116 @@ TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 6);
 }
+TEST(OpenSwStep, ExportsPolygonAndMixedHolesInConvexCurvedContours) {
+  for (const bool mixed : {false, true})
+    for (const bool concave : {false, true})
+      for (const bool first : {false, true})
+        for (const bool inward : {false, true}) {
+          const auto f =
+              test::RoundedPolygonHoles(mixed, concave, first, inward, true);
+          for (const auto& source : {f, test::RotateAndTranslate(f)}) {
+            const auto result = Export(source);
+            ASSERT_TRUE(result.ok()) << result.error().message;
+            EXPECT_EQ(result.value().statistics.faces, 1);
+            EXPECT_EQ(result.value().statistics.edges,
+                      8 + (concave ? 6 : 8) + (mixed ? 1 : 0));
+            CheckReferences(result.value());
+          }
+        }
+}
+TEST(OpenSwStep, PreservesPolygonBoresThroughCurvedSolidCaps) {
+  for (const auto& f :
+       {test::CylinderSectorWithPolygonBore(),
+        test::RotateAndTranslate(test::CylinderSectorWithPolygonBore())}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    EXPECT_EQ(result.value().statistics.faces, 9);
+    EXPECT_EQ(result.value().statistics.edges, 21);
+    EXPECT_EQ(result.value().statistics.vertices, 14);
+  }
+  const auto fixture = test::Serialize(test::CylinderSectorWithPolygonBore());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
+}
+TEST(OpenSwStep, RejectsPolygonHolesOutsideOrTouchingCurvedContours) {
+  for (const auto& hole : std::vector<std::vector<Vector3>>{
+           {{3.5, .1, 0}, {3.5, .3, 0}, {3.7, .3, 0}, {3.7, .1, 0}},
+           {{1, 0, 0}, {1, .2, 0}, {2, .2, 0}, {2, 0, 0}},
+           {{1, 1e-7, 0}, {1, .2, 0}, {2, .2, 0}, {2, 1e-7, 0}},
+           {{4.1, 1, 0}, {4.1, 2, 0}, {4.2, 2, 0}, {4.2, 1, 0}}}) {
+    const auto result = Export(test::RoundedPolygonFace({hole}));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(result.error().message.find("convex curved contour"),
+              std::string::npos)
+        << result.error().message;
+  }
+  ASSERT_TRUE(
+      Export(test::RoundedPolygonFace(
+                 {{{1, 3e-7, 0}, {1, .2, 0}, {2, .2, 0}, {2, 3e-7, 0}}}))
+          .ok());
+}
+TEST(OpenSwStep, RejectsCrossingTouchingNestedAndMiswoundCurvedPolygonHoles) {
+  const std::vector<Vector3> square{{1, 1, 0}, {1, 2, 0}, {2, 2, 0}, {2, 1, 0}};
+  for (const auto& other : std::vector<std::vector<Vector3>>{
+           {{1.5, 1.5, 0}, {1.5, 2.5, 0}, {2.5, 2.5, 0}, {2.5, 1.5, 0}},
+           {{2, 1, 0}, {2, 2, 0}, {3, 2, 0}, {3, 1, 0}},
+           {{1.2, 1.2, 0}, {1.2, 1.8, 0}, {1.8, 1.8, 0}, {1.8, 1.2, 0}},
+           {{1, 1, 0}, {2, 1, 0}, {2, 2, 0}, {1, 2, 0}}}) {
+    const auto result = Export(test::RoundedPolygonFace({square, other}));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+  const auto crossed = Export(test::RoundedPolygonFace(
+      {{{1, 1, 0}, {1, 2, 0}, {3, 1, 0}, {3, 1.5, 0}}}));
+  ASSERT_FALSE(crossed.ok());
+  EXPECT_NE(crossed.error().message.find("cross, touch"), std::string::npos)
+      << crossed.error().message;
+}
+TEST(OpenSwStep, RejectsMixedHoleIntersectionAndNestingInCurvedContours) {
+  const std::vector<Vector3> square{{1, 1, 0}, {1, 2, 0}, {2, 2, 0}, {2, 1, 0}};
+  for (const auto& spec :
+       std::vector<std::pair<Vector3, double>>{{{1.5, 1.5, 0}, .1},
+                                               {{1.5, 1.5, 0}, .8},
+                                               {{2.1, 1.5, 0}, .2},
+                                               {{2.25, 1.5, 0}, .25}}) {
+    auto f = test::RoundedPolygonFace({square});
+    test::ConicLoopSpec hole;
+    hole.center = spec.first;
+    hole.major = spec.second;
+    hole.reverse_fin = true;
+    test::AddConicFaceLoops(f, 300, {hole});
+    const auto result = Export(f);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(result.error().message.find("polygon"), std::string::npos)
+        << result.error().message;
+  }
+}
+TEST(OpenSwStep, BoundsPolygonHoleChecksInsideCurvedContours) {
+  const auto f =
+      test::RoundedPolygonFace({{{1, 1, 0}, {1, 2, 0}, {2, 2, 0}, {2, 1, 0}}});
+  auto options = Options();
+  // Eight outer corners, two nonadjacent polygon pairs, 4*8 support tests.
+  options.max_polygon_checks = 42;
+  ASSERT_TRUE(Export(f, options).ok());
+  options.max_polygon_checks = 41;
+  const auto limited = Export(f, options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto mixed = test::RoundedPolygonHoles(true);
+  // 8 corners + 8 circle/outer + 16 disk/segment/containment + 28 polygon
+  // segment/containment comparisons + 8*8 vertex/outer comparisons.
+  options.max_polygon_checks = 124;
+  ASSERT_TRUE(Export(mixed, options).ok());
+  options.max_polygon_checks = 123;
+  const auto shared = Export(mixed, options);
+  ASSERT_FALSE(shared.ok());
+  EXPECT_EQ(shared.error().code, ErrorCode::kResourceLimit);
+}
 TEST(OpenSwStep, ExportsConvexCurvedContoursWithCircularHoles) {
   for (const bool inward : {false, true})
     for (const bool first : {false, true})

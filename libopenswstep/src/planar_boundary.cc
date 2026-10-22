@@ -225,6 +225,55 @@ openparasolid::Result<std::size_t> ValidatePlanarLoops(
   if (!checked.ok()) return Return::Err(checked.error());
   return Return::Ok(*outer);
 }
+Result<long double> ValidatePolygonHoleSet(
+    std::span<const std::vector<Vector3>> polygons,
+    std::span<const ConicBoundary> circles,
+    const openparasolid::PlaneGeometry& plane, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks) {
+  using Return = Result<long double>;
+  if (!std::isfinite(tolerance) || tolerance <= 0)
+    return Return::Err({ErrorCode::kInvalidOptions, 0,
+                        "Polygon hole tolerance must be positive and finite"});
+  if (polygons.empty()) return Return::Ok(0);
+  for (const auto& polygon : polygons)
+    if (polygon.size() < 3)
+      return Return::Err(
+          Invalid("Polygon hole requires at least three vertices"));
+  const auto origin = polygons.front().front();
+  const auto& n = plane.normal;
+  const auto& x = plane.x_axis;
+  const Vector3 y{n.y * x.z - n.z * x.y, n.z * x.x - n.x * x.z,
+                  n.x * x.y - n.y * x.x};
+  std::vector<Loop> loops;
+  long double area = 0;
+  const long double clearance = 2 * static_cast<long double>(tolerance);
+  for (const auto& polygon : polygons) {
+    auto projected = ProjectLoop(polygon, plane, origin, tolerance);
+    if (!projected.ok()) return Return::Err(projected.error());
+    auto loop = std::move(projected).value();
+    if ((loop.area > 0) == natural_sense)
+      return Return::Err(
+          Invalid("Polygon hole winding agrees with the outer loop"));
+    for (const auto& circle : circles) {
+      const Point2 center{Project(circle.center, origin, x),
+                          Project(circle.center, origin, y)};
+      const auto inside = SeparateDisk(loop, center, circle.major_radius,
+                                       clearance, remaining_checks);
+      if (!inside.ok()) return Return::Err(inside.error());
+      if (inside.value())
+        return Return::Err(
+            Invalid("Circular hole is nested inside a polygon hole"));
+    }
+    area += std::abs(loop.area) / 2;
+    loops.push_back(std::move(loop));
+  }
+  const auto checked =
+      CheckPolygonLoops(loops, std::nullopt, tolerance, remaining_checks);
+  if (!checked.ok()) return Return::Err(checked.error());
+  if (!std::isfinite(area))
+    return Return::Err(Invalid("Polygon hole area is unrepresentable"));
+  return Return::Ok(area);
+}
 namespace {
 Result<PlanarRegion> ValidateCircularPolygonHoles(
     std::span<const std::vector<Vector3>> polygons,

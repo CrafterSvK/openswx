@@ -20,6 +20,16 @@ namespace openswstep::internal {
     std::span<const std::vector<openparasolid::Vector3>> polygons,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
+// Validates an all-hole polygon set: opposite winding, no self/inter-loop
+// crossings or nesting, and no overlap/nesting with already validated circles.
+// Containment in the curved outer contour is checked separately by the caller.
+// Returns the positive sum of polygon hole areas; consumes shared segment,
+// containment-edge and disk/segment checks. An empty set has area zero.
+[[nodiscard]] openparasolid::Result<long double> ValidatePolygonHoleSet(
+    std::span<const std::vector<openparasolid::Vector3>> polygons,
+    std::span<const ConicBoundary> circles,
+    const openparasolid::PlaneGeometry& plane, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks);
 struct PlanarRegion {
   std::size_t outer_loop;
   long double area;

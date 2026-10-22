@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "openparasolid/evaluate.h"
+#include "planar_boundary.h"
 
 namespace openswstep::internal {
 namespace {
@@ -271,10 +272,11 @@ Result<ConvexBoundary> ValidateConvexPlanarLoop(
         Invalid("Curved planar loop does not make one convex revolution"));
   return Return::Ok({area2 / 2, first.value().position});
 }
-Result<ConvexBoundary> ValidateConvexCircularHoles(
-    std::span<const PlanarCurve> curves, std::span<const ConicBoundary> holes,
-    const PlaneGeometry& plane, bool natural_sense, double tolerance,
-    uint64_t& remaining_checks) {
+Result<ConvexBoundary> ValidateConvexPlanarHoles(
+    std::span<const PlanarCurve> curves,
+    std::span<const std::vector<Vector3>> polygons,
+    std::span<const ConicBoundary> holes, const PlaneGeometry& plane,
+    bool natural_sense, double tolerance, uint64_t& remaining_checks) {
   using Return = Result<ConvexBoundary>;
   for (const auto& curve : curves)
     if (!curve.geometry ||
@@ -333,6 +335,24 @@ Result<ConvexBoundary> ValidateConvexCircularHoles(
     result.area -=
         std::numbers::pi_v<long double> * hole.major_radius * hole.minor_radius;
   }
+  const auto polygon_area = ValidatePolygonHoleSet(
+      polygons, holes, plane, natural_sense, tolerance, remaining_checks);
+  if (!polygon_area.ok()) return Return::Err(polygon_area.error());
+  for (const auto& polygon : polygons)
+    for (const auto point : polygon)
+      for (const auto& curve : curves) {
+        if (!remaining_checks)
+          return Return::Err({ErrorCode::kResourceLimit, 0,
+                              "Curved polygon hole comparison limit exceeded"});
+        --remaining_checks;
+        const auto distance = DiskClearance(curve, point, frame);
+        if (!distance.ok()) return Return::Err(distance.error());
+        if (!std::isfinite(distance.value()) || distance.value() <= clearance)
+          return Return::Err(
+              Invalid("Polygon hole is outside, touching or too "
+                      "close to the convex curved contour"));
+      }
+  result.area -= polygon_area.value();
   if (!std::isfinite(result.area) || result.area <= 0)
     return Return::Err(Invalid("Curved face net area is nonpositive"));
   return Return::Ok(result);
