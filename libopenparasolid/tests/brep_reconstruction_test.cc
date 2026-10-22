@@ -93,6 +93,155 @@ ModelFixture Face() {
          ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
+ModelFixture IntersectionFace(bool trimmed, bool curved = false) {
+  auto f = Face();
+  const Vector3 a = curved ? Vector3{1, 0, 0} : Vector3{0, 0, 0};
+  const Vector3 b = curved ? Vector3{0, 1, 0} : Vector3{1, 0, 0};
+  for (auto& n : f.report.nodes) {
+    if (n.index == 200) n.fields[0].values = {a.x, a.y, a.z};
+    if (n.index == 201) n.fields[0].values = {b.x, b.y, b.z};
+  }
+  if (curved) {
+    f.Add(53, 301,
+          {Numbers("center", {0, 0, 0}, FieldType::kVector),
+           Numbers("axis", {0, 0, 1}, FieldType::kVector),
+           Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           Numbers("radius", {1}),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+  } else {
+    f.Add(50, 301,
+          {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+           Numbers("normal", {0, -1, 0}, FieldType::kVector),
+           Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+  }
+  f.Add(38, 401,
+        {{{"surface", FieldType::kPointer, 1006, 2, true},
+          {uint64_t{300}, uint64_t{301}}},
+         Pointer("chart", 402, 40),
+         Pointer("start", 403, 41),
+         Pointer("end", 404, 41),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  f.Add(40, 402,
+        {Numbers("base_parameter", {0}),
+         Numbers("base_scale", {1}),
+         Integer("chart_count", 2),
+         Numbers("chordal_error", {.1}),
+         Numbers("angular_error", {1}),
+         {{"parameter_error", FieldType::kDouble, 0, 2, true},
+          {std::monostate{}, std::monostate{}}},
+         Array("positions", FieldType::kIntersectionPoint,
+               {a.x, a.y, a.z, b.x, b.y, b.z})});
+  f.Add(41, 403,
+        {ByteValue("type", 'L', FieldType::kCharacter),
+         Array("positions", FieldType::kIntersectionPoint, {a.x, a.y, a.z})});
+  f.Add(41, 404,
+        {ByteValue("type", 'L', FieldType::kCharacter),
+         Array("positions", FieldType::kIntersectionPoint, {b.x, b.y, b.z})});
+  if (trimmed) {
+    f.Add(133, 410,
+          {Pointer("basis_curve", 401, 1008),
+           Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+           Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+           Numbers("parm_1", {0}),
+           Numbers("parm_2", {curved ? std::sqrt(2.) : 1}),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+  }
+  Set(f, 2, "curve", trimmed ? 410 : 401);
+  return f;
+}
+TEST(ParasolidFaceBinding, BindsIntersectionSolvesAndOwnsSolverSettings) {
+  for (bool curved : {false, true}) {
+    const auto f = IntersectionFace(false, curved);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const double end = curved ? std::sqrt(2.) : 1;
+    const FinParameterInterval intervals[]{{NodeId{10}, 0, end},
+                                           {NodeId{11}, end, 0}};
+    const auto no_options =
+        BindFaceTrimming(model.value(), NodeId{30}, intervals, 1e-12);
+    ASSERT_FALSE(no_options.ok());
+    EXPECT_EQ(no_options.error().code, ErrorCode::kUnsupportedFormat);
+    auto options = IntersectionEvaluationOptions{1e-12, 1e-12};
+    const auto result = BindFaceTrimming(model.value(), NodeId{30}, intervals,
+                                         1e-12, {}, options);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    options.solve_tolerance = 0;
+    for (std::size_t i = 0; i < 2; ++i) {
+      const auto& fin = result.value().loops[0].fins[i];
+      ASSERT_TRUE(fin.intersection.has_value());
+      EXPECT_EQ(fin.intersection->solve_tolerance, 1e-12);
+      const auto sample = EvaluateBoundFin(model.value(), fin, .5, 1e-12);
+      ASSERT_TRUE(sample.ok()) << sample.error().message;
+      const double coordinate = curved ? std::sqrt(.5) : .5;
+      EXPECT_NEAR(sample.value().curve.position.x, coordinate, 1e-12);
+      EXPECT_NEAR(sample.value().curve.position.y, curved ? coordinate : 0,
+                  1e-12);
+      EXPECT_NEAR(sample.value().uv.u, coordinate, 1e-12);
+      const double sign = i == 0 ? 1 : -1;
+      EXPECT_NEAR(sample.value().curve.first_derivative.x,
+                  curved ? -sign : sign, 1e-12);
+      EXPECT_NEAR(sample.value().curve.first_derivative.y, curved ? sign : 0,
+                  1e-12);
+    }
+  }
+}
+TEST(ParasolidFaceBinding, AutomaticallyBindsTrimmedIntersectionsWithOptions) {
+  for (bool curved : {false, true}) {
+    const auto f = IntersectionFace(true, curved);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    EXPECT_FALSE(BindFaceTrimming(model.value(), NodeId{30}, 1e-12).ok());
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                         IntersectionEvaluationOptions{1e-12, 1e-12});
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().loops[0].fins[0].curve.value, 410);
+    EXPECT_DOUBLE_EQ(result.value().loops[0].fins[0].end,
+                     curved ? std::sqrt(2.) : 1);
+  }
+}
+TEST(ParasolidFaceBinding,
+     IntersectionSettingsDoNotRelaxFaceMembershipOrChartBounds) {
+  for (bool outside_chart : {false, true}) {
+    auto f = IntersectionFace(false);
+    if (!outside_chart) {
+      for (auto& n : f.report.nodes)
+        if (n.index == 402) {
+          n.fields.back().values[2] = 1e-6;
+          n.fields.back().values[5] = 1e-6;
+        }
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const double end = outside_chart ? 1.1 : 1;
+    const FinParameterInterval intervals[]{{NodeId{10}, 0, end},
+                                           {NodeId{11}, end, 0}};
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, intervals, 1e-12, {},
+                         IntersectionEvaluationOptions{1e-3, 1e-3});
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, outside_chart ? ErrorCode::kInvalidOptions
+                                                 : ErrorCode::kInvalidRecord);
+  }
+}
+TEST(ParasolidFaceBinding,
+     ValidatesIntersectionOptionsEvenWithoutCurveSamples) {
+  auto f = Face();
+  Set(f, 30, "loop", 0);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const IntersectionEvaluationOptions invalid;
+  const auto automatic =
+      BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {}, invalid);
+  ASSERT_FALSE(automatic.ok());
+  EXPECT_EQ(automatic.error().code, ErrorCode::kInvalidOptions);
+  const auto explicit_intervals = BindFaceTrimming(
+      model.value(), NodeId{30}, std::span<const FinParameterInterval>{}, 1e-12,
+      {}, invalid);
+  ASSERT_FALSE(explicit_intervals.ok());
+  EXPECT_EQ(explicit_intervals.error().code, ErrorCode::kInvalidOptions);
+}
 ModelFixture ConicFace(bool ellipse, char sense = '+') {
   auto f = Face();
   Set(f, 2, "curve", 401);

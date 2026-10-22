@@ -92,6 +92,41 @@ preserved. Synthetic tests cover both fin directions and basis senses, closed
 trim branches, invalid stored points, open vertex-free trims and ambiguous
 fin trims. This comparison is independent of the earlier 130-stream selection.
 
+## Intersection curves in face bindings
+
+Both `BindFaceTrimming` overloads accept optional `IntersectionEvaluationOptions`
+after the traversal options. Supplying them enables the existing bounded local
+intersection solver, including intersections reached through source trims:
+
+```cpp
+IntersectionEvaluationOptions solver{1e-7, 1e-9};
+auto bound = BindFaceTrimming(model, face, intervals, 1e-7, {}, solver);
+// With transmitted trim intervals, the automatic overload is also available:
+auto automatic = BindFaceTrimming(model, face, 1e-7, {}, solver);
+```
+
+Direct intersections still require explicit directed intervals. The automatic
+overload can resolve source trims of intersections using their transmitted
+parameters; it does not infer edge intervals from chart endpoints. Omitting
+solver options retains the explicit unsupported result for intersections.
+Invalid solver options are rejected even when the face has no curve samples.
+
+Each `BoundFinGeometry` owns a copy of the solver settings in `intersection`.
+`EvaluateBoundFin` reuses those settings without requiring the original options
+object. Chart membership, Newton residual and optional regularity checks retain
+the existing solver semantics. Face membership and vertex matching still use
+the separate binding tolerance. Directed tangents retain their scale/reversal
+with respect to the fin fraction. Chart bounds, source trim bounds, dependency
+and work limits remain in force. This provides local chart evaluation, without
+certifying a global intersection branch or extending to terminators.
+
+Synthetic tests cover plane/plane and curved plane/sphere intersections, stored
+settings, reversed fins, source trims, independent face tolerances, invalid
+options and chart bounds. All 542 faces in the separate 39-stream selection
+still bind with and without the supplied solver options. That selection has no
+additional eligible trimmed-intersection faces, so it establishes regression
+coverage rather than real-file coverage for the new intersection binding.
+
 ## Analytic offset surfaces
 
 `OFFSET_SURF` is now typed as `OffsetSurfaceGeometry{surface, distance}`;

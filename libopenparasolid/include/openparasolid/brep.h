@@ -42,6 +42,8 @@ struct BoundFinGeometry {
   NodeId curve;
   double start = 0;
   double end = 0;
+  // Owned solver settings for all subsequent evaluations of this binding.
+  std::optional<IntersectionEvaluationOptions> intersection = std::nullopt;
 };
 struct FaceTrimLoop {
   NodeId loop;
@@ -62,10 +64,15 @@ struct FinGeometryEvaluation {
 // Requires exactly one directed interval per non-isolated fin. Endpoints are
 // checked against vertex points; endpoints and midpoint against the surface.
 // These finite checks are not a proof of membership for every parameter.
+// Optional intersection settings enable the existing bounded local solver,
+// including through trims. Settings are validated even for empty boundaries
+// and copied into each fin; omission preserves unsupported intersections.
 [[nodiscard]] Result<FaceTrimming> BindFaceTrimming(
     const Model& model, NodeId face,
     std::span<const FinParameterInterval> intervals, double tolerance,
-    const FaceTraversalOptions& options = {});
+    const FaceTraversalOptions& options = {},
+    const std::optional<IntersectionEvaluationOptions>& intersection =
+        std::nullopt);
 // Resolves lines, accurate source trim intervals and accurate circle/ellipse
 // edges. Edge trims retain transmitted parameters, ordered by fin sense, even
 // for closed/vertex-free edges. Stored trim points must match curve samples.
@@ -75,10 +82,13 @@ struct FinGeometryEvaluation {
 // branches require the explicit overload.
 [[nodiscard]] Result<FaceTrimming> BindFaceTrimming(
     const Model& model, NodeId face, double tolerance,
-    const FaceTraversalOptions& options = {});
+    const FaceTraversalOptions& options = {},
+    const std::optional<IntersectionEvaluationOptions>& intersection =
+        std::nullopt);
 // Fraction is in [0,1]. Tangent is dP/d(fraction), including directed reversal.
 // Uses transmitted SP-curve UVs when available; otherwise bounded surface
-// inversion. No periodic UV continuation or inside/outside classification.
+// inversion. Uses the binding's owned intersection settings when supplied.
+// No periodic UV continuation or inside/outside classification.
 [[nodiscard]] Result<FinGeometryEvaluation> EvaluateBoundFin(
     const Model& model, const BoundFinGeometry& fin, double fraction,
     double tolerance);

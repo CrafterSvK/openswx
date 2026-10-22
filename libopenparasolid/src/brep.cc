@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+
+#include "evaluate_internal.h"
 namespace openparasolid {
 namespace {
 using Ids = std::unordered_set<uint32_t>;
@@ -173,11 +175,20 @@ Result<FinParameterInterval> ConicInterval(const Model& model,
   return Result<FinParameterInterval>::Ok(
       {use.fin, start.value(), start.value() + span});
 }
-Result<FinParameterInterval> TrimInterval(const Model& model, NodeId curve_id,
-                                          const TrimmedCurveGeometry& trim,
-                                          const FinUse& use, double tolerance) {
-  const auto first = EvaluateCurve(model, curve_id, trim.parameter_1);
-  const auto second = EvaluateCurve(model, curve_id, trim.parameter_2);
+Result<CurveEvaluation> SampleCurve(
+    const Model& model, NodeId curve, double parameter,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  return intersection ? EvaluateCurve(model, curve, parameter, *intersection)
+                      : EvaluateCurve(model, curve, parameter);
+}
+Result<FinParameterInterval> TrimInterval(
+    const Model& model, NodeId curve_id, const TrimmedCurveGeometry& trim,
+    const FinUse& use, double tolerance,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  const auto first =
+      SampleCurve(model, curve_id, trim.parameter_1, intersection);
+  const auto second =
+      SampleCurve(model, curve_id, trim.parameter_2, intersection);
   if (!first.ok()) return Result<FinParameterInterval>::Err(first.error());
   if (!second.ok()) return Result<FinParameterInterval>::Err(second.error());
   if (Distance(first.value().position, trim.point_1) > tolerance ||
@@ -414,7 +425,7 @@ Result<FinGeometryEvaluation> EvaluateBoundFin(const Model& model,
         Error("Invalid fin interval, fraction or tolerance", 0,
               ErrorCode::kInvalidOptions));
   const double t = std::lerp(fin.start, fin.end, fraction);
-  auto sample = EvaluateCurve(model, fin.curve, t);
+  auto sample = SampleCurve(model, fin.curve, t, fin.intersection);
   if (!sample.ok()) return Result<FinGeometryEvaluation>::Err(sample.error());
   Result<SurfaceParameters> uv = Result<SurfaceParameters>::Err(
       Error("Unsupported surface mapping", 0, ErrorCode::kUnsupportedFormat));
@@ -434,7 +445,8 @@ Result<FinGeometryEvaluation> EvaluateBoundFin(const Model& model,
     if (sp.surface != fin.surface)
       return Result<FinGeometryEvaluation>::Err(
           Error("Fin SP-curve belongs to another surface"));
-    auto parameter = EvaluateCurve(model, sp.parameter_curve, t);
+    auto parameter =
+        SampleCurve(model, sp.parameter_curve, t, fin.intersection);
     if (!parameter.ok())
       return Result<FinGeometryEvaluation>::Err(parameter.error());
     auto surface =
@@ -464,7 +476,12 @@ Result<FinGeometryEvaluation> EvaluateBoundFin(const Model& model,
 Result<FaceTrimming> BindFaceTrimming(
     const Model& model, NodeId face,
     std::span<const FinParameterInterval> intervals, double tolerance,
-    const FaceTraversalOptions& options) {
+    const FaceTraversalOptions& options,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  if (intersection) {
+    if (auto error = internal::ValidateIntersectionOptions(*intersection))
+      return Result<FaceTrimming>::Err(*error);
+  }
   if (!std::isfinite(tolerance) || tolerance < 0 || !options.max_loops ||
       !options.max_fins)
     return Result<FaceTrimming>::Err(
@@ -523,7 +540,8 @@ Result<FaceTrimming> BindFaceTrimming(
                            result.surface,
                            use.fin_curve.value ? use.fin_curve : use.edge_curve,
                            p.start,
-                           p.end};
+                           p.end,
+                           intersection};
       for (double fraction : {0., 0.5, 1.}) {
         auto sample = EvaluateBoundFin(model, fin, fraction, tolerance);
         if (!sample.ok()) return Result<FaceTrimming>::Err(sample.error());
@@ -549,9 +567,14 @@ Result<FaceTrimming> BindFaceTrimming(
                                            0, ErrorCode::kInvalidOptions));
   return Result<FaceTrimming>::Ok(std::move(result));
 }
-Result<FaceTrimming> BindFaceTrimming(const Model& model, NodeId face,
-                                      double tolerance,
-                                      const FaceTraversalOptions& options) {
+Result<FaceTrimming> BindFaceTrimming(
+    const Model& model, NodeId face, double tolerance,
+    const FaceTraversalOptions& options,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  if (intersection) {
+    if (auto error = internal::ValidateIntersectionOptions(*intersection))
+      return Result<FaceTrimming>::Err(*error);
+  }
   if (!std::isfinite(tolerance) || tolerance < 0)
     return Result<FaceTrimming>::Err(Error("Invalid automatic trim tolerance",
                                            0, ErrorCode::kInvalidOptions));
@@ -576,7 +599,8 @@ Result<FaceTrimming> BindFaceTrimming(const Model& model, NodeId face,
       }
       if (const auto* trim =
               std::get_if<TrimmedCurveGeometry>(&curve->payload)) {
-        auto interval = TrimInterval(model, curve_id, *trim, use, tolerance);
+        auto interval =
+            TrimInterval(model, curve_id, *trim, use, tolerance, intersection);
         if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
         intervals.push_back(interval.value());
         continue;
@@ -619,7 +643,8 @@ Result<FaceTrimming> BindFaceTrimming(const Model& model, NodeId face,
                                                ErrorCode::kUnsupportedFormat));
       intervals.push_back(interval);
     }
-  return BindFaceTrimming(model, face, intervals, tolerance, options);
+  return BindFaceTrimming(model, face, intervals, tolerance, options,
+                          intersection);
 }
 
 }  // namespace openparasolid
