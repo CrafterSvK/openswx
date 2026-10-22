@@ -1006,6 +1006,90 @@ inline void CircleBasis(ModelFixture& f, uint32_t id, Vector3 center,
          Numbers("radius", {radius}),
          ByteValue("sense", sense, FieldType::kCharacter)});
 }
+inline ModelFixture CylinderPatchFixture(double span = std::acos(-1.) / 2,
+                                         bool inward = false,
+                                         double top_phase = 0) {
+  const double height = 2;
+  auto f = Polyhedron(
+      {{1, 0, 0},
+       {std::cos(span), std::sin(span), 0},
+       {std::cos(span + top_phase), std::sin(span + top_phase), height},
+       {std::cos(top_phase), std::sin(top_phase), height}},
+      {inward ? std::vector<unsigned>{3, 2, 1, 0}
+              : std::vector<unsigned>{0, 1, 2, 3}});
+  RemoveNode(f, 700);
+  f.Add(51, 700,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 300, "sense", inward ? '-' : '+');
+  // Recover each source edge's natural endpoint order from its paired fins.
+  struct Arc {
+    uint32_t curve;
+    Vector3 center;
+    char sense;
+  };
+  std::vector<Arc> arcs;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    if ((a == 200 && b == 201) || (a == 202 && b == 203))
+      arcs.push_back({PointerValue(f, node.index, "curve"),
+                      {0, 0, a == 200 ? 0. : height},
+                      a == 200 ? '+' : '-'});
+  }
+  for (const auto& arc : arcs)
+    CircleBasis(f, arc.curve, arc.center, 1, arc.sense);
+  return f;
+}
+inline ModelFixture PhaseShiftedCylinderPatch() {
+  auto f = CylinderPatchFixture();
+  const auto angle = 7 * std::acos(-1.) / 4;
+  const auto c = std::cos(angle), s = std::sin(angle);
+  for (auto& node : f.report.nodes) {
+    if (node.node_type != 29 && node.node_type != 30) continue;
+    for (auto& field : node.fields) {
+      if (field.values.size() != 3) continue;
+      const auto x = std::get<double>(field.values[0]),
+                 y = std::get<double>(field.values[1]);
+      field.values[0] = c * x - s * y;
+      field.values[1] = s * x + c * y;
+    }
+  }
+  return f;
+}
+inline ModelFixture CylinderSector() {
+  auto f = Polyhedron(
+      {{1, 0, 0}, {0, 1, 0}, {0, 0, 0}, {1, 0, 2}, {0, 1, 2}, {0, 0, 2}},
+      {{0, 2, 1}, {3, 4, 5}, {0, 3, 5, 2}, {1, 2, 5, 4}, {0, 1, 4, 3}}, true);
+  struct Arc {
+    uint32_t curve;
+    double height;
+  };
+  std::vector<Arc> arcs;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    if ((a == 200 && b == 201) || (a == 203 && b == 204))
+      arcs.push_back(
+          {PointerValue(f, node.index, "curve"), a == 200 ? 0. : 2.});
+  }
+  for (const auto& arc : arcs) CircleBasis(f, arc.curve, {0, 0, arc.height});
+  RemoveNode(f, 704);
+  f.Add(51, 704,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
 inline ModelFixture QuarterDisk() {
   auto f = Polyhedron({{1, 0, 0}, {0, 1, 0}, {0, 0, 0}}, {{0, 1, 2}});
   CircleBasis(f, 4000, {0, 0, 0});

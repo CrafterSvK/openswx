@@ -19,6 +19,14 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 CASES = {
+    "cylinder-patch": (4, 4, 1, 0, "area", math.pi),
+    "cylinder-half-patch": (4, 4, 1, 0, "area", 2*math.pi),
+    "cylinder-major-patch": (4, 4, 1, 0, "area", 3*math.pi),
+    "cylinder-inward-patch": (4, 4, 1, 0, "area", math.pi),
+    "cylinder-patch-seam": (4, 4, 1, 0, "area", math.pi),
+    "oblique-cylinder-patch": (4, 4, 1, 0, "area", math.pi),
+    "cylinder-sector": (6, 9, 5, 1, "volume", math.pi/2),
+    "oblique-cylinder-sector": (6, 9, 5, 1, "volume", math.pi/2),
     "partitioned-sphere": (3, 5, 2, 1, "volume", 500 * math.pi / 3),
     "partitioned-sphere-seams": (3, 5, 2, 1, "volume", 500 * math.pi / 3),
     "spherical-cap-north": (2, 3, 2, 1, "volume", 52 * math.pi / 3),

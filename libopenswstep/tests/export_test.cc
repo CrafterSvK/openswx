@@ -4,14 +4,17 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <fstream>
 #include <limits>
 #include <numbers>
 #include <regex>
 #include <set>
+#include <utility>
 
 #include "../../libopenswx/tests/test_helpers.h"
+#include "../src/cylinder_patch.h"
 #include "fixtures.h"
 
 namespace openswstep {
@@ -793,6 +796,127 @@ TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
     const auto sheet = Export(f);
     ASSERT_TRUE(sheet.ok()) << sheet.error().message;
   }
+}
+TEST(OpenSwStep, ExportsExactCylinderPatchesAndClosedSectors) {
+  for (const auto& fixture :
+       {test::CylinderPatchFixture(),
+        test::CylinderPatchFixture(std::numbers::pi),
+        test::CylinderPatchFixture(1.5 * std::numbers::pi),
+        test::CylinderPatchFixture(std::numbers::pi / 2, true),
+        test::PhaseShiftedCylinderPatch(),
+        test::RotateAndTranslate(test::CylinderPatchFixture())}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    EXPECT_EQ(result.value().statistics.edges, 4);
+    EXPECT_EQ(result.value().statistics.vertices, 4);
+    CheckReferences(result.value());
+  }
+  for (const auto& fixture :
+       {test::CylinderSector(),
+        test::RotateAndTranslate(test::CylinderSector())}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    EXPECT_EQ(result.value().statistics.faces, 5);
+    EXPECT_EQ(result.value().statistics.edges, 9);
+  }
+}
+TEST(OpenSwStep, ChecksCylinderPatchProfileGeneratorsAndSharedBudget) {
+  auto options = Options();
+  options.max_polygon_checks = 5;
+  ASSERT_TRUE(Export(test::CylinderPatchFixture(), options).ok());
+  options.max_polygon_checks = 4;
+  const auto limited = Export(test::CylinderPatchFixture(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto twisted =
+      Export(test::CylinderPatchFixture(std::numbers::pi / 2, false, 1e-4));
+  ASSERT_FALSE(twisted.ok());
+  EXPECT_NE(twisted.error().message.find("axial generator"), std::string::npos);
+  auto tilted = test::CylinderPatchFixture(std::numbers::pi);
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4000)
+      node.fields[1].values = {0., std::sin(1e-6), std::cos(1e-6)};
+  const auto outside = Export(tilted);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_NE(outside.error().message.find("coaxial profile"), std::string::npos);
+}
+TEST(OpenSwStep, PreservesCylinderPatchAxisLoopOrderAndVolumeSense) {
+  auto reverse = test::CylinderPatchFixture();
+  for (auto& node : reverse.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  ASSERT_TRUE(Export(reverse).ok());
+  auto reordered = test::CylinderPatchFixture();
+  test::Set(reordered, 600, "halfedge", 1004);
+  ASSERT_TRUE(Export(reordered).ok());
+  auto inverted = test::CylinderSector();
+  for (uint32_t i = 0; i < 5; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto result = Export(inverted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("signed volume"), std::string::npos);
+}
+TEST(OpenSwStep, IntegratesPartialCylinderFluxWithTransverseTranslations) {
+  CylinderGeometry cylinder{{0, 0, 0}, {0, 0, 1}, 1, {1, 0, 0}};
+  internal::CylinderPatch patch{
+      2, std::numbers::pi / 2, {1, 0, 0}, {0, 1, 0}, {1, 0, 0}};
+  EXPECT_NEAR(internal::CylinderPatchVolume6(cylinder, patch, {}),
+              2 * std::numbers::pi, 1e-12);
+  EXPECT_NEAR(internal::CylinderPatchVolume6(cylinder, patch, {1, 0, 0}),
+              2 * std::numbers::pi - 4, 1e-12);
+  EXPECT_NEAR(internal::CylinderPatchVolume6(cylinder, patch, {0, 1, 100}),
+              2 * std::numbers::pi - 4, 1e-12);
+  cylinder.origin = {1e6, -2e6, 3e6};
+  EXPECT_NEAR(
+      internal::CylinderPatchVolume6(cylinder, patch, {1e6 + 1, -2e6, 3e6}),
+      2 * std::numbers::pi - 4, 1e-12);
+  cylinder.axis = {0, 0, -1};
+  std::swap(patch.first_direction, patch.last_direction);
+  EXPECT_NEAR(
+      internal::CylinderPatchVolume6(cylinder, patch, {1e6 + 1, -2e6, 3e6}),
+      2 * std::numbers::pi - 4, 1e-12);
+}
+TEST(OpenSwStep, RejectsUnimplementedOrMismatchedCylinderPatchArcs) {
+  // Reject foreign bases before invoking evaluators that require a solver.
+  const GeometryPayload intersection = IntersectionCurveGeometry{};
+  std::array<internal::PlanarCurve, 4> curves;
+  curves.fill({&intersection, 0, 1});
+  uint64_t remaining = 5;
+  const auto foreign = internal::ValidateCylinderPatch(
+      curves, {{0, 0, 0}, {0, 0, 1}, 1, {1, 0, 0}}, true, 1e-7, remaining);
+  ASSERT_FALSE(foreign.ok());
+  EXPECT_EQ(foreign.error().code, ErrorCode::kUnsupportedFormat);
+  auto ellipse = test::CylinderPatchFixture();
+  test::RemoveNode(ellipse, 4000);
+  ellipse.Add(
+      32, 4000,
+      {test::Numbers("center", {0, 0, 0}, FieldType::kVector),
+       test::Numbers("normal", {0, 0, 1}, FieldType::kVector),
+       test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+       test::Numbers("major_radius", {1}), test::Numbers("minor_radius", {1}),
+       test::ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto unsupported = Export(ellipse);
+  ASSERT_FALSE(unsupported.ok());
+  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+  auto wrong = test::CylinderPatchFixture();
+  test::Set(wrong, 4002, "sense", '+');
+  const auto result = Export(wrong);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("winding"), std::string::npos);
+}
+TEST(OpenSwStep, ParsesCylinderPatchesThroughBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::CylinderSector());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
 }
 TEST(OpenSwStep, ExportsSphericalCapsAndHemispheresWithoutInventingSourceCuts) {
   for (const double level : {-3., 0., 3.})

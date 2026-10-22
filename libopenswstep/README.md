@@ -20,6 +20,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
+| Partial CYLINDER patches with two circular arcs and two axial generators | Exact `CYLINDRICAL_SURFACE` with one four-edge outer bound, including major arcs and parameter-seam crossings |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
@@ -120,6 +121,21 @@ may introduce periodic seam edges on cylindrical faces and split circular
 boundaries when their seams have different phases. The exported edge statistics
 count source boundary edges rather than the additional importer edges.
 
+Partial cylinder patches support one four-edge loop alternating between two
+`CIRCLE` arcs and two axial `LINE` generators, with four distinct source vertices.
+Both complete supporting circles must be coaxial at the cylinder radius, at
+levels separated by more than two source tolerances. Opposite arc windings must
+agree with the effective face normal and select equal azimuth spans strictly
+shorter than one turn; the two generators must remain more than two tolerances
+apart. Whole-circle displacement/tilt and straight-generator drift are bounded
+analytically. The source loop becomes one `FACE_OUTER_BOUND` with its four exact
+curves. Major arcs, reversed axes, inward sheets and parameter-seam crossings are
+supported. Closed supported mixtures include quarter-cylinder sector solids.
+Partial-cylinder flux retains transverse translation terms; these cancel only
+for complete azimuth bands. Five shared checks cover each patch's four edges
+and cut-pair comparison. Other cylinder trimming contours, holes in a patch and
+elliptic cuts remain unsupported.
+
 Complete conical bands use the same coaxial cut, winding and budget checks as
 cylinders, with the linear profile `r(z) = r_ref + z * sin(a) / cos(a)` used by
 libopenparasolid. Both cut radii must exceed the source tolerance; linearity
@@ -176,7 +192,7 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, nonconvex curved face boundaries, holes in multi-edge curved contours,
-elliptical holes, spherical pole cuts/unbounded sphere faces, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
+elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder trims and partial conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -240,7 +256,7 @@ same budget. Mixed polygon/circle boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
 conical/spherical/toroidal cut pair consumes one check, as does each spherical
-cap selection. Parser, model and body-binding
+cap selection. Each partial cylinder patch consumes five checks. Parser, model and body-binding
 budgets remain independently configurable in `ExportOptions`. The file adapter
 checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -272,7 +288,7 @@ GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
-bands, conical frustums, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
+bands/patches, closed cylinder sectors, conical frustums, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
 contours, invalid topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -297,11 +313,12 @@ The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 46 export successfully, including sixteen face-bearing bodies
 with 133 faces; 30 successes contain only wire/point geometry. All 46 generated
 documents pass OCCT import and B-rep validity checks. The other 11 return
-unsupported-format errors. Spherical-cap support preserves all 46 previous
-successes; the current private selections contain no newly enabled complete cap
-body. Synthetic cases independently check small/large cap and hemisphere areas
-and volumes, both pole choices, reversed axes, inward sheets, named seams and
-translated frames, alongside the existing spherical-band and tube checks.
+unsupported-format errors. Partial-cylinder support preserves all 46 previous
+successes. One private body now advances past its cylinder patches and stops at
+an unsupported nonconvex planar arc contour; no additional complete private body
+is enabled by this subset alone. Synthetic cases independently check patch
+areas, sector volumes, major arcs, reversed orientations and parameter-seam
+crossings. Analytic flux tests also check transverse translation terms.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.

@@ -16,6 +16,18 @@ int main(int argc, char** argv) {
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
           {"tetra", test::Tetrahedron()},
+          {"cylinder-patch", test::CylinderPatchFixture()},
+          {"cylinder-half-patch", test::CylinderPatchFixture(std::acos(-1.))},
+          {"cylinder-major-patch",
+           test::CylinderPatchFixture(1.5 * std::acos(-1.))},
+          {"cylinder-inward-patch",
+           test::CylinderPatchFixture(std::acos(-1.) / 2, true)},
+          {"cylinder-patch-seam", test::PhaseShiftedCylinderPatch()},
+          {"oblique-cylinder-patch",
+           test::RotateAndTranslate(test::CylinderPatchFixture())},
+          {"cylinder-sector", test::CylinderSector()},
+          {"oblique-cylinder-sector",
+           test::RotateAndTranslate(test::CylinderSector())},
           {"partitioned-sphere", test::PartitionedSphere()},
           {"partitioned-sphere-seams", test::PartitionedSphere(3, true)},
           {"spherical-cap-north", test::SphericalCap()},

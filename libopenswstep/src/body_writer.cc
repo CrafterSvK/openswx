@@ -12,6 +12,7 @@
 
 #include "conic_boundary.h"
 #include "convex_boundary.h"
+#include "cylinder_patch.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
 #include "step_writer.h"
@@ -39,6 +40,7 @@ struct FaceData {
   std::optional<CircularBand> cone_band;
   std::optional<TorusBand> torus_band;
   std::optional<SphereBand> sphere_band;
+  std::optional<CylinderPatch> cylinder_patch;
 };
 struct EdgeUse {
   std::size_t face;
@@ -71,6 +73,7 @@ class BodyWriter {
   Result<bool> PrepareFaces();
   Result<bool> PrepareConicFace(FaceData& face);
   Result<bool> PrepareConvexFace(FaceData& face);
+  Result<bool> PrepareCylinderPatchFace(FaceData& face);
   Result<ConicBoundary> ReadConicLoop(NodeId face, const FaceTrimLoop& loop);
   Result<std::vector<ConicBoundary>> ConicLoops(const FaceData& face);
   Result<bool> CheckVertexLinks();
@@ -365,6 +368,41 @@ Result<bool> BodyWriter::PrepareConvexFace(FaceData& face) {
   face.outer_loop = 0;
   return Result<bool>::Ok(true);
 }
+Result<bool> BodyWriter::PrepareCylinderPatchFace(FaceData& face) {
+  if (face.source->loops.size() != 1 ||
+      face.source->loops.front().isolated_vertex)
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kUnsupportedFormat,
+              "Cylinder patches require one non-isolated loop"));
+  std::set<uint32_t> vertices;
+  std::vector<PlanarCurve> curves;
+  for (const auto& fin : face.source->loops.front().fins) {
+    if (fin.use.fin_curve.value)
+      return Result<bool>::Err(
+          Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
+                "Tolerant fin curves need an explicit STEP pcurve mapping"));
+    if (!fin.use.start_vertex.value || !fin.use.end_vertex.value ||
+        !vertices.insert(fin.use.start_vertex.value).second)
+      return Result<bool>::Err(
+          Error(face.source->face, ErrorCode::kUnsupportedFormat,
+                "Cylinder patch corners require distinct non-null vertices"));
+    const auto basis = Basis(fin.curve);
+    if (!basis.ok()) return Result<bool>::Err(basis.error());
+    curves.push_back({&basis.value()->payload, fin.start, fin.end});
+    uses_[fin.use.edge.value].push_back(
+        {faces_.size(), fin.use.sense == TopologySense::kForward});
+  }
+  const auto patch =
+      ValidateCylinderPatch(curves, *face.cylinder, face.natural_sense,
+                            options_.tolerance, polygon_checks_remaining_);
+  if (!patch.ok())
+    return Result<bool>::Err(Error(face.source->face, patch.error().code,
+                                   patch.error().message.c_str()));
+  face.cylinder_patch = patch.value();
+  face.reference_point = patch.value().reference_point;
+  face.outer_loop = 0;
+  return Result<bool>::Ok(true);
+}
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
     if (source.loops.empty())
@@ -381,8 +419,8 @@ Result<bool> BodyWriter::PrepareFaces() {
     if (!plane && !cylinder && !cone && !torus && !sphere)
       return Result<bool>::Err(
           Error(source.face, ErrorCode::kUnsupportedFormat,
-                "Face export currently supports PLANE and "
-                "full-band CYLINDER/CONE/SPHERE and ring TORUS surfaces"));
+                "Face export requires PLANE/CYLINDER/CONE/SPHERE "
+                "or ring TORUS surfaces"));
     if (!source.face_sense ||
         (*source.face_sense != '+' && *source.face_sense != '-') ||
         !surface.value()->sense ||
@@ -400,6 +438,12 @@ Result<bool> BodyWriter::PrepareFaces() {
     const bool all_conic =
         std::all_of(source.loops.begin(), source.loops.end(),
                     [](const auto& loop) { return loop.fins.size() == 1; });
+    if (cylinder && !all_conic) {
+      const auto patch = PrepareCylinderPatchFace(face);
+      if (!patch.ok()) return patch;
+      faces_.push_back(std::move(face));
+      continue;
+    }
     if (cylinder || cone || torus || sphere || all_conic) {
       const auto conic = PrepareConicFace(face);
       if (!conic.ok()) return conic;
@@ -663,6 +707,9 @@ Result<bool> BodyWriter::CheckSolid() {
         volume6 += sign * 2 * std::numbers::pi_v<long double> * band.height *
                    (band.lower_radius + band.upper_radius) *
                    std::fma(-slope, distance, band.lower_radius);
+      } else if (face.cylinder_patch) {
+        volume6 += sign * CylinderPatchVolume6(*face.cylinder,
+                                               *face.cylinder_patch, origin);
       } else if (face.cylinder) {
         // Divergence theorem: the complete radial integral of a cylindrical
         // band is 2*pi*r^2*h; translation terms cancel around the full turn.
