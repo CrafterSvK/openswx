@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include "../tools/body_report.h"
+#include "../tools/boundary_geometry_report.h"
 #include "../tools/model_report.h"
 #include "../tools/topology_report.h"
 #include "model_test_helpers.h"
@@ -208,6 +209,104 @@ TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
   EXPECT_FALSE(summary.contains("edges"));
   EXPECT_FALSE(summary.contains("vertices"));
 }
+TEST(ParasolidBoundaryReport, RetainsDirectedIntervalsLocationsAndBudgets) {
+  test::ModelFixture fixture;
+  fixture.Add(30, 400,
+              {test::Numbers("origin", {0, 0, 0}, FieldType::kVector),
+               test::Numbers("direction", {1, 0, 0}, FieldType::kVector),
+               test::ByteValue("sense", '+', FieldType::kCharacter)});
+  fixture.Add(50, 300,
+              {test::Numbers("origin", {0, 0, 0}, FieldType::kVector),
+               test::Numbers("normal", {0, 0, 1}, FieldType::kVector),
+               test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+               test::ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const FinUse use{NodeId{10},
+                   NodeId{2},
+                   NodeId{101},
+                   NodeId{100},
+                   NodeId{400},
+                   NodeId{},
+                   TopologySense::kReverse};
+  BodyGeometryBinding body;
+  body.topology.boundary.body = NodeId{1};
+  RegionBoundary region;
+  region.region = NodeId{2};
+  ShellBoundary shell;
+  shell.shell = NodeId{3};
+  FaceBoundary face;
+  face.face = NodeId{30};
+  LoopBoundary loop;
+  loop.fins = {use};
+  face.loops = {loop};
+  shell.faces = {face};
+  region.shells = {shell};
+  body.topology.boundary.regions = {region};
+  FaceTrimming geometry;
+  geometry.face = NodeId{30};
+  geometry.surface = NodeId{300};
+  FaceTrimLoop trim;
+  trim.fins.push_back({use, NodeId{30}, NodeId{300}, NodeId{400}, 1, 0});
+  geometry.loops = {trim};
+  body.faces = {geometry};
+  const auto full = cli::BoundaryGeometryReport(model.value(), body, 0, false);
+  ASSERT_TRUE(full.ok()) << full.error().message;
+  EXPECT_EQ(full.value()["counts"],
+            (json{{"paths", 1}, {"cycles", 0}, {"chains", 1}, {"edges", 1}}));
+  const auto path = full.value()["paths"][0];
+  EXPECT_EQ(path["region"], 2);
+  EXPECT_EQ(path["shell"], 3);
+  EXPECT_EQ(path["component"], 0);
+  EXPECT_EQ(path["group"], 0);
+  const auto edge = path["edges"][0];
+  EXPECT_EQ(edge["fin"], 10);
+  EXPECT_EQ(edge["face"], 30);
+  EXPECT_EQ(edge["surface"], 300);
+  EXPECT_EQ(edge["curve"], 400);
+  EXPECT_EQ(edge["start"], 0);
+  EXPECT_EQ(edge["end"], 1);
+  EXPECT_EQ(edge["sense"], "forward");
+  EXPECT_EQ(edge["source_sense"], "reverse");
+  EXPECT_EQ(edge["reversed"], true);
+  EXPECT_TRUE(edge["intersection"].is_null());
+  const auto summary =
+      cli::BoundaryGeometryReport(model.value(), body, 0, true);
+  ASSERT_TRUE(summary.ok());
+  EXPECT_EQ(summary.value()["counts"], full.value()["counts"]);
+  EXPECT_FALSE(summary.value().contains("paths"));
+  auto repeated = region;
+  repeated.region = NodeId{4};
+  repeated.shells[0].shell = NodeId{5};
+  body.topology.boundary.regions.push_back(repeated);
+  const auto limited = cli::BoundaryGeometryReport(model.value(), body, 0,
+                                                   false, {1, 1, 1, 1, 2});
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto invalid = cli::BoundaryGeometryReport(model.value(), body, 0,
+                                                   false, {1, 1, 1, 0, 2});
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ErrorCode::kInvalidOptions);
+  const auto multi = cli::BoundaryGeometryReport(model.value(), body, 0, false);
+  ASSERT_TRUE(multi.ok());
+  EXPECT_EQ(multi.value()["paths"][1]["region"], 4);
+  EXPECT_EQ(multi.value()["paths"][1]["shell"], 5);
+  auto& fins =
+      body.topology.boundary.regions[0].shells[0].faces[0].loops[0].fins;
+  fins[0].start_vertex = NodeId{100};
+  fins[0].end_vertex = NodeId{101};
+  auto extra = fins[0];
+  extra.edge = NodeId{4};
+  extra.end_vertex = NodeId{102};
+  fins.push_back(extra);
+  extra.edge = NodeId{5};
+  extra.end_vertex = NodeId{103};
+  fins.push_back(extra);
+  const auto branched =
+      cli::BoundaryGeometryReport(model.value(), body, 0, false);
+  ASSERT_FALSE(branched.ok());
+  EXPECT_EQ(branched.error().code, ErrorCode::kUnsupportedFormat);
+}
 std::string Quote(const fs::path& path) {
   std::string result = "'";
   for (char c : path.string())
@@ -259,6 +358,9 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run("--body-topology=1 --summary"), 2);
   EXPECT_TRUE(Report()["body_topology"].is_null());
   EXPECT_EQ(Report()["body_topology_error"]["body"], 1);
+  ASSERT_EQ(Run("--body-geometry=1 --binding-tolerance=0 --boundary-geometry"), 2);
+  EXPECT_TRUE(Report()["boundary_geometry"].is_null());
+  EXPECT_EQ(Report()["boundary_geometry_error"]["body"], 1);
   EXPECT_EQ(Run("--body-geometry 1"), 1);
   EXPECT_EQ(Run("--body-geometry 0 --binding-tolerance 0"), 1);
 }
@@ -303,6 +405,14 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run(arguments + " --body-geometry=99"), 2);
   EXPECT_TRUE(Report()["body_geometry"].is_null());
   EXPECT_EQ(Report()["body_geometry_error"]["body"], 99);
+  ASSERT_EQ(Run(arguments + " --body-geometry=1 --boundary-geometry --summary"), 0);
+  EXPECT_TRUE(Report()["body_geometry"].is_object());
+  EXPECT_EQ(Report()["boundary_geometry"]["counts"]["paths"], 0);
+  EXPECT_FALSE(Report()["boundary_geometry"].contains("paths"));
+  ASSERT_EQ(Run(arguments + " --body-geometry=99 --boundary-geometry"), 2);
+  EXPECT_TRUE(Report()["boundary_geometry"].is_null());
+  EXPECT_EQ(Report()["boundary_geometry_error"]["body"], 99);
+
   // Valid syntax does not bypass body membership checks. Requests remain
   // inspectable when binding fails, with summary output retaining counts only.
   const auto overrides =

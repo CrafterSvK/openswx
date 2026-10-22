@@ -198,5 +198,26 @@ TEST(ParasolidInspectOptions, TopologyEnablesModelWithoutBindingTolerance) {
   EXPECT_EQ(both.value().body_topology, 1);
   EXPECT_EQ(both.value().body_geometry, 2);
 }
+TEST(ParasolidInspectOptions, BoundaryGeometryRequiresBodyAndHonorsOverrides) {
+  const auto result = Parse({"--body-geometry=1", "--binding-tolerance=0",
+                             "--boundary-geometry", "part.x_b"});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_TRUE(result.value().boundary_geometry);
+  EXPECT_TRUE(result.value().geometry);
+  EXPECT_TRUE(result.value().nodes);
+  EXPECT_FALSE(Parse({"--boundary-geometry", "part.x_b"}).ok());
+  EXPECT_FALSE(
+      Parse({"--boundary-geometry", "--body-topology=1", "part.x_b"}).ok());
+  EXPECT_FALSE(Parse({"--boundary-geometry=yes", "--body-geometry=1",
+                      "--binding-tolerance=0", "part.x_b"})
+                   .ok());
+  const auto cleared = Parse({"--boundary-geometry=false", "part.x_b"},
+                             {{"OPENPARASOLID_BOUNDARY_GEOMETRY", "invalid"}});
+  ASSERT_TRUE(cleared.ok());
+  EXPECT_FALSE(cleared.value().boundary_geometry);
+  EXPECT_TRUE(Parse({"--body-geometry=1", "--binding-tolerance=0", "part.x_b"},
+                    {{"OPENPARASOLID_BOUNDARY_GEOMETRY", "true"}})
+                  .ok());
+}
 }  // namespace
 }  // namespace openparasolid::cli

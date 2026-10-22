@@ -92,6 +92,7 @@ struct InspectSettings {
   bool summary = false;
   bool nodes = false;
   bool geometry = false;
+  bool boundary_geometry = false;
   InspectAction action = InspectAction::kRun;
 };
 using EnvironmentLookup =
@@ -107,6 +108,7 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"summary", "0"},
       {"nodes", "0"},
       {"geometry", "0"},
+      {"boundary-geometry", "0"},
       {"body-geometry", ""},
       {"body-topology", ""},
       {"fin-intervals", ""},
@@ -123,6 +125,7 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"summary", "OPENPARASOLID_SUMMARY"},
       {"nodes", "OPENPARASOLID_NODES"},
       {"geometry", "OPENPARASOLID_GEOMETRY"},
+      {"boundary-geometry", "OPENPARASOLID_BOUNDARY_GEOMETRY"},
       {"body-geometry", "OPENPARASOLID_BODY_GEOMETRY"},
       {"body-topology", "OPENPARASOLID_BODY_TOPOLOGY"},
       {"fin-intervals", "OPENPARASOLID_FIN_INTERVALS"},
@@ -170,8 +173,8 @@ inline Result<InspectSettings> ParseInspectSettings(
         arg.substr(2, equal == std::string_view::npos ? equal : equal - 2));
     if (!raw.contains(name))
       return invalid("Unknown option: " + std::string(arg));
-    const bool boolean =
-        name == "summary" || name == "nodes" || name == "geometry";
+    const bool boolean = name == "summary" || name == "nodes" ||
+                         name == "geometry" || name == "boundary-geometry";
     if (equal != std::string_view::npos)
       raw[name] = arg.substr(equal + 1);
     else if (boolean)
@@ -185,9 +188,11 @@ inline Result<InspectSettings> ParseInspectSettings(
         name == "max-delta-entries")
       schema_limits = true;
   }
-  for (const auto& [name, target] : {std::pair{"summary", &settings.summary},
-                                     {"nodes", &settings.nodes},
-                                     {"geometry", &settings.geometry}}) {
+  for (const auto& [name, target] :
+       {std::pair{"summary", &settings.summary},
+        {"nodes", &settings.nodes},
+        {"geometry", &settings.geometry},
+        {"boundary-geometry", &settings.boundary_geometry}}) {
     const auto& text = raw[name];
     if (text != "0" && text != "1" && text != "false" && text != "true")
       return invalid("Invalid boolean setting: " + std::string(name));
@@ -234,6 +239,8 @@ inline Result<InspectSettings> ParseInspectSettings(
              !raw["intersection-solve-tolerance"].empty()) {
     return invalid("Binding settings require --body-geometry");
   }
+  if (settings.boundary_geometry && !settings.body_geometry)
+    return invalid("Boundary geometry requires --body-geometry");
   auto number = [&](const char* name, bool positive) -> Result<double> {
     double value = 0;
     const auto& text = raw[name];

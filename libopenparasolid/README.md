@@ -2312,6 +2312,66 @@ source-fin evaluations with the required direction changes. No dependencies
 or tessellation are introduced. Private inputs, tools and reports remain
 outside the repository.
 
+## Inspecting bound boundary geometry
+
+```bash
+parasolid_inspect --body-geometry 1 --binding-tolerance 1e-7 \
+  --boundary-geometry part.x_b
+parasolid_inspect --body-geometry 1 --binding-tolerance 1e-7 \
+  --boundary-geometry --summary part.x_b
+```
+
+`--boundary-geometry` (environment: `OPENPARASOLID_BOUNDARY_GEOMETRY`) enables
+the path-geometry bridge for the selected `--body-geometry` body. It requires
+that selection and its explicit binding tolerance. Existing interval overrides
+and optional paired intersection settings apply through the source body
+binding. The flag defaults to false; CLI values override the environment, and
+`--boundary-geometry=false` disables an inherited request. Boolean syntax is
+the same as for other flags. Missing body selection or invalid booleans are
+option errors (exit 1).
+
+The inspector analyzes each bound shell's incidence, collects unbranched
+boundary groups, and submits them together to `BindBoundaryPathsGeometry`.
+It adds `boundary_geometry` with selected body ID, binding tolerance,
+`validation_scope: "sampled_source_boundary_geometry"`, path/cycle/chain/edge
+counts and the default batch budgets. Summaries retain these fields and omit
+path arrays. A body with no boundary groups returns zero counts.
+
+Full output retains path order and source `region`/`shell` IDs. `component`
+and `group` are zero-based indices into the shell's canonical component and
+boundary-group arrays. Each edge records `edge`, `fin`, `face`, `surface`,
+`curve`, directed start/end vertex IDs, natural edge `sense`, `source_sense`,
+a `reversed` flag, directed curve-parameter `start`/`end`, and the owned optional
+intersection profile. Parameters retain their original curve units, rather
+than normalized path fractions. Directed intervals swap the source-fin bounds
+when required. The source model/body reports provide the referenced curve and
+surface definitions and original face-fin intervals.
+
+Path counts include repeated shell/region occurrences. Collection checks the
+aggregate path/step budgets before retaining group copies, then the batch API
+indexes the source faces once. Default limits are 10,000 faces/loops/paths and
+100,000 source fins/path steps, reported in JSON. No additional curve branch,
+tolerance or placement transform is inferred. Counts and sampled membership
+checks do not certify whole-curve coincidence, hole orientation or a valid
+solid.
+
+A body/model failure produces null `boundary_geometry` with its contextual
+`boundary_geometry_error`. A subsequent analysis/path-binding failure also
+returns 2 and records body ID, error code, offset and message, while retaining
+a successful `body_geometry` result. Branched boundary groups report an
+unsupported-format error; no partial path report is emitted. Existing unrelated
+model findings retain their global exit status even when both bindings succeed.
+`--body-topology` remains independently selectable; boundary geometry always
+uses the body selected by `--body-geometry`.
+
+Tests cover option dependencies and precedence, directed serialization, source
+locations, summaries, repeated occurrences, budgets, branched groups, empty
+bodies and upstream failures. Full and summary CLI reports for all 57 private
+body queries retain 56 automatic body bindings plus the remaining binding with
+eight explicit fin intervals. All nine boundary paths and 30 directed edge
+records match the source topology, intervals and solver profiles. Private
+inputs, scripts and generated reports remain outside the repository.
+
 ## Inspecting validated body topology
 
 ```bash

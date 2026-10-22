@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "body_report.h"
+#include "boundary_geometry_report.h"
 #include "inspect_options.h"
 #include "model_report.h"
 #include "openparasolid/parser.h"
@@ -130,6 +131,7 @@ void Usage(std::ostream &output) {
          "[--nodes] [--geometry] [--schema-catalog FILE.json] [--max-fields N] "
          "[--max-values N] [--max-delta-entries N] "
          "[--body-topology ID] [--body-geometry ID --binding-tolerance X] "
+         "[--boundary-geometry] "
          "[--fin-intervals ID:START:END,...] [--wire-intervals ID:START:END,...] "
          "[--intersection-chart-tolerance X --intersection-solve-tolerance X] "
          "<file.x_b|file.bin>\n"
@@ -226,6 +228,10 @@ int main(int argc, char *argv[]) {
             report["body_geometry"] = nullptr;
             report["body_geometry_error"] = report["model_error"];
             report["body_geometry_error"]["body"] = *settings.body_geometry;
+            if (settings.boundary_geometry) {
+              report["boundary_geometry"] = nullptr;
+              report["boundary_geometry_error"] = report["body_geometry_error"];
+            }
           }
         } else {
           report["model"] = openparasolid::cli::ModelReport(
@@ -292,10 +298,31 @@ int main(int argc, char *argv[]) {
                   {"offset", bound.error().offset},
                   {"message", bound.error().message}};
               status = 2;
+              if (settings.boundary_geometry) {
+                report["boundary_geometry"] = nullptr;
+                report["boundary_geometry_error"] =
+                    report["body_geometry_error"];
+              }
             } else {
               report["body_geometry"] = openparasolid::cli::BodyGeometryReport(
                   bound.value(), *settings.binding_tolerance, binding_options,
                   summary);
+              if (settings.boundary_geometry) {
+                const auto paths = openparasolid::cli::BoundaryGeometryReport(
+                    model.value(), bound.value(), *settings.binding_tolerance,
+                    summary);
+                if (paths.ok()) {
+                  report["boundary_geometry"] = paths.value();
+                } else {
+                  report["boundary_geometry"] = nullptr;
+                  report["boundary_geometry_error"] = {
+                      {"body", *settings.body_geometry},
+                      {"code", openparasolid::ToString(paths.error().code)},
+                      {"offset", paths.error().offset},
+                      {"message", paths.error().message}};
+                  status = 2;
+                }
+              }
             }
           }
         }
