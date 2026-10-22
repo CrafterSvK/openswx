@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <vector>
 
@@ -73,7 +74,7 @@ long double EllipseTurning(double start, double end, long double major,
 }
 Result<Segment> ReadSegment(const PlanarCurve& curve,
                             const PlaneGeometry& plane, const Frame& frame,
-                            double tolerance) {
+                            double tolerance, bool convex = true) {
   using Return = Result<Segment>;
   if (!curve.geometry || !std::isfinite(curve.start) ||
       !std::isfinite(curve.end) || curve.start == curve.end)
@@ -134,7 +135,7 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
         std::abs(determinant) < 1 - kConicPlaneAlignmentTolerance)
       return Return::Err(Invalid("Supporting conic plane is misaligned"));
     result.curvature = determinant > 0 ? span : -span;
-    if (result.curvature <= 0)
+    if (convex && result.curvature <= 0)
       return Return::Err(Unsupported(
           "Curved planar export requires a convex source-oriented boundary"));
     if (ellipse)
@@ -277,6 +278,153 @@ Result<ConvexBoundary> ValidateConvexPlanarLoop(
     return Return::Err(
         Invalid("Curved planar loop does not make one convex revolution"));
   return Return::Ok({area2 / 2, first.value().position});
+}
+Result<ConvexBoundary> ValidateMinorArcPlanarLoop(
+    std::span<const PlanarCurve> curves, const PlaneGeometry& plane,
+    bool natural_sense, double tolerance, uint64_t& remaining_checks) {
+  using Return = Result<ConvexBoundary>;
+  if (!std::isfinite(tolerance) || tolerance <= 0)
+    return Return::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Minor-arc boundary tolerance must be positive and finite"});
+  if (curves.size() < 3)
+    return Return::Err(
+        Unsupported("Minor-arc boundary requires at least three edges"));
+  for (const auto& curve : curves)
+    if (!curve.geometry ||
+        (!std::holds_alternative<LineGeometry>(*curve.geometry) &&
+         !std::holds_alternative<CircleGeometry>(*curve.geometry)))
+      return Return::Err(
+          Unsupported("Minor-arc boundary requires LINE/CIRCLE bases"));
+  const auto first =
+      EvaluateCurve(*curves.front().geometry, curves.front().start);
+  if (!first.ok()) return Return::Err(first.error());
+  const auto& n = plane.normal;
+  const auto& x = plane.x_axis;
+  const double sign = natural_sense ? 1 : -1;
+  const Frame frame{
+      first.value().position,
+      x,
+      {sign * (n.y * x.z - n.z * x.y), sign * (n.z * x.x - n.x * x.z),
+       sign * (n.x * x.y - n.y * x.x)}};
+  std::vector<Vector3> vertices, last;
+  std::vector<Point2> points;
+  std::vector<long double> sagitta, departure;
+  long double area2 = 0, perimeter = 0;
+  for (const auto& curve : curves) {
+    const auto segment = ReadSegment(curve, plane, frame, tolerance, false);
+    if (!segment.ok()) return Return::Err(segment.error());
+    const auto a = EvaluateCurve(*curve.geometry, curve.start);
+    const auto b = EvaluateCurve(*curve.geometry, curve.end);
+    if (!a.ok()) return Return::Err(a.error());
+    if (!b.ok()) return Return::Err(b.error());
+    vertices.push_back(a.value().position);
+    last.push_back(b.value().position);
+    points.push_back(frame.Point(a.value().position));
+    long double bulge = 0, angle = 0;
+    if (const auto* circle = std::get_if<CircleGeometry>(curve.geometry)) {
+      const auto span =
+          std::abs(static_cast<long double>(curve.end) - curve.start);
+      if (span > std::numbers::pi)
+        return Return::Err(
+            Unsupported("Minor-arc certificate excludes major arcs"));
+      // A factor two over the circular endpoint-cone half-angle also covers
+      // the tiny distortion of accepted source/face frames under projection.
+      angle = span;
+      const auto sine = std::sin(span / 4);
+      bulge = 2 * static_cast<long double>(circle->radius) * sine * sine;
+    }
+    const auto gap = std::hypot(
+        static_cast<long double>(b.value().position.x) - a.value().position.x,
+        static_cast<long double>(b.value().position.y) - a.value().position.y,
+        static_cast<long double>(b.value().position.z) - a.value().position.z);
+    if (!std::isfinite(bulge) || !std::isfinite(gap) || gap <= tolerance)
+      return Return::Err(Invalid("Minor-arc chord is degenerate"));
+    sagitta.push_back(bulge);
+    departure.push_back(angle);
+    area2 += segment.value().area2;
+    perimeter += segment.value().length;
+  }
+  const std::vector<std::vector<Vector3>> polygon{vertices};
+  const auto simple = ValidatePlanarLoops(polygon, plane, natural_sense,
+                                          tolerance, remaining_checks);
+  if (!simple.ok()) return Return::Err(simple.error());
+  std::vector<long double> lengths, closures;
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    const auto j = (i + 1) % points.size();
+    lengths.push_back(
+        std::hypot(points[j].x - points[i].x, points[j].y - points[i].y));
+    const auto endpoint_gap =
+        std::hypot(static_cast<long double>(last[i].x) - vertices[j].x,
+                   static_cast<long double>(last[i].y) - vertices[j].y,
+                   static_cast<long double>(last[i].z) - vertices[j].z);
+    const auto coordinate_scale =
+        std::max({std::abs(static_cast<long double>(last[i].x)),
+                  std::abs(static_cast<long double>(last[i].y)),
+                  std::abs(static_cast<long double>(last[i].z)),
+                  std::abs(static_cast<long double>(vertices[j].x)),
+                  std::abs(static_cast<long double>(vertices[j].y)),
+                  std::abs(static_cast<long double>(vertices[j].z))});
+    const auto closure =
+        endpoint_gap +
+        16 * std::numeric_limits<double>::epsilon() * coordinate_scale;
+    closures.push_back(closure);
+    if (!std::isfinite(closure) || closure > tolerance / 4)
+      return Return::Err(
+          Unsupported("Minor-arc joins are tolerance-ambiguous"));
+    // Projection does not enlarge a circular sagitta for exact unit frames;
+    // the factor two also bounds accepted frame roundoff and endpoint closure.
+    sagitta[i] = 2 * (sagitta[i] + closure);
+    departure[i] += 2 * std::asin(std::min(1.L, closure / lengths.back()));
+  }
+  const auto distance = [](Point2 p, Point2 a, Point2 b) {
+    const auto dx = b.x - a.x, dy = b.y - a.y;
+    const auto length2 = dx * dx + dy * dy;
+    const auto t =
+        std::clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / length2, 0.L, 1.L);
+    return std::hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
+  };
+  for (std::size_t i = 0; i < points.size(); ++i) {
+    if (!remaining_checks)
+      return Return::Err(
+          {ErrorCode::kResourceLimit, 0, "Minor-arc join limit exceeded"});
+    --remaining_checks;
+    const auto previous = (i + points.size() - 1) % points.size();
+    const auto next = (i + 1) % points.size();
+    const auto ax = (points[previous].x - points[i].x) / lengths[previous];
+    const auto ay = (points[previous].y - points[i].y) / lengths[previous];
+    const auto bx = (points[next].x - points[i].x) / lengths[i];
+    const auto by = (points[next].y - points[i].y) / lengths[i];
+    const auto separation = std::acos(std::clamp(ax * bx + ay * by, -1.L, 1.L));
+    // Limit possible crossings from endpoint uncertainty to the already
+    // admitted source join tolerance; outside it the endpoint cones separate.
+    const auto join_margin = std::asin(4 * closures[previous] / tolerance);
+    if (!std::isfinite(separation) || !std::isfinite(join_margin) ||
+        separation <= departure[previous] + departure[i] + join_margin + 1e-10L)
+      return Return::Err(Unsupported(
+          "Minor-arc endpoint cones cannot certify separated joins"));
+    for (std::size_t j = i + 1; j < points.size(); ++j) {
+      if (j == i + 1 || (i == 0 && j + 1 == points.size())) continue;
+      if (!remaining_checks)
+        return Return::Err({ErrorCode::kResourceLimit, 0,
+                            "Minor-arc envelope limit exceeded"});
+      --remaining_checks;
+      const auto a = points[i], b = points[next], c = points[j],
+                 d = points[(j + 1) % points.size()];
+      const auto clearance = std::min({distance(a, c, d), distance(b, c, d),
+                                       distance(c, a, b), distance(d, a, b)});
+      if (!std::isfinite(clearance) ||
+          clearance <=
+              2 * static_cast<long double>(tolerance) + sagitta[i] + sagitta[j])
+        return Return::Err(Unsupported(
+            "Minor-arc envelopes cannot certify nonadjacent separation"));
+    }
+  }
+  if (!std::isfinite(area2) || !std::isfinite(perimeter) ||
+      area2 <= tolerance * perimeter)
+    return Return::Err(
+        Invalid("Minor-arc source area is degenerate or miswound"));
+  return Return::Ok({area2 / 2, vertices.front()});
 }
 Result<ConvexBoundary> ValidateConvexPlanarHoles(
     std::span<const PlanarCurve> curves,

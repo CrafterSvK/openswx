@@ -46,7 +46,9 @@ struct ExportOptions {
   /// containment, separation, convex corners, curved hole/edge and polygon
   /// vertex/edge pairs, curved-hole extrema, cut pairs and spherical cap
   /// selections. Each cylindrical/conical patch or annular sector consumes five
-  /// checks.
+  /// checks. Profiled cylinder bands consume one check per edge and one per
+  /// cut pair. Concave minor-arc contours share chord-polygon, join-cone and
+  /// nonadjacent envelope checks, including a preceding convex attempt.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -90,21 +92,26 @@ struct StepDocument {
 /// positive cut radii. CYLINDER/CONE also support a single four-edge loop with
 /// two coaxial circular arcs and two straight LINE generators, spanning less
 /// than one full turn. Generators follow the respective cylinder/cone profile.
-/// Exact transverse and axial flux terms are retained for solid patches.
-/// SPHERE faces use one full latitude circle for a cap or two full coaxial
-/// latitude circles for a band, away from the poles. Winding selects either
-/// cap, including caps larger than a hemisphere. Regular ring TORUS bands use
-/// two coaxial full-circle cuts; winding selects the meridian interval,
-/// including its periodic seam and complementary band. Planar faces also
-/// support a single convex LINE/CIRCLE/ELLIPSE contour, including split conics,
-/// elliptic arcs and two-edge segments/lenses. Convex LINE/CIRCLE outer
-/// contours also support polygonal and complete circular holes. Circles and
-/// polygon vertices are checked against all supporting tangent half-planes,
-/// with two tolerances of clearance. Convexity contains entire polygon edges
-/// and interiors. Shared polygon/disk checks exclude intersections and nesting.
-/// Each circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair
-/// consumes one check, alongside polygon segment/containment comparisons.
-/// Polygonal or complete circular outer bounds also support convex multi-edge
+/// Full-azimuth CYLINDER bands also support monotone CIRCLE/ELLIPSE arc
+/// profiles with isolated axial LINE steps. Whole supporting conics must
+/// project onto the cylinder circle; complete profile axial ranges must be
+/// separated by more than two tolerances. Overlapping ranges remain
+/// unsupported. Exact transverse and axial flux terms are retained for solid
+/// patches and variable-height complete cylinder bands. SPHERE faces use one
+/// full latitude circle for a cap or two full coaxial latitude circles for a
+/// band, away from the poles. Winding selects either cap, including caps larger
+/// than a hemisphere. Regular ring TORUS bands use two coaxial full-circle
+/// cuts; winding selects the meridian interval, including its periodic seam and
+/// complementary band. Planar faces also support a single convex
+/// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
+/// two-edge segments/lenses. Convex LINE/CIRCLE outer contours also support
+/// polygonal and complete circular holes. Circles and polygon vertices are
+/// checked against all supporting tangent half-planes, with two tolerances of
+/// clearance. Convexity contains entire polygon edges and interiors. Shared
+/// polygon/disk checks exclude intersections and nesting. Each
+/// circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair consumes
+/// one check, alongside polygon segment/containment comparisons. Polygonal or
+/// complete circular outer bounds also support convex multi-edge
 /// LINE/CIRCLE/ELLIPSE holes. Analytic, inflated enclosing rectangles
 /// conservatively certify containment and separation; only original curves and
 /// analytic areas are exported. Uncertified envelopes return unsupported-format
@@ -112,9 +119,13 @@ struct StepDocument {
 /// extrema check plus its corner check; original and envelope-augmented
 /// mixed-boundary checks both share the budget. Planar annular sectors support
 /// two concentric circular arcs joined by two radial lines, including major
-/// sectors. Other nonconvex planar curved contours, holes in elliptic/nonconvex
-/// curved contours, curved outer contours with multi-edge curved holes,
-/// nonconvex curved holes, uncertified envelopes, other
+/// sectors. Single hole-free LINE/CIRCLE contours with minor arcs also support
+/// concave corners when chord simplicity, adjacent departure cones and
+/// nonadjacent sagitta envelopes certify separation. These checks can reject
+/// valid close contours; exported curves and areas remain exact source
+/// geometry. Other nonconvex planar curved contours, holes in
+/// elliptic/nonconvex curved contours, curved outer contours with multi-edge
+/// curved holes, nonconvex curved holes, uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, apex
 /// loops, explicit seam fins, horn/apple/lemon tori and single-edge elliptical
 /// holes remain unsupported. Sheet orientation is propagated across shared

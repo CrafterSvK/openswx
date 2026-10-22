@@ -1844,6 +1844,118 @@ inline ModelFixture EllipticDiskHole() {
       true, 10000);
   return f;
 }
+inline ModelFixture ObliqueCylinder(double lower_slope = .2,
+                                    double upper_slope = 0,
+                                    bool named_seams = false,
+                                    bool mantle_only = false) {
+  auto f = Cylinder(false, named_seams, !mantle_only, mantle_only);
+  for (uint32_t i = 0; i < 2; ++i) {
+    const auto slope = i ? upper_slope : lower_slope;
+    const double height = i ? 2 : 0;
+    if (slope == 0) continue;
+    const auto scale = std::hypot(1., slope);
+    RemoveNode(f, 4000 + i);
+    f.Add(
+        32, 4000 + i,
+        {Numbers("center", {0, 0, height}, FieldType::kVector),
+         Numbers("normal", {-slope / scale, 0, 1 / scale}, FieldType::kVector),
+         Numbers("x_axis", {1 / scale, 0, slope / scale}, FieldType::kVector),
+         Numbers("major_radius", {3 * scale}), Numbers("minor_radius", {3}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+    for (auto& node : f.report.nodes) {
+      if (node.index == 700 + i) {
+        node.fields[1].values = {-slope / scale, 0., 1 / scale};
+        node.fields[2].values = {1 / scale, 0., slope / scale};
+      }
+      if (node.index == 500 + i)
+        node.fields[0].values = {3., 0., height + 3 * slope};
+    }
+  }
+  return f;
+}
+inline ModelFixture SteppedCylinderBand() {
+  constexpr double kSlope = .2, kStep = .5, kHeight = 3;
+  auto f = Polyhedron({{1, 0, kSlope},
+                       {0, 1, 0},
+                       {-1, 0, -kSlope},
+                       {-1, 0, kStep - kSlope},
+                       {0, -1, kStep},
+                       {1, 0, kStep + kSlope},
+                       {1, 0, kHeight},
+                       {0, 1, kHeight},
+                       {-1, 0, kHeight},
+                       {0, -1, kHeight}},
+                      {{0, 2, 1},
+                       {3, 5, 4},
+                       {0, 5, 3, 2},
+                       {6, 7, 8, 9},
+                       {0, 1, 2, 3, 4, 5},
+                       {6, 9, 8, 7}},
+                      true);
+  MergeFaceLoops(f, {{4, 5}});
+  struct Arc {
+    unsigned first, last;
+    double height;
+    bool ellipse;
+  };
+  const std::vector<Arc> arcs{{0, 1, 0, true},        {1, 2, 0, true},
+                              {3, 4, kStep, true},    {4, 5, kStep, true},
+                              {6, 7, kHeight, false}, {7, 8, kHeight, false},
+                              {8, 9, kHeight, false}, {9, 6, kHeight, false}};
+  struct Replacement {
+    uint32_t id;
+    Arc arc;
+  };
+  std::vector<Replacement> replacements;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    for (const auto& arc : arcs)
+      if (a == 200 + std::min(arc.first, arc.last) &&
+          b == 200 + std::max(arc.first, arc.last))
+        replacements.push_back({PointerValue(f, node.index, "curve"), arc});
+  }
+  const auto scale = std::hypot(1., kSlope);
+  for (const auto& replacement : replacements) {
+    const auto& arc = replacement.arc;
+    const char sense = arc.first < arc.last ? '+' : '-';
+    if (!arc.ellipse) {
+      CircleBasis(f, replacement.id, {0, 0, arc.height}, 1, sense);
+      continue;
+    }
+    RemoveNode(f, replacement.id);
+    f.Add(
+        32, replacement.id,
+        {Numbers("center", {0, 0, arc.height}, FieldType::kVector),
+         Numbers("normal", {-kSlope / scale, 0, 1 / scale}, FieldType::kVector),
+         Numbers("x_axis", {1 / scale, 0, kSlope / scale}, FieldType::kVector),
+         Numbers("major_radius", {scale}), Numbers("minor_radius", {1}),
+         ByteValue("sense", sense, FieldType::kCharacter)});
+  }
+  RemoveNode(f, 704);
+  f.Add(51, 704,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture ConcaveMinorArcFace(double bottom = 0, double radius = 5) {
+  auto f = Polyhedron({{0, bottom, 0},
+                       {4, bottom, 0},
+                       {4, 4, 0},
+                       {3, 4, 0},
+                       {3, 2, 0},
+                       {1, 2, 0},
+                       {1, 4, 0},
+                       {0, 4, 0}},
+                      {{0, 1, 2, 3, 4, 5, 6, 7}});
+  CircleBasis(f, 4004, {2, 2 + std::sqrt(radius * radius - 1), 0}, radius, '-');
+  return f;
+}
 struct Serialized {
   std::vector<uint8_t> bytes;
   SchemaCatalog catalog;

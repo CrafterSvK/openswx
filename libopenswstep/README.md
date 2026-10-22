@@ -16,6 +16,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
+| Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
 | Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
 | Planar annular sectors with two concentric circular arcs and two radial lines | Exact single-loop `ADVANCED_FACE`, including nonconvex major sectors and analytic source-curve area |
@@ -23,6 +24,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
+| Complete CYLINDER bands between separated monotone CIRCLE/ELLIPSE profiles with isolated axial steps | Exact source bounds, oblique cuts and stepped rims; analytic variable-height volume |
 | Partial CYLINDER patches with two circular arcs and two axial generators | Exact `CYLINDRICAL_SURFACE` with one four-edge outer bound, including major arcs and parameter-seam crossings |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
 | Partial CONE patches with two circular arcs and two straight cone generators | Exact `CONICAL_SURFACE` with one four-edge outer bound, including expanding/narrowing sectors |
@@ -188,6 +190,27 @@ must lie inside the outer circle, and holes must be mutually disjoint; each
 separation must exceed two source tolerances. Single-edge elliptical holes remain
 unsupported in this conic-loop subset.
 
+Profiled complete cylindrical bands additionally support two full-azimuth
+boundaries assembled from `CIRCLE`/`ELLIPSE` arcs and isolated axial `LINE`
+generators. This includes oblique planar cuts and stepped or scalloped rims.
+Every complete supporting conic must project onto the cylinder's radial circle;
+endpoint membership alone is insufficient. Each profile must wind monotonically
+once, and the two complete axial ranges must be separated by more than two
+source tolerances. Overlapping ranges remain unsupported, even for some valid
+parallel oblique cuts. Source arcs and axial generators remain exact STEP edges.
+The analytic volume integral retains transverse origin terms for variable-height
+bands; complete azimuth alone does not make these terms vanish.
+
+Single hole-free planar `LINE`/`CIRCLE` contours can also have concave corners
+and minor circular arcs when conservative certificates establish simplicity.
+The endpoint chord polygon must be simple with positive winding. Arc departure
+cones separate adjacent curves outside the join tolerance; sagitta envelopes
+separate nonadjacent curves. Ambiguous envelopes return unsupported-format,
+including some valid close contours. These chords are validation aids only:
+STEP retains the original circular arcs and analytic source-curve area.
+Concave elliptic contours and nonconvex curved contours with holes remain
+unsupported.
+
 Complete cylindrical bands use two circular cut loops at distinct axial
 levels. Their radii, axis alignment, centre positions and opposite winding are
 checked analytically, including whole-circle axial variation beyond the binding
@@ -216,9 +239,9 @@ analytically. The source loop becomes one `FACE_OUTER_BOUND` with its four exact
 curves. Major arcs, reversed axes, inward sheets and parameter-seam crossings are
 supported. Closed supported mixtures include quarter-cylinder sector solids.
 Partial-cylinder flux retains transverse translation terms; these cancel only
-for complete azimuth bands. Five shared checks cover each patch's four edges
+for horizontal complete azimuth bands. Five shared checks cover each patch's four edges
 and cut-pair comparison. Other cylinder trimming contours, holes in a patch and
-elliptic cuts remain unsupported.
+elliptic cuts in partial patches remain unsupported.
 
 Complete conical bands use the same coaxial cut, winding and budget checks as
 cylinders, with the linear profile `r(z) = r_ref + z * sin(a) / cos(a)` used by
@@ -292,7 +315,7 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS, other nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
+NURBS, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
 uncertified curved-hole envelopes, curved outer contours with curved holes,
 nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
@@ -363,7 +386,10 @@ boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
 conical/spherical/toroidal cut pair consumes one check, as does each spherical
-cap selection. Each partial cylinder/cone patch and planar annular sector consumes five checks. Parser, model and body-binding
+cap selection. Profiled cylinder bands consume one check per edge and one per
+cut pair. Concave minor-arc validation shares the chord-polygon, join-cone and
+nonadjacent envelope-pair checks, including any preceding convex attempt.
+Each partial cylinder/cone patch and planar annular sector consumes five checks. Parser, model and body-binding
 budgets remain independently configurable in `ExportOptions`. The file adapter
 checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -415,17 +441,31 @@ It imports generated synthetic STEP documents, runs `BRepCheck_Analyzer`, checks
 unique vertex/edge/face/solid counts and compares volumes, areas and curve
 lengths, including hole areas and analytic cylinder/frustum/tube/sphere/torus
 volumes. Different seam phases exercise importer-created periodic seams and ring
-splits. OCCT is exclusively a test dependency and is never linked into the export library.
+splits. Oblique full-cylinder cuts expose an OCCT import limitation: rebuilt
+B-spline pcurves deviate from the unchanged exact 3D ellipse. Five such synthetic
+measure checks use a documented relative tolerance of 5e-6; all other cases keep
+1e-9. Exact exporter flux formulas have separate analytic unit tests.
+OCCT is exclusively a test dependency and is never linked into the export library.
 Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 50 export successfully, including twenty face-bearing
-bodies with 250 faces; 30 successes contain only wire/point geometry. All 50
-generated documents pass OCCT import and B-rep validity checks. The other seven
-return unsupported-format errors. Convex curved-hole support adds one complete
-body with 54 faces and 148 edges. Elliptic curved-hole support preserves all
-50 prior successes; remaining private bodies still require other geometry.
+extracted streams: 51 export successfully, including twenty-one face-bearing
+bodies with 367 faces; 30 successes contain only wire/point geometry. All 51
+generated documents pass OCCT import and B-rep validity checks. Profiled cylinder
+bands and certified concave minor-arc contours add one complete body with 117
+faces and 324 edges, preserving all 50 previous successes. The other six return
+unsupported-format errors. Their first remaining geometry obstacles are:
+
+| Bodies | Missing support |
+| --- | --- |
+| 2 | Implicit plane/cone intersection curves and faces trimmed by them |
+| 2 | NURBS surfaces and implicit intersections with analytic surfaces |
+| 2 | Fin-specific curves and rotational surfaces; one also needs unresolved trim intervals |
+
+Resolving those intervals alone does not make the final two bodies exportable.
+These counts describe this private regression selection, not general format
+coverage. No private source files or generated exports are stored here.
 
 Synthetic OCCT round trips independently check circular/elliptic convex
 curved-hole and polygonal/mixed curved-hole areas, circular/polygonal cylinder-sector

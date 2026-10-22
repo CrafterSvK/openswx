@@ -18,7 +18,18 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
+MINOR_ARC_SEGMENT = 25 / 2 * (2 * math.asin(.2) - math.sin(2 * math.asin(.2)))
 CASES = {
+    "profiled-cylinder": (2,3,3,1,"volume",18*math.pi),
+    "profiled-cylinder-seams": (2,3,3,1,"volume",18*math.pi),
+    "profiled-cylinder-two-cuts": (2,3,3,1,"volume",18*math.pi),
+    "profiled-cylinder-translated": (2,3,3,1,"volume",18*math.pi),
+    "profiled-cylinder-mantle": (2,3,1,0,"area",12*math.pi),
+    "stepped-cylinder": (10,13,5,1,"volume",2.75*math.pi),
+    "stepped-cylinder-translated": (10,13,5,1,"volume",2.75*math.pi),
+    "concave-minor-arc": (8,8,1,0,"area",12-MINOR_ARC_SEGMENT),
+    "concave-minor-arc-close": (8,8,1,0,"area",12-4*1.79-MINOR_ARC_SEGMENT),
+    "concave-minor-arc-translated": (8,8,1,0,"area",12-MINOR_ARC_SEGMENT),
     "stadium": (4,4,1,0,"area",4+math.pi),
     "annular-sector": (4,4,1,0,"area",2*math.pi),
     "annular-half": (4,4,1,0,"area",4*math.pi),
@@ -231,6 +242,20 @@ CASES = {
     "sheet-pair": (4, 5, 2, 0, "area", 1),
 }
 
+# OCCT reconstructs an oblique ellipse's cylindrical pcurve as a B-spline.
+# Sampling that imported pcurve against the unchanged exact 3D edge exposes
+# about 1.5e-4 mm residual for these R=3 mm fixtures, even with read precision
+# set to 1e-11. Its area/volume integration therefore needs a separate tolerance.
+# All other cases retain the strict measure check. Exact exporter flux and
+# source-curve area formulas are checked independently in export_test.cc.
+IMPORTED_PCURVE_REL_TOL = {
+    "profiled-cylinder": 5e-6,
+    "profiled-cylinder-seams": 5e-6,
+    "profiled-cylinder-two-cuts": 5e-6,
+    "profiled-cylinder-translated": 5e-6,
+    "profiled-cylinder-mantle": 5e-6,
+}
+
 with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
     subprocess.run([sys.argv[1], directory], check=True)
     for name, expected in CASES.items():
@@ -250,6 +275,11 @@ with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
             operation = {"volume": BRepGProp.VolumeProperties_s,
                          "area": BRepGProp.SurfaceProperties_s,
                          "length": BRepGProp.LinearProperties_s}[measure]
-            operation(shape, properties)
-            assert math.isclose(properties.Mass(), target, rel_tol=1e-9, abs_tol=1e-12), (name, properties.Mass(), target)
+            # Oblique periodic trims need adaptive quadrature; fixed-order
+            # integration can miss their volume despite valid exact geometry.
+            if measure in ("area", "volume"):
+                operation(shape, properties, Eps=1e-12)
+            else:
+                operation(shape, properties)
+            assert math.isclose(properties.Mass(), target, rel_tol=IMPORTED_PCURVE_REL_TOL.get(name, 1e-9), abs_tol=1e-12), (name, properties.Mass(), target)
         print(name, "valid, topology and measures verified")

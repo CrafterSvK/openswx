@@ -16,6 +16,7 @@
 #include "../../libopenswx/tests/test_helpers.h"
 #include "../src/annular_boundary.h"
 #include "../src/cone_patch.h"
+#include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
 #include "fixtures.h"
 
@@ -895,6 +896,162 @@ TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 6);
+}
+TEST(OpenSwStep, ExportsObliqueAndSteppedCylinderBandsAsCompleteBodies) {
+  for (const bool seams : {false, true})
+    for (const auto slopes : {std::pair{.2, 0.}, std::pair{-.2, .15}}) {
+      const auto f = test::ObliqueCylinder(slopes.first, slopes.second, seams);
+      for (const auto& source : {f, test::RotateAndTranslate(f)}) {
+        const auto result = Export(source);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.solids, 1);
+        EXPECT_EQ(result.value().statistics.faces, 3);
+        EXPECT_EQ(result.value().statistics.edges, 2);
+      }
+    }
+  for (const auto& f :
+       {test::SteppedCylinderBand(),
+        test::RotateAndTranslate(test::SteppedCylinderBand())}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    EXPECT_EQ(result.value().statistics.faces, 5);
+    EXPECT_EQ(result.value().statistics.edges, 12);
+    EXPECT_EQ(result.value().statistics.vertices, 10);
+    CheckReferences(result.value());
+  }
+  const auto bytes = test::Serialize(test::SteppedCylinderBand());
+  const auto parsed =
+      ExportParasolid(bytes.bytes, NodeId{1}, Options(), &bytes.catalog);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().statistics.solids, 1);
+}
+TEST(OpenSwStep, IntegratesProfiledCylinderBandsWithTransverseOriginTerms) {
+  const auto fixture = test::SteppedCylinderBand();
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const auto binding =
+      BindBodyGeometry(model.value(), NodeId{1}, Options().tolerance);
+  ASSERT_TRUE(binding.ok()) << binding.error().message;
+  std::vector<std::vector<internal::PlanarCurve>> loops;
+  for (const auto& face : binding.value().faces)
+    if (face.face.value == 304)
+      for (const auto& loop : face.loops) {
+        std::vector<internal::PlanarCurve> curves;
+        for (const auto& fin : loop.fins) {
+          const auto* node = model.value().FindNode(fin.curve);
+          curves.push_back({&model.value().geometry()[*node->geometry].payload,
+                            fin.start, fin.end});
+        }
+        loops.push_back(std::move(curves));
+      }
+  CylinderGeometry cylinder{{0, 0, 0}, {0, 0, 1}, 1, {1, 0, 0}};
+  uint64_t remaining = 11;
+  const auto band =
+      internal::ValidateCylinderBand(loops, cylinder, true, 1e-7, remaining);
+  ASSERT_TRUE(band.ok()) << band.error().message;
+  EXPECT_EQ(remaining, 0);
+  EXPECT_NEAR(band.value().height_integral, 5.5 * std::numbers::pi, 1e-12);
+  EXPECT_NEAR(band.value().radial_integral[0], -.2 * std::numbers::pi, 1e-12);
+  EXPECT_NEAR(band.value().radial_integral[1], 1, 1e-12);
+  EXPECT_NEAR(internal::CylinderBandVolume6(cylinder, band.value(), {}),
+              11 * std::numbers::pi, 1e-12);
+  EXPECT_NEAR(internal::CylinderBandVolume6(cylinder, band.value(), {1, 2, 3}),
+              11.4 * std::numbers::pi - 4, 1e-12);
+  remaining = 10;
+  const auto limited =
+      internal::ValidateCylinderBand(loops, cylinder, true, 1e-7, remaining);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, PreservesProfiledCylinderAxisSenseAndRejectsAmbiguousRanges) {
+  auto reverse = test::ObliqueCylinder();
+  for (auto& node : reverse.report.nodes)
+    if (node.index == 702) node.fields[1].values = {0., 0., -1.};
+  ASSERT_TRUE(Export(reverse).ok());
+  auto inward = test::ObliqueCylinder(.2, 0, false, true);
+  test::Set(inward, 302, "sense", '-');
+  for (const auto ids : {std::pair{1000u, 1001u}, std::pair{1003u, 1002u}}) {
+    const auto loop = test::PointerValue(inward, ids.first, "loop");
+    test::Set(inward, ids.first, "loop", 0);
+    test::Set(inward, ids.first, "forward", 0);
+    test::Set(inward, ids.first, "backward", 0);
+    test::Set(inward, ids.second, "loop", loop);
+    test::Set(inward, ids.second, "forward", ids.second);
+    test::Set(inward, ids.second, "backward", ids.second);
+    test::Set(inward, loop, "halfedge", ids.second);
+  }
+  const auto sheet = Export(inward);
+  ASSERT_TRUE(sheet.ok()) << sheet.error().message;
+  EXPECT_EQ(sheet.value().statistics.solids, 0);
+  const auto uncertified = Export(test::ObliqueCylinder(.6, .6));
+  ASSERT_FALSE(uncertified.ok());
+  EXPECT_EQ(uncertified.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(uncertified.error().message.find("axial ranges overlap"),
+            std::string::npos);
+  auto options = Options();
+  options.max_polygon_checks = 3;
+  ASSERT_TRUE(Export(test::ObliqueCylinder(), options).ok());
+  options.max_polygon_checks = 2;
+  const auto limited = Export(test::ObliqueCylinder(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsNoncylindricalProfilesBeforeEmittingPartialOutput) {
+  const GeometryPayload bad =
+      EllipseGeometry{{0, 0, 0}, {0, 0, 1}, {1, 0, 0}, 2, 1};
+  const GeometryPayload top =
+      CircleGeometry{{0, 0, 3}, {0, 0, 1}, {1, 0, 0}, 1};
+  std::vector<std::vector<internal::PlanarCurve>> loops{
+      {{&bad, 0, 2 * std::numbers::pi}}, {{&top, 2 * std::numbers::pi, 0}}};
+  uint64_t remaining = 10;
+  const auto wrong = internal::ValidateCylinderBand(
+      loops, {{0, 0, 0}, {0, 0, 1}, 1, {1, 0, 0}}, true, 1e-7, remaining);
+  ASSERT_FALSE(wrong.ok());
+  EXPECT_EQ(wrong.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(wrong.error().message.find("project to the cylinder circle"),
+            std::string::npos);
+  const GeometryPayload foreign = IntersectionCurveGeometry{};
+  loops[0][0] = {&foreign, 0, 1};
+  remaining = 10;
+  const auto unsupported = internal::ValidateCylinderBand(
+      loops, {{0, 0, 0}, {0, 0, 1}, 1, {1, 0, 0}}, true, 1e-7, remaining);
+  ASSERT_FALSE(unsupported.ok());
+  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+  loops[0] = {{&top, 0, std::numbers::pi}, {&top, std::numbers::pi, 0}};
+  remaining = 10;
+  const auto fold = internal::ValidateCylinderBand(
+      loops, {{0, 0, 0}, {0, 0, 1}, 1, {1, 0, 0}}, true, 1e-7, remaining);
+  ASSERT_FALSE(fold.ok());
+  EXPECT_NE(fold.error().message.find("not monotone"), std::string::npos);
+}
+TEST(OpenSwStep, ExportsCertifiedConcaveMinorArcContoursWithExactSourceArea) {
+  for (const auto& f :
+       {test::ConcaveMinorArcFace(), test::ConcaveMinorArcFace(1.79),
+        test::RotateAndTranslate(test::ConcaveMinorArcFace())}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    EXPECT_EQ(result.value().statistics.edges, 8);
+    EXPECT_NE(result.value().text.find("CIRCLE("), std::string::npos);
+  }
+  auto options = Options();
+  options.max_polygon_checks = 48;
+  ASSERT_TRUE(Export(test::ConcaveMinorArcFace(), options).ok());
+  options.max_polygon_checks = 47;
+  const auto limited = Export(test::ConcaveMinorArcFace(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  for (const double bottom : {1.8, 1.95}) {
+    const auto rejected = Export(test::ConcaveMinorArcFace(bottom));
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(rejected.error().message.find("envelopes cannot certify"),
+              std::string::npos);
+  }
+  const auto cones = Export(test::ConcaveMinorArcFace(0, 1));
+  ASSERT_FALSE(cones.ok());
+  EXPECT_EQ(cones.error().code, ErrorCode::kUnsupportedFormat);
 }
 TEST(OpenSwStep, ExportsEllipticCurvedHolesWithOriginalFramesAndMixedLoops) {
   for (const bool mixed : {false, true})

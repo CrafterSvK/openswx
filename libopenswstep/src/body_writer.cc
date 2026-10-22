@@ -15,6 +15,7 @@
 #include "conic_boundary.h"
 #include "convex_boundary.h"
 #include "curved_hole.h"
+#include "cylinder_band.h"
 #include "cylinder_patch.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
@@ -61,6 +62,7 @@ struct FaceData {
   std::optional<TorusBand> torus_band;
   std::optional<SphereBand> sphere_band;
   std::optional<CylinderPatch> cylinder_patch;
+  std::optional<CylinderBand> cylinder_band;
   std::optional<ConePatch> cone_patch;
 };
 struct EdgeUse {
@@ -95,6 +97,7 @@ class BodyWriter {
   Result<bool> PrepareConicFace(FaceData& face);
   Result<bool> PrepareCurvedPlanarFace(FaceData& face);
   Result<bool> PrepareRuledPatchFace(FaceData& face);
+  Result<bool> PrepareCylinderBandFace(FaceData& face);
   Result<ConicBoundary> ReadConicLoop(NodeId face, const FaceTrimLoop& loop);
   Result<std::vector<ConicBoundary>> ConicLoops(const FaceData& face);
   Result<bool> CheckVertexLinks();
@@ -474,15 +477,58 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
     face.outer_loop = outer_index;
     return Result<bool>::Ok(true);
   }
-  const auto boundary =
+  auto boundary =
       ValidateConvexPlanarLoop(curves, *face.plane, face.natural_sense,
                                options_.tolerance, polygon_checks_remaining_);
+  if (!boundary.ok() && boundary.error().code == ErrorCode::kUnsupportedFormat)
+    boundary = ValidateMinorArcPlanarLoop(
+        curves, *face.plane, face.natural_sense, options_.tolerance,
+        polygon_checks_remaining_);
   if (!boundary.ok())
     return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                    boundary.error().message.c_str()));
   face.planar_area = boundary.value().area;
   face.reference_point = boundary.value().reference_point;
   face.outer_loop = outer_index;
+  return Result<bool>::Ok(true);
+}
+Result<bool> BodyWriter::PrepareCylinderBandFace(FaceData& face) {
+  std::vector<std::vector<PlanarCurve>> loops;
+  for (const auto& source : face.source->loops) {
+    if (source.isolated_vertex)
+      return Result<bool>::Err(
+          Error(face.source->face, ErrorCode::kUnsupportedFormat,
+                "Cylinder band profiles require fin loops"));
+    std::set<uint32_t> vertices;
+    std::vector<PlanarCurve> curves;
+    for (const auto& fin : source.fins) {
+      if (fin.use.fin_curve.value)
+        return Result<bool>::Err(
+            Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
+                  "Tolerant fin curves need an explicit STEP pcurve mapping"));
+      if (source.fins.size() > 1 &&
+          (!fin.use.start_vertex.value || !fin.use.end_vertex.value ||
+           !vertices.insert(fin.use.start_vertex.value).second))
+        return Result<bool>::Err(Error(
+            face.source->face, ErrorCode::kUnsupportedFormat,
+            "Multi-edge cylinder profiles require distinct non-null vertices"));
+      const auto basis = Basis(fin.curve);
+      if (!basis.ok()) return Result<bool>::Err(basis.error());
+      curves.push_back({&basis.value()->payload, fin.start, fin.end});
+      uses_[fin.use.edge.value].push_back(
+          {faces_.size(), fin.use.sense == TopologySense::kForward});
+    }
+    loops.push_back(std::move(curves));
+  }
+  const auto band =
+      ValidateCylinderBand(loops, *face.cylinder, face.natural_sense,
+                           options_.tolerance, polygon_checks_remaining_);
+  if (!band.ok())
+    return Result<bool>::Err(Error(face.source->face, band.error().code,
+                                   band.error().message.c_str()));
+  face.cylinder_band = band.value();
+  face.reference_point = band.value().reference_point;
+  face.outer_loop = std::nullopt;
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareRuledPatchFace(FaceData& face) {
@@ -566,6 +612,21 @@ Result<bool> BodyWriter::PrepareFaces() {
     const bool all_conic =
         std::all_of(source.loops.begin(), source.loops.end(),
                     [](const auto& loop) { return loop.fins.size() == 1; });
+    bool profiled_cylinder = cylinder && source.loops.size() == 2 && !all_conic;
+    if (cylinder && source.loops.size() == 2 && all_conic)
+      for (const auto& loop : source.loops) {
+        const auto basis = Basis(loop.fins.front().curve);
+        if (!basis.ok()) return Result<bool>::Err(basis.error());
+        profiled_cylinder =
+            profiled_cylinder ||
+            !std::holds_alternative<CircleGeometry>(basis.value()->payload);
+      }
+    if (profiled_cylinder) {
+      const auto band = PrepareCylinderBandFace(face);
+      if (!band.ok()) return band;
+      faces_.push_back(std::move(face));
+      continue;
+    }
     if ((cylinder || cone) && !all_conic) {
       const auto patch = PrepareRuledPatchFace(face);
       if (!patch.ok()) return patch;
@@ -841,6 +902,9 @@ Result<bool> BodyWriter::CheckSolid() {
         volume6 += sign * 2 * std::numbers::pi_v<long double> * band.height *
                    (band.lower_radius + band.upper_radius) *
                    std::fma(-slope, distance, band.lower_radius);
+      } else if (face.cylinder_band) {
+        volume6 += sign * CylinderBandVolume6(*face.cylinder,
+                                              *face.cylinder_band, origin);
       } else if (face.cylinder_patch) {
         volume6 += sign * CylinderPatchVolume6(*face.cylinder,
                                                *face.cylinder_patch, origin);

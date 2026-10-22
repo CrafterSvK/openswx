@@ -33,6 +33,15 @@ struct ConvexBoundary {
     std::span<const PlanarCurve> curves,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
+// Conservative certificate for one simple, possibly concave LINE/CIRCLE
+// contour with minor arcs. The source chord polygon must be simple; analytic
+// sagitta bounds separate nonadjacent edges and endpoint cones separate joins.
+// Chords are validation envelopes only. Area and exported curves stay exact.
+// Shared checks cover chord comparisons, joins and nonadjacent envelope pairs.
+[[nodiscard]] openparasolid::Result<ConvexBoundary> ValidateMinorArcPlanarLoop(
+    std::span<const PlanarCurve> curves,
+    const openparasolid::PlaneGeometry& plane, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks);
 // Validates a convex LINE/CIRCLE outer contour and polygonal/full circular
 // holes. Every disk must lie strictly inside every supporting tangent
 // half-plane; circle-arc extrema are analytic, including parameter seams and
