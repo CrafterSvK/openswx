@@ -352,7 +352,7 @@ inline ModelFixture NegativePerforatedSheet() {
 inline ModelFixture RotateAndTranslate(ModelFixture f) {
   for (auto& node : f.report.nodes) {
     if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
-        node.node_type != 32 && node.node_type != 50)
+        node.node_type != 32 && node.node_type != 50 && node.node_type != 51)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
@@ -516,6 +516,133 @@ inline ModelFixture CircularHoles() {
   auto second = inner;
   second.center = {2, 0, 0};
   return ConicSheet({inner, second, outer});
+}
+// Builds circular caps and one or two complete cylindrical bands. Every
+// boundary edge is shared by its cap and mantle using opposite source fins.
+inline ModelFixture Cylinder(bool tube = false, bool named_seams = false,
+                             bool solid = true, bool mantle_only = false) {
+  ConicLoopSpec bottom;
+  bottom.major = 3;
+  bottom.reverse_fin = true;
+  auto top = bottom;
+  top.center.z = 2;
+  top.reverse_fin = false;
+  std::vector<ConicLoopSpec> circles{bottom, top};
+  if (tube) {
+    auto inner_bottom = bottom;
+    inner_bottom.major = 1;
+    inner_bottom.reverse_fin = false;
+    auto inner_top = inner_bottom;
+    inner_top.center.z = 2;
+    inner_top.reverse_fin = true;
+    circles.insert(circles.end(), {inner_bottom, inner_top});
+  }
+  auto f = ConicSheet(circles, named_seams);
+  Set(f, 1, "body_type", solid ? 1 : 3);
+  if (solid) {
+    Set(f, 2, "next", 3);
+    Set(f, 4, "face", 0);
+    f.Add(19, 3,
+          {Pointer("body", 1, 12), Pointer("previous", 2, 19),
+           Pointer("next", 0, 19), Pointer("shell", 5, 13),
+           ByteValue("type", 'S', FieldType::kCharacter)});
+    f.Add(13, 5,
+          {Pointer("region", 3, 19), Pointer("next", 0, 13),
+           Pointer("face", 300, 14), Pointer("front_face", 0, 14),
+           Pointer("edge", 0, 16), Pointer("vertex", 0, 18)});
+  }
+  const uint32_t count = tube ? 4 : 3;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (i == 0) RemoveNode(f, 300);
+    f.Add(14, 300 + i,
+          {Pointer("loop",
+                   i < 2    ? 600 + i
+                   : i == 2 ? 604
+                            : 606,
+                   15),
+           Pointer("surface", 700 + i, 1006),
+           Pointer("shell", solid ? 5 : 4, 13), Pointer("front_shell", 4, 13),
+           Pointer("previous", i ? 299 + i : 0, 14),
+           Pointer("next", i + 1 < count ? 301 + i : 0, 14),
+           Pointer("previous_front", i ? 299 + i : 0, 14),
+           Pointer("next_front", i + 1 < count ? 301 + i : 0, 14),
+           ByteValue("sense", i == 0 || i == 3 ? '-' : '+',
+                     FieldType::kCharacter)});
+  }
+  Set(f, 600, "next", tube ? 602 : 0);
+  Set(f, 601, "face", 301);
+  Set(f, 601, "next", tube ? 603 : 0);
+  if (tube) {
+    Set(f, 602, "next", 0);
+    Set(f, 603, "next", 0);
+    Set(f, 603, "face", 301);
+  }
+  f.Add(50, 701,
+        {Numbers("origin", {0, 0, 2}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  for (uint32_t mantle = 0; mantle < (tube ? 2u : 1u); ++mantle) {
+    f.Add(51, 702 + mantle,
+          {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+           Numbers("axis", {0, 0, 1}, FieldType::kVector),
+           Numbers("radius", {mantle ? 1. : 3.}),
+           Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    const uint32_t first_loop = 604 + mantle * 2;
+    const uint32_t first_fin = mantle ? 1005 : 1000;
+    const uint32_t second_fin = mantle ? 1006 : 1003;
+    for (uint32_t j = 0; j < 2; ++j) {
+      const uint32_t fin = j ? second_fin : first_fin;
+      f.Add(15, first_loop + j,
+            {Pointer("face", 302 + mantle, 14), Pointer("halfedge", fin, 17),
+             Pointer("next", j ? 0 : first_loop + 1, 15)});
+      Set(f, fin, "loop", first_loop + j);
+      Set(f, fin, "forward", fin);
+      Set(f, fin, "backward", fin);
+    }
+  }
+  if (mantle_only) {
+    for (const auto id : {300u, 301u, 600u, 601u, 700u, 701u})
+      RemoveNode(f, id);
+    Set(f, 4, "face", 302);
+    Set(f, 4, "front_face", 302);
+    Set(f, 302, "previous", 0);
+    Set(f, 302, "previous_front", 0);
+    for (const uint32_t fin : {1001u, 1002u}) {
+      Set(f, fin, "loop", 0);
+      Set(f, fin, "forward", 0);
+      Set(f, fin, "backward", 0);
+    }
+  }
+  return f;
+}
+inline ModelFixture ReversedCylinder(bool axis = false) {
+  auto f = Cylinder();
+  if (axis) {
+    for (auto& node : f.report.nodes)
+      if (node.index == 702) node.fields[1].values = {0., 0., -1.};
+  } else {
+    Set(f, 302, "loop", 605);
+    Set(f, 605, "next", 604);
+    Set(f, 604, "next", 0);
+  }
+  return f;
+}
+inline ModelFixture ShiftedCylinderSeams(bool named_seams = true) {
+  auto f = Cylinder(false, named_seams);
+  for (auto& node : f.report.nodes) {
+    if (named_seams && (node.index == 500 || node.index == 501)) {
+      const auto phase = node.index == 500 ? 0.3 : 1.1;
+      node.fields[0].values = {3 * std::cos(phase), 3 * std::sin(phase),
+                               node.index == 500 ? 0. : 2.};
+    }
+    if (!named_seams && (node.index == 4000 || node.index == 4001)) {
+      const auto phase = node.index == 4000 ? 0.3 : 1.1;
+      node.fields[2].values = {std::cos(phase), std::sin(phase), 0.};
+    }
+  }
+  return f;
 }
 inline ModelFixture Acorn() {
   auto f = Polyhedron({{0, 0, 0}, {1, 0, 0}}, {});

@@ -18,6 +18,20 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 CASES = {
+    # OCCT creates a seam edge on each complete periodic cylinder face,
+    # splitting one circular boundary when the two source seam phases differ.
+    "cylinder": (2, 3, 3, 1, "volume", 18 * math.pi),
+    "cylinder-shifted-seams": (3, 4, 3, 1, "volume", 18 * math.pi),
+    "cylinder-shifted-frames": (3, 4, 3, 1, "volume", 18 * math.pi),
+    "cylinder-loop-order": (2, 3, 3, 1, "volume", 18 * math.pi),
+    "cylinder-axis": (2, 3, 3, 1, "volume", 18 * math.pi),
+    "cylinder-seams": (2, 3, 3, 1, "volume", 18 * math.pi),
+    "tube": (4, 6, 4, 1, "volume", 16 * math.pi),
+    "tube-seams": (4, 6, 4, 1, "volume", 16 * math.pi),
+    "cylinder-mantle": (2, 3, 1, 0, "area", 12 * math.pi),
+    "cylinder-sheet": (2, 3, 3, 0, "area", 30 * math.pi),
+    "oblique-cylinder": (2, 3, 3, 1, "volume", 18 * math.pi),
+    "oblique-tube": (4, 6, 4, 1, "volume", 16 * math.pi),
     "disk": (1, 1, 1, 0, "area", math.pi),
     "disk-seam": (1, 1, 1, 0, "area", math.pi),
     "ellipse-disk": (1, 1, 1, 0, "area", 2 * math.pi),

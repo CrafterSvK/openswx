@@ -5,6 +5,7 @@
 #include <cmath>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -22,9 +23,13 @@ Vector3 Difference(Vector3 a, Vector3 b) {
 struct FaceData {
   const FaceTrimming* source = nullptr;
   const PlaneGeometry* plane = nullptr;
+  const CylinderGeometry* cylinder = nullptr;
   bool natural_sense = true;
   std::vector<std::vector<Vector3>> polygons;
-  std::size_t outer_loop = 0;
+  std::optional<std::size_t> outer_loop = 0;
+  long double conic_area = 0;
+  long double axial_height = 0;
+  Vector3 reference_point;
 };
 struct EdgeUse {
   std::size_t face;
@@ -56,6 +61,7 @@ class BodyWriter {
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
   Result<bool> PrepareConicFace(FaceData& face);
+  Result<std::vector<ConicBoundary>> ConicLoops(const FaceData& face);
   Result<bool> CheckVertexLinks();
   Result<bool> OrientFaces();
   Result<bool> CheckSolid();
@@ -195,28 +201,26 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
   ++statistics_.edges;
   return Result<Id>::Ok(result);
 }
-Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
-  if (solid_)
-    return Result<bool>::Err(
-        Error(face.source->face, ErrorCode::kUnsupportedFormat,
-              "Conic face export currently requires a sheet body"));
+Result<std::vector<ConicBoundary>> BodyWriter::ConicLoops(
+    const FaceData& face) {
+  using Return = Result<std::vector<ConicBoundary>>;
   std::vector<ConicBoundary> loops;
   for (const auto& loop : face.source->loops) {
     if (loop.isolated_vertex || loop.fins.size() != 1)
-      return Result<bool>::Err(Error(
+      return Return::Err(Error(
           face.source->face, ErrorCode::kUnsupportedFormat,
           "Conic face loops require one complete CIRCLE or ELLIPSE edge each"));
     const auto& fin = loop.fins.front();
     if (fin.use.fin_curve.value)
-      return Result<bool>::Err(
+      return Return::Err(
           Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
                 "Tolerant fin curves need an explicit STEP pcurve mapping"));
     if (fin.use.start_vertex != fin.use.end_vertex)
-      return Result<bool>::Err(Error(
+      return Return::Err(Error(
           fin.use.fin, ErrorCode::kInvalidRecord,
           "Complete conic loop must use one seam vertex or be vertex-free"));
     const auto curve = Basis(fin.curve);
-    if (!curve.ok()) return Result<bool>::Err(curve.error());
+    if (!curve.ok()) return Return::Err(curve.error());
     if (const auto* circle =
             std::get_if<CircleGeometry>(&curve.value()->payload)) {
       loops.push_back({circle->center, circle->normal, circle->x_axis,
@@ -228,43 +232,76 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
                        ellipse->major_radius, ellipse->minor_radius, fin.start,
                        fin.end, false});
     } else {
-      return Result<bool>::Err(
+      return Return::Err(
           Error(fin.curve, ErrorCode::kUnsupportedFormat,
-                "Single-edge planar loops require CIRCLE or ELLIPSE bases"));
+                "Single-edge conic loops require CIRCLE or ELLIPSE bases"));
     }
     uses_[fin.use.edge.value].push_back(
         {faces_.size(), fin.use.sense == TopologySense::kForward});
   }
+  return Return::Ok(std::move(loops));
+}
+Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
+  const auto loops = ConicLoops(face);
+  if (!loops.ok()) return Result<bool>::Err(loops.error());
+  if (face.cylinder) {
+    const auto height =
+        ValidateCylinderLoops(loops.value(), *face.cylinder, face.natural_sense,
+                              options_.tolerance, polygon_checks_remaining_);
+    if (!height.ok())
+      return Result<bool>::Err(Error(face.source->face, height.error().code,
+                                     height.error().message.c_str()));
+    face.axial_height = height.value();
+    face.reference_point = loops.value().front().center;
+    face.outer_loop = std::nullopt;
+    return Result<bool>::Ok(true);
+  }
   const auto boundary =
-      ValidatePlanarConics(loops, *face.plane, face.natural_sense,
+      ValidatePlanarConics(loops.value(), *face.plane, face.natural_sense,
                            options_.tolerance, polygon_checks_remaining_);
   if (!boundary.ok())
     return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                    boundary.error().message.c_str()));
   face.outer_loop = boundary.value();
+  face.reference_point = loops.value()[boundary.value()].center;
+  for (std::size_t i = 0; i < loops.value().size(); ++i) {
+    const auto& loop = loops.value()[i];
+    const auto area =
+        std::numbers::pi_v<long double> * loop.major_radius * loop.minor_radius;
+    face.conic_area += i == boundary.value() ? area : -area;
+  }
+  if (!std::isfinite(face.conic_area) || face.conic_area <= 0)
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kInvalidRecord,
+              "Conic face area is nonpositive or unrepresentable"));
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
     if (source.loops.empty())
       return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
-                                     "Planar face has no boundary loops"));
+                                     "Face has no boundary loops"));
     const auto surface = Geometry(source.surface);
     if (!surface.ok()) return Result<bool>::Err(surface.error());
     const auto* plane = std::get_if<PlaneGeometry>(&surface.value()->payload);
-    if (!plane)
-      return Result<bool>::Err(
-          Error(source.face, ErrorCode::kUnsupportedFormat,
-                "Face export currently supports PLANE surfaces"));
+    const auto* cylinder =
+        std::get_if<CylinderGeometry>(&surface.value()->payload);
+    if (!plane && !cylinder)
+      return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
+                                     "Face export currently supports PLANE and "
+                                     "full-band CYLINDER surfaces"));
     if (!source.face_sense ||
         (*source.face_sense != '+' && *source.face_sense != '-') ||
         !surface.value()->sense ||
         (*surface.value()->sense != '+' && *surface.value()->sense != '-'))
       return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
                                      "Face and surface senses must be known"));
-    FaceData face{
-        &source, plane, source.face_sense == surface.value()->sense, {}};
-    if (source.loops.front().fins.size() == 1) {
+    FaceData face;
+    face.source = &source;
+    face.plane = plane;
+    face.cylinder = cylinder;
+    face.natural_sense = source.face_sense == surface.value()->sense;
+    if (cylinder || source.loops.front().fins.size() == 1) {
       const auto conic = PrepareConicFace(face);
       if (!conic.ok()) return conic;
       faces_.push_back(std::move(face));
@@ -319,7 +356,10 @@ Result<bool> BodyWriter::CheckVertexLinks() {
   // Each polygon corner links its incoming and outgoing edges at one vertex.
   // A manifold vertex has one connected cycle (interior) or chain (boundary).
   // Edge valence alone would miss two sheets/shells pinched at a vertex.
-  std::map<uint32_t, std::map<uint32_t, std::vector<uint32_t>>> links;
+  // Distinguish the two ends of a closed edge at its single seam vertex.
+  // Collapsing both ends to the edge ID would falsely report four-valence
+  // when a circular edge is shared by a cap and a cylindrical mantle.
+  std::map<uint32_t, std::map<uint64_t, std::vector<uint64_t>>> links;
   for (const auto& face : faces_) {
     for (const auto& loop : face.source->loops) {
       const auto& fins = loop.fins;
@@ -327,9 +367,13 @@ Result<bool> BodyWriter::CheckVertexLinks() {
         // Vertex-free conic rings have no source vertex link; serialization
         // creates their seam locally on the shared STEP edge.
         if (!fins[i].use.start_vertex.value) continue;
+        const auto& previous = fins[(i + fins.size() - 1) % fins.size()].use;
         const auto incoming =
-            fins[(i + fins.size() - 1) % fins.size()].use.edge.value;
-        const auto outgoing = fins[i].use.edge.value;
+            static_cast<uint64_t>(previous.edge.value) * 2 +
+            (previous.sense == TopologySense::kForward ? 1u : 0u);
+        const auto outgoing =
+            static_cast<uint64_t>(fins[i].use.edge.value) * 2 +
+            (fins[i].use.sense == TopologySense::kForward ? 0u : 1u);
         auto& link = links[fins[i].use.start_vertex.value];
         link[incoming].push_back(outgoing);
         link[outgoing].push_back(incoming);
@@ -351,8 +395,8 @@ Result<bool> BodyWriter::CheckVertexLinks() {
       return Result<bool>::Err(
           Error(NodeId{vertex}, ErrorCode::kUnsupportedFormat,
                 "Vertex link is not a single manifold cycle or chain"));
-    std::set<uint32_t> visited{link.begin()->first};
-    std::vector<uint32_t> pending{link.begin()->first};
+    std::set<uint64_t> visited{link.begin()->first};
+    std::vector<uint64_t> pending{link.begin()->first};
     for (std::size_t i = 0; i < pending.size(); ++i) {
       for (const auto next : link.find(pending[i])->second)
         if (visited.insert(next).second) pending.push_back(next);
@@ -446,10 +490,32 @@ Result<bool> BodyWriter::CheckSolid() {
     return Result<bool>::Err(
         Error(body_.topology.boundary.body, ErrorCode::kUnsupportedFormat,
               "Solid export requires one connected closed face shell"));
-  const auto origin = faces_.front().polygons.front().front();
+  // Use a local boundary point rather than an arbitrary distant surface origin.
+  const auto& first = faces_.front();
+  const auto origin = first.polygons.empty() ? first.reference_point
+                                             : first.polygons.front().front();
   long double volume6 = 0;
   for (std::size_t i = 0; i < faces_.size(); ++i) {
-    for (const auto& polygon : faces_[i].polygons) {
+    const auto& face = faces_[i];
+    if (face.cylinder || face.conic_area > 0) {
+      const auto sign = face.natural_sense != reversed_[i] ? 1.L : -1.L;
+      if (face.cylinder) {
+        // Divergence theorem: the complete radial integral of a cylindrical
+        // band is 2*pi*r^2*h; translation terms cancel around the full turn.
+        const auto radius = static_cast<long double>(face.cylinder->radius);
+        volume6 += sign * 4 * std::numbers::pi_v<long double> * radius *
+                   radius * face.axial_height;
+      } else {
+        const auto& p = face.reference_point;
+        const auto& n = face.plane->normal;
+        const auto distance = (static_cast<long double>(p.x) - origin.x) * n.x +
+                              (static_cast<long double>(p.y) - origin.y) * n.y +
+                              (static_cast<long double>(p.z) - origin.z) * n.z;
+        volume6 += sign * 2 * face.conic_area * distance;
+      }
+      continue;
+    }
+    for (const auto& polygon : face.polygons) {
       const auto a = Difference(polygon.front(), origin);
       for (std::size_t j = 1; j + 1 < polygon.size(); ++j) {
         const auto b = Difference(polygon[j], origin),
@@ -493,15 +559,26 @@ Result<Id> BodyWriter::Face(std::size_t index) {
     }
     const auto loop = writer_.Add("EDGE_LOOP(''," + References(uses) + ')');
     bounds.push_back(writer_.Add(
-        std::string(i == face.outer_loop ? "FACE_OUTER_BOUND" : "FACE_BOUND") +
+        std::string(face.outer_loop && i == *face.outer_loop
+                        ? "FACE_OUTER_BOUND"
+                        : "FACE_BOUND") +
         "(''," + Reference(loop) + ',' + Logical(!reversed_[index]) + ')'));
   }
-  const auto placement = writer_.Placement(
-      face.plane->origin, face.plane->normal, face.plane->x_axis);
-  const auto plane = writer_.Add("PLANE(''," + Reference(placement) + ')');
+  Id surface = 0;
+  if (face.cylinder) {
+    const auto& cylinder = *face.cylinder;
+    const auto placement =
+        writer_.Placement(cylinder.origin, cylinder.axis, cylinder.x_axis);
+    surface = writer_.Add("CYLINDRICAL_SURFACE(''," + Reference(placement) +
+                          ',' + writer_.Number(cylinder.radius) + ')');
+  } else {
+    const auto placement = writer_.Placement(
+        face.plane->origin, face.plane->normal, face.plane->x_axis);
+    surface = writer_.Add("PLANE(''," + Reference(placement) + ')');
+  }
   const auto result = writer_.Add(
-      "ADVANCED_FACE(''," + References(bounds) + "," + Reference(plane) + ',' +
-      Logical(face.natural_sense != reversed_[index]) + ')');
+      "ADVANCED_FACE(''," + References(bounds) + "," + Reference(surface) +
+      ',' + Logical(face.natural_sense != reversed_[index]) + ')');
   ++statistics_.faces;
   return Result<Id>::Ok(result);
 }

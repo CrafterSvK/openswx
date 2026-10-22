@@ -28,5 +28,12 @@ struct ConicBoundary {
     std::span<const ConicBoundary> loops,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
+// Validates a complete cylindrical band bounded by two full circular loops.
+// Both cuts must be coaxial, at distinct axial levels and oppositely wound.
+// Returns the positive height and consumes one shared boundary comparison.
+[[nodiscard]] openparasolid::Result<long double> ValidateCylinderLoops(
+    std::span<const ConicBoundary> loops,
+    const openparasolid::CylinderGeometry& cylinder, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks);
 }  // namespace openswstep::internal
 #endif  // OPENSWSTEP_SRC_CONIC_BOUNDARY_H_

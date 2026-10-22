@@ -513,6 +513,120 @@ TEST(OpenSwStep, ParsesCircularFaceLoopsThroughTheBinaryEntryPoint) {
   EXPECT_EQ(result.value().statistics.edges, 3);
   CheckReferences(result.value());
 }
+TEST(OpenSwStep, ExportsExactCylindersAndTubesWithSharedCircularEdges) {
+  for (const bool tube : {false, true}) {
+    for (const bool named_seams : {false, true}) {
+      const auto result = Export(test::Cylinder(tube, named_seams));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, tube ? 4 : 3);
+      EXPECT_EQ(result.value().statistics.edges, tube ? 4 : 2);
+      EXPECT_EQ(result.value().statistics.vertices, tube ? 4 : 2);
+      EXPECT_EQ(result.value().statistics.solids, 1);
+      EXPECT_NE(result.value().text.find("=CYLINDRICAL_SURFACE("),
+                std::string::npos);
+      CheckReferences(result.value());
+    }
+  }
+}
+TEST(OpenSwStep, ExportsFullCylinderMantlesAndClosedSheets) {
+  for (const bool mantle_only : {false, true}) {
+    const auto result =
+        Export(test::Cylinder(false, false, false, mantle_only));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, mantle_only ? 1 : 3);
+    EXPECT_EQ(result.value().statistics.solids, 0);
+    EXPECT_NE(result.value().text.find(mantle_only ? "=OPEN_SHELL("
+                                                   : "=CLOSED_SHELL("),
+              std::string::npos);
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, HandlesCylinderLoopOrderAxisAndNegativeSenses) {
+  auto reversed_loops = test::Cylinder();
+  test::Set(reversed_loops, 302, "loop", 605);
+  test::Set(reversed_loops, 605, "next", 604);
+  test::Set(reversed_loops, 604, "next", 0);
+  auto negative_senses = test::Cylinder();
+  test::Set(negative_senses, 302, "sense", '-');
+  test::Set(negative_senses, 702, "sense", '-');
+  auto negative_axis = test::Cylinder();
+  for (auto& node : negative_axis.report.nodes)
+    if (node.index == 702) node.fields[1].values = {0., 0., -1.};
+  for (const auto& fixture : {reversed_loops, negative_senses, negative_axis}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.solids, 1);
+  }
+}
+TEST(OpenSwStep, ChecksCompleteCylinderCutsBeyondBindingSamples) {
+  auto tilted = test::Cylinder(false, false, false, true);
+  constexpr double angle = 1e-6;
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4001)
+      node.fields[1].values = {0., std::sin(angle), std::cos(angle)};
+  const auto result = Export(tilted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(result.error().message.find("tilted"), std::string::npos);
+  for (const double height : {0., 1e-8, 1e-5}) {
+    auto short_band = test::Cylinder(false, false, false, true);
+    for (auto& node : short_band.report.nodes)
+      if (node.index == 4001) node.fields[0].values = {0., 0., height};
+    const auto band = Export(short_band);
+    EXPECT_EQ(band.ok(), height > 2 * Options().tolerance);
+    if (!band.ok()) EXPECT_EQ(band.error().code, ErrorCode::kInvalidRecord);
+  }
+  auto wrong_winding = test::Cylinder(false, false, false, true);
+  test::Set(wrong_winding, 4001, "sense", '-');
+  const auto winding = Export(wrong_winding);
+  ASSERT_FALSE(winding.ok());
+  EXPECT_NE(winding.error().message.find("winding"), std::string::npos);
+}
+TEST(OpenSwStep, BoundsCylinderAndCapComparisonsAcrossTheBody) {
+  auto options = Options();
+  // Two annular cap containment checks plus one cut-pair check per mantle.
+  options.max_polygon_checks = 4;
+  const auto exact = Export(test::Cylinder(true), options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  options.max_polygon_checks = 3;
+  const auto limited = Export(test::Cylinder(true), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsInvertedCurvedSolidsUsingAnalyticVolume) {
+  auto inverted = test::Cylinder(true);
+  for (uint32_t i = 0; i < 4; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto result = Export(inverted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(result.error().message.find("signed volume"), std::string::npos);
+}
+TEST(OpenSwStep, ParsesCylindricalSolidsThroughTheBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::Cylinder(true, true));
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.faces, 4);
+  EXPECT_EQ(result.value().statistics.edges, 4);
+  EXPECT_EQ(result.value().statistics.solids, 1);
+  CheckReferences(result.value());
+}
+TEST(OpenSwStep, PreservesDistinctSeamPhasesOnCylinderCuts) {
+  for (const bool named_seams : {false, true}) {
+    const auto result = Export(test::ShiftedCylinderSeams(named_seams));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.vertices, 2);
+    EXPECT_EQ(result.value().statistics.edges, 2);
+    CheckReferences(result.value());
+  }
+}
 class StepFileTest : public testing::Test {
  protected:
   std::filesystem::path root;

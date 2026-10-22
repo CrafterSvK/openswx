@@ -16,6 +16,18 @@ int main(int argc, char** argv) {
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
           {"tetra", test::Tetrahedron()},
+          {"cylinder", test::Cylinder()},
+          {"cylinder-shifted-seams", test::ShiftedCylinderSeams()},
+          {"cylinder-shifted-frames", test::ShiftedCylinderSeams(false)},
+          {"cylinder-loop-order", test::ReversedCylinder()},
+          {"cylinder-axis", test::ReversedCylinder(true)},
+          {"cylinder-seams", test::Cylinder(false, true)},
+          {"tube", test::Cylinder(true)},
+          {"tube-seams", test::Cylinder(true, true)},
+          {"cylinder-mantle", test::Cylinder(false, false, false, true)},
+          {"cylinder-sheet", test::Cylinder(false, false, false)},
+          {"oblique-cylinder", test::RotateAndTranslate(test::Cylinder())},
+          {"oblique-tube", test::RotateAndTranslate(test::Cylinder(true))},
           {"disk", test::ConicSheet()},
           {"disk-seam", test::ConicSheet({test::ConicLoopSpec{}}, true)},
           {"ellipse-disk", test::ConicSheet({{{0, 0, 0}, 2, 1, true}})},
