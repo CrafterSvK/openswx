@@ -229,6 +229,38 @@ struct ShellTraversalOptions {
     const Model& model, NodeId shell,
     const ShellTraversalOptions& options = {});
 
+struct ShellEdgeUseCount {
+  NodeId edge;
+  uint64_t forward_fins = 0;
+  uint64_t reverse_fins = 0;
+};
+struct ShellEdgeIncidence {
+  NodeId shell;
+  uint64_t boundary_edges = 0;
+  uint64_t paired_edges = 0;
+  uint64_t higher_valence_edges = 0;
+  uint64_t face_fins = 0;
+  uint64_t isolated_loops = 0;
+  // Sorted by edge ID; wires and dummy radial anchors are excluded.
+  std::vector<ShellEdgeUseCount> edges;
+};
+struct ShellEdgeIncidenceOptions {
+  uint64_t max_faces = 10000;
+  uint64_t max_loops = 10000;
+  uint64_t max_fins = 100000;
+  uint64_t max_edges = 100000;
+};
+// Counts source face-boundary incidence in a previously traversed shell.
+// Stored faces count once, even when used on both shell sides. One, two and
+// more fin uses classify boundary, paired and higher-valence edges. A seam's
+// two fins on one face count separately. Isolated loops consume the fin budget
+// but have no edge use. Positive aggregate limits bound work and storage.
+// Does not revalidate connectivity, orient face sides or compare geometry.
+// Paired edges alone do not certify manifold vertices, connectedness, shell
+// closure, hole orientation or volume. Empty/wire/acorn shells have no entries.
+[[nodiscard]] Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
+    const ShellBoundary& shell, const ShellEdgeIncidenceOptions& options = {});
+
 enum class RegionKind { kSolid, kVoid };
 struct RegionBoundary {
   NodeId region;

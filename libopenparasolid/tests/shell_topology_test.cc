@@ -400,5 +400,99 @@ TEST(ParasolidShellTopology, OwnsCachedFaceIndicesAcrossCopiesAndMoves) {
   EXPECT_EQ(moved.faces[moved.face_uses.back().boundary].face, NodeId{10});
   EXPECT_EQ(moved.wire_edges[0].end_vertex, NodeId{41});
 }
+ShellBoundary IncidenceShell() {
+  ShellBoundary shell;
+  shell.shell = NodeId{1};
+  FaceBoundary first, second;
+  first.face = NodeId{2};
+  second.face = NodeId{3};
+  LoopBoundary loop;
+  for (uint32_t edge : {9u, 3u, 3u, 7u, 7u, 7u}) {
+    FinUse fin;
+    fin.fin = NodeId{static_cast<uint32_t>(loop.fins.size() + 10)};
+    fin.edge = NodeId{edge};
+    fin.sense = loop.fins.size() == 2 || loop.fins.size() == 5
+                    ? TopologySense::kReverse
+                    : TopologySense::kForward;
+    loop.fins.push_back(fin);
+  }
+  first.loops.push_back(loop);
+  loop.fins = {loop.fins.back()};
+  loop.fins[0].fin = NodeId{30};
+  second.loops.push_back(loop);
+  LoopBoundary isolated;
+  isolated.isolated_vertex = IsolatedLoopVertex{NodeId{31}, NodeId{32}};
+  second.loops.push_back(isolated);
+  shell.faces = {first, second};
+  shell.face_uses = {{0, ShellFaceSide::kFront},
+                     {0, ShellFaceSide::kBack},
+                     {1, ShellFaceSide::kFront}};
+  shell.wire_edges.push_back({NodeId{100}, {}, {}, {}});
+  return shell;
+}
+TEST(ParasolidShellIncidence, CountsSeamsAndValenceWithoutDoublingFaceSides) {
+  const auto result = AnalyzeShellEdgeIncidence(IncidenceShell(), {2, 3, 8, 3});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().shell, NodeId{1});
+  EXPECT_EQ(result.value().boundary_edges, 1);
+  EXPECT_EQ(result.value().paired_edges, 1);
+  EXPECT_EQ(result.value().higher_valence_edges, 1);
+  EXPECT_EQ(result.value().face_fins, 7);
+  EXPECT_EQ(result.value().isolated_loops, 1);
+  const auto& edges = result.value().edges;
+  ASSERT_EQ(edges.size(), 3);
+  EXPECT_EQ(edges[0].edge, NodeId{3});
+  EXPECT_EQ(edges[0].forward_fins, 1);
+  EXPECT_EQ(edges[0].reverse_fins, 1);
+  EXPECT_EQ(edges[1].edge, NodeId{7});
+  EXPECT_EQ(edges[1].forward_fins, 2);
+  EXPECT_EQ(edges[1].reverse_fins, 2);
+  EXPECT_EQ(edges[2].edge, NodeId{9});
+}
+TEST(ParasolidShellIncidence, BoundsAllVisitsAndStorageBeforeReturningResults) {
+  const auto shell = IncidenceShell();
+  for (int field = 0; field < 4; ++field) {
+    ShellEdgeIncidenceOptions options{2, 3, 8, 3};
+    uint64_t* selected = field == 0   ? &options.max_faces
+                         : field == 1 ? &options.max_loops
+                         : field == 2 ? &options.max_fins
+                                      : &options.max_edges;
+    --*selected;
+    auto result = AnalyzeShellEdgeIncidence(shell, options);
+    ASSERT_FALSE(result.ok()) << field;
+    EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+    *selected = 0;
+    result = AnalyzeShellEdgeIncidence(ShellBoundary{}, options);
+    ASSERT_FALSE(result.ok()) << field;
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+}
+TEST(ParasolidShellIncidence, TraversedWireAndAcornShellsHaveNoFaceEdges) {
+  for (const auto& fixture : {Fixture(), Acorn()}) {
+    const auto model = ModelBuilder::Build(fixture.report);
+    ASSERT_TRUE(model.ok());
+    const auto shell = TraverseShellBoundary(model.value(), NodeId{1});
+    ASSERT_TRUE(shell.ok()) << shell.error().message;
+    const auto result = AnalyzeShellEdgeIncidence(shell.value());
+    ASSERT_TRUE(result.ok());
+    EXPECT_TRUE(result.value().edges.empty());
+    EXPECT_EQ(result.value().face_fins, 0);
+    EXPECT_EQ(result.value().boundary_edges, 0);
+    EXPECT_EQ(result.value().paired_edges, 0);
+  }
+}
+TEST(ParasolidShellIncidence, RejectsMalformedEdgeUsesAndMixedIsolatedLoops) {
+  for (int bad = 0; bad < 3; ++bad) {
+    auto shell = IncidenceShell();
+    auto& fin = shell.faces[0].loops[0].fins[0];
+    if (bad == 0) fin.edge = NodeId{};
+    if (bad == 1) fin.sense = static_cast<TopologySense>(99);
+    if (bad == 2)
+      shell.faces[0].loops[0].isolated_vertex = IsolatedLoopVertex{};
+    const auto result = AnalyzeShellEdgeIncidence(shell);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+}
 }  // namespace
 }  // namespace openparasolid

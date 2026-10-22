@@ -1333,6 +1333,12 @@ TEST(ParasolidBodyFaceBinding, BindsUniqueFacesAndPreservesBothSourceSides) {
       4);
   EXPECT_EQ(result.value().topology.edges.size(), 1);
   EXPECT_EQ(result.value().topology.vertices.size(), 1);
+  const auto incidence = AnalyzeShellEdgeIncidence(
+      result.value().topology.boundary.regions[0].shells[0]);
+  ASSERT_TRUE(incidence.ok());
+  EXPECT_EQ(incidence.value().paired_edges, 1);
+  EXPECT_EQ(incidence.value().face_fins, 2);
+
   EXPECT_LT(result.value().faces[1].loops[0].fins[0].end,
             result.value().faces[1].loops[0].fins[0].start);
 }

@@ -234,25 +234,26 @@ int main(int argc, char *argv[]) {
               !model.value().typed_geometry_complete())
             status = 2;
           if (settings.body_topology) {
-            const auto topology = [&]()
-                -> openparasolid::Result<openparasolid::ValidatedBodyTopology> {
+            const auto topology = [&]() -> openparasolid::Result<json> {
               if (!parsed.value().complete ||
                   (parsed.value().header.kind !=
                        openparasolid::StreamKind::kTransmit &&
                    parsed.value().header.kind !=
                        openparasolid::StreamKind::kPartition))
-                return openparasolid::
-                    Result<openparasolid::ValidatedBodyTopology>::Err(
-                        {openparasolid::ErrorCode::kUnsupportedFormat, 0,
-                         "Body topology requires a complete transmit or "
-                         "partition stream"});
-              return openparasolid::ValidateBodyTopology(
+                return openparasolid::Result<json>::Err(
+                    {openparasolid::ErrorCode::kUnsupportedFormat, 0,
+                     "Body topology requires a complete transmit or "
+                     "partition stream"});
+              const auto validated = openparasolid::ValidateBodyTopology(
                   model.value(),
                   openparasolid::NodeId{*settings.body_topology});
+              if (!validated.ok())
+                return openparasolid::Result<json>::Err(validated.error());
+              return openparasolid::cli::BodyTopologyReport(validated.value(),
+                                                            summary);
             }();
             if (topology.ok()) {
-              report["body_topology"] = openparasolid::cli::BodyTopologyReport(
-                  topology.value(), summary);
+              report["body_topology"] = topology.value();
             } else {
               report["body_topology"] = nullptr;
               report["body_topology_error"] = {

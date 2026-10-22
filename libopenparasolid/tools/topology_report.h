@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "model_report.h"
 #include "openparasolid/brep.h"
@@ -22,16 +23,51 @@ inline json FinUseReport(const FinUse& fin) {
       {"fin_curve", fin.fin_curve.value},
       {"sense", fin.sense == TopologySense::kForward ? "forward" : "reverse"}};
 }
-inline json BodyTopologyReport(const ValidatedBodyTopology& body,
-                               bool summary) {
+inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
+                                 bool summary) {
+  json out{{"boundary_edges", incidence.boundary_edges},
+           {"paired_edges", incidence.paired_edges},
+           {"higher_valence_edges", incidence.higher_valence_edges},
+           {"face_fins", incidence.face_fins},
+           {"isolated_loops", incidence.isolated_loops}};
+  if (!summary) {
+    out["edges"] = json::array();
+    for (const auto& edge : incidence.edges) {
+      const auto uses = edge.forward_fins + edge.reverse_fins;
+      out["edges"].push_back(
+          {{"edge", edge.edge.value},
+           {"forward_fins", edge.forward_fins},
+           {"reverse_fins", edge.reverse_fins},
+           {"uses", uses},
+           {"classification", uses == 1   ? "boundary"
+                              : uses == 2 ? "paired"
+                                          : "higher_valence"}});
+    }
+  }
+  return out;
+}
+inline Result<json> BodyTopologyReport(const ValidatedBodyTopology& body,
+                                       bool summary) {
   std::unordered_set<uint32_t> faces;
   std::size_t shells = 0, uses = 0, wires = 0, radial_fins = 0;
+  std::vector<json> incidence_reports;
+  ShellEdgeIncidence total_incidence;
+
   for (const auto& region : body.boundary.regions) {
     shells += region.shells.size();
     for (const auto& shell : region.shells) {
       uses += shell.face_uses.size();
       wires += shell.wire_edges.size();
       for (const auto& face : shell.faces) faces.insert(face.face.value);
+      const auto incidence = AnalyzeShellEdgeIncidence(shell);
+      if (!incidence.ok()) return Result<json>::Err(incidence.error());
+      const auto& counts = incidence.value();
+      total_incidence.boundary_edges += counts.boundary_edges;
+      total_incidence.paired_edges += counts.paired_edges;
+      total_incidence.higher_valence_edges += counts.higher_valence_edges;
+      total_incidence.face_fins += counts.face_fins;
+      total_incidence.isolated_loops += counts.isolated_loops;
+      incidence_reports.push_back(ShellIncidenceReport(counts, summary));
     }
   }
   for (const auto& edge : body.edges) radial_fins += edge.fins.size();
@@ -61,7 +97,9 @@ inline json BodyTopologyReport(const ValidatedBodyTopology& body,
              {"edges", body.edges.size()},
              {"radial_fins", radial_fins},
              {"vertices", body.vertices.size()}}}};
-  if (summary) return out;
+  out["shell_edge_incidence"] = ShellIncidenceReport(total_incidence, true);
+  if (summary) return Result<json>::Ok(std::move(out));
+  std::size_t shell_index = 0;
   out["regions"] = json::array();
   for (const auto& region : body.boundary.regions) {
     json r{{"region", region.region.value},
@@ -74,6 +112,7 @@ inline json BodyTopologyReport(const ValidatedBodyTopology& body,
              {"faces", json::array()},
              {"wires", json::array()},
              {"isolated_vertex", nullptr}};
+      s["edge_incidence"] = std::move(incidence_reports[shell_index++]);
       for (const auto& use : shell.face_uses)
         s["face_uses"].push_back(
             {{"face", shell.faces[use.boundary].face.value},
@@ -138,7 +177,7 @@ inline json BodyTopologyReport(const ValidatedBodyTopology& body,
             fin.edge_use ? FinUseReport(*fin.edge_use) : json(nullptr)}});
     out["vertices"].push_back(std::move(v));
   }
-  return out;
+  return Result<json>::Ok(std::move(out));
 }
 }  // namespace openparasolid::cli
 #endif  // OPENPARASOLID_TOOLS_TOPOLOGY_REPORT_H_

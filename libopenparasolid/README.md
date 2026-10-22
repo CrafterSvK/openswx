@@ -2005,6 +2005,56 @@ failure propagation, and vertex-free rings with different parameter seams.
 The 57-body private regression selection retains all 56 automatic successes
 and the remaining success with eight explicit fin intervals.
 
+## Shell edge incidence diagnostics
+
+`AnalyzeShellEdgeIncidence(shell, options)` summarizes a previously traversed
+shell's stored face boundaries without evaluating geometry. It returns edge
+records sorted by ID, with forward/reverse fin counts, and totals:
+
+| Count | Meaning |
+|---|---|
+| `boundary_edges` | Exactly one face-boundary fin uses the edge in this shell. |
+| `paired_edges` | Exactly two face-boundary fins use it. |
+| `higher_valence_edges` | More than two face-boundary fins use it. |
+| `face_fins` | Number of non-isolated face-boundary fins counted. |
+| `isolated_loops` | Vertex-only loops, which have no edge use. |
+
+Each stored face is counted once, independently of front/back shell-side uses.
+Two seam fins on the same face count separately. Wire edges and dummy radial
+anchors are excluded. The analysis neither merges repeated source faces across
+shells/regions nor infers orientations from shell sides. Forward/reverse counts
+retain each fin's natural edge sense. Two fins need not have opposite senses;
+`paired_edges` describes valence only.
+
+Positive limits bound stored faces, aggregate loops, aggregate fins (including
+one per isolated loop), and distinct edges. Defaults are 10,000 faces/loops and
+100,000 fins/edges. Exact limits are accepted; exhaustion returns
+`kResourceLimit` with no partial result. Zero limits return `kInvalidOptions`.
+The API rejects null edge references, unknown fin senses and loops mixing
+isolated-vertex and edge-fin data, but does not revalidate full connectivity.
+Use `TraverseShellBoundary` or `ValidateBodyTopology` first.
+
+`--body-topology` adds aggregate `shell_edge_incidence` counts in both full and
+summary reports. Full output additionally includes each shell's
+`edge_incidence`, with counts and sorted edge records (`edge`, `uses`,
+`forward_fins`, `reverse_fins`, `classification`). Aggregates sum shell
+occurrences, so an edge shared by shells or regions can contribute more than
+once. Diagnostics do not change the CLI status for otherwise valid topology.
+No CLI settings or dependencies are added.
+
+These counts help locate open boundaries and higher valences. Even if every
+edge has two fins, vertex manifoldness, connectedness, geometric closure, hole
+orientation and positive volume remain unproven. Wire/acorn shells may have no
+face-edge entries and are not classified as closed solids.
+
+Tests cover mixed valences, opposite senses and seams, two-sided face reuse,
+wire/acorn shells, isolated loops, invalid data and exact/aggregate budgets.
+Independent counting from all 57 private CLI topology reports verifies 30
+boundary and 2,666 paired shell-edge occurrences, no higher-valence edges,
+5,362 face fins and two isolated-loop occurrences. All earlier topology counts
+and automatic geometry outcomes remain unchanged. Private inputs, comparison
+scripts and reports remain outside the repository.
+
 ## Inspecting validated body topology
 
 ```bash

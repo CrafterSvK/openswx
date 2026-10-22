@@ -153,7 +153,9 @@ TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
        NodeId{1},
        NodeId{18},
        {{NodeId{7}, NodeId{6}, fin}, {NodeId{14}, NodeId{13}, std::nullopt}}});
-  const auto report = cli::BodyTopologyReport(topology, false);
+  const auto full_result = cli::BodyTopologyReport(topology, false);
+  ASSERT_TRUE(full_result.ok()) << full_result.error().message;
+  const auto& report = full_result.value();
   EXPECT_EQ(report["kind"], "sheet");
   EXPECT_EQ(report["counts"]["faces"], 1);
   EXPECT_EQ(report["counts"]["face_uses"], 2);
@@ -167,7 +169,16 @@ TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
   EXPECT_EQ(report["edges"][0]["fins"][0]["sense"], "reverse");
   EXPECT_EQ(report["edges"][0]["fins"][1]["loop"], 0);
   EXPECT_TRUE(report["vertices"][0]["fins"][1]["edge_use"].is_null());
-  const auto summary = cli::BodyTopologyReport(topology, true);
+  const auto summary_result = cli::BodyTopologyReport(topology, true);
+  ASSERT_TRUE(summary_result.ok());
+  const auto& summary = summary_result.value();
+  EXPECT_EQ(report["shell_edge_incidence"]["boundary_edges"], 1);
+  EXPECT_EQ(report["shell_edge_incidence"]["face_fins"], 1);
+  EXPECT_EQ(report["shell_edge_incidence"]["isolated_loops"], 1);
+  EXPECT_EQ(s["edge_incidence"]["edges"][0]["edge"], 8);
+  EXPECT_EQ(s["edge_incidence"]["edges"][0]["classification"], "boundary");
+  EXPECT_EQ(summary["shell_edge_incidence"], report["shell_edge_incidence"]);
+
   EXPECT_EQ(summary["counts"], report["counts"]);
   EXPECT_FALSE(summary.contains("regions"));
   EXPECT_FALSE(summary.contains("edges"));
