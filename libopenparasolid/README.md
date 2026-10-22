@@ -273,10 +273,17 @@ the complete pipeline binds 55 of 57 body occurrences in the 39-stream
 selection (25 with faces, 30 without). All 53 earlier successes remain
 supported. Chord-plane recovery adds two bodies with 52 faces and 168 fin
 uses; totals are now 583 bound faces and 2,652 fin uses. Two bodies remain
-unsupported: an unresolved fin trim and unsupported spun-surface inversion.
+unsupported at that stage: an unresolved fin trim and spun-surface inversion.
 Synthetic regressions cover original parameter units, straight/curved interior
 points, both fin directions, off-curve and outside-chart points, multiple solved
 parameters on repeated branches and finite recovery budgets.
+
+Circular spun inversion subsequently raises the same body comparison to 56 of
+57 successful occurrences (26 with faces and 30 without), retaining all 55
+previous successes, for totals of 588 faces and 2,664 fin uses. Only the fin
+without an inferred interval remains unsupported. Tests cover source coordinates, translated and oblique axes,
+period lifting and one-sided bounds, preferred seeds and fallback, accepted
+frame residuals, off-surface points, invalid requests and unsupported profiles.
 
 ## Analytic offset surfaces
 
@@ -1219,10 +1226,24 @@ including its geometry/frame validity, domain and representability rules.
 Invalid request values return `kInvalidOptions`; nonmatching points, candidate
 parameters outside the natural domain and invalid definitions/results return
 `kInvalidRecord`. Missing or untyped model targets retain explicit lookup
-errors. Spun, swept and other unsupported geometry kinds return
+errors. Swept and unsupported spun or other geometry kinds return
 `kUnsupportedFormat`. Surface/face senses, placement and units are not applied.
 The analytic inversion uses bounded stack storage. Both paths add no CLI
 settings or dependencies and remain MIT and STL-only.
+
+The model/ID overload also inverts `SPUN_SURF` with a direct circular profile
+in a meridian plane and major radius greater than profile radius. It keeps the
+original circle parameter and spin angle, lifts the initial circle angle into
+the stored profile bounds, and checks candidates with the actual model surface
+evaluator. A bounded damped QR iteration handles accepted source-frame residuals;
+it does not replace the geometry with a canonical torus. A finite preferred seed
+is tried first, clamped to profile bounds, with an analytic fallback. The shared
+budget is 128 forward evaluations, at most 24 updates per start and eight damping
+trials per update. Exhaustion returns `kResourceLimit`; failed local searches do
+not prove absence of a preimage. Tolerance, including zero, is unchanged. General
+profiles, tilted circles and horn/apple/lemon cases remain unsupported. This
+extends model inversion and face binding; intersection charts still require
+analytic or NURBS supports.
 
 Together with `EvaluateSurfaceNormal`, inversion allows callers to obtain
 oriented normals at analytic and NURBS chart positions.

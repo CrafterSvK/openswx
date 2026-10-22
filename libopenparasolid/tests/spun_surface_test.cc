@@ -57,6 +57,139 @@ void ExpectVector(Vector3 actual, Vector3 expected, double tolerance = 1e-12) {
   EXPECT_NEAR(actual.y, expected.y, tolerance);
   EXPECT_NEAR(actual.z, expected.z, tolerance);
 }
+void Circle(ModelFixture& f, Vector3 center = {3, 0, 0},
+            Vector3 normal = {0, 1, 0}, Vector3 x = {1, 0, 0},
+            double radius = 1) {
+  f.Add(31, 1,
+        {Numbers("center", {center.x, center.y, center.z}, FieldType::kVector),
+         Numbers("normal", {normal.x, normal.y, normal.z}, FieldType::kVector),
+         Numbers("x_axis", {x.x, x.y, x.z}, FieldType::kVector),
+         Numbers("radius", {radius}),
+         ByteValue("sense", '-', FieldType::kCharacter)});
+}
+TEST(ParasolidSpunSurface, InvertsCircularRingsInSourceCoordinates) {
+  for (bool oblique : {false, true}) {
+    ModelFixture f;
+    if (oblique) {
+      Spun(f, 1, {}, {}, {1, 2, 3}, {0, .6, .8});
+      Circle(f, {4, 2, 3}, {0, .8, -.6}, {.8, .36, .48});
+    } else {
+      Spun(f);
+      Circle(f);
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    for (double u : {-3., -.8, 0., 1.7, 3.}) {
+      for (double v : {-2.7, 0., .6, 2.9}) {
+        const auto point = EvaluateSurface(model.value(), NodeId{20}, u, v);
+        ASSERT_TRUE(point.ok());
+        const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                           point.value().position, 1e-12);
+        ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+        EXPECT_NEAR(inverse.value().u, u, 1e-12);
+        EXPECT_NEAR(inverse.value().v, v, 1e-12);
+        EXPECT_LE(inverse.value().residual, 1e-12);
+      }
+    }
+  }
+}
+TEST(ParasolidSpunSurface, InversionHonorsLiftedAndOneSidedProfileBounds) {
+  for (int bounds = 0; bounds < 3; ++bounds) {
+    ModelFixture f;
+    Spun(f, 1, bounds == 2 ? std::nullopt : std::optional<double>{4},
+         bounds == 1 ? std::nullopt : std::optional<double>{7});
+    Circle(f);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    for (double u : {4., 5.5, 7.}) {
+      const auto point = EvaluateSurface(model.value(), NodeId{20}, u, .3);
+      ASSERT_TRUE(point.ok());
+      const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                         point.value().position, 1e-12);
+      ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+      if (bounds != 2) EXPECT_GE(inverse.value().u, 4);
+      if (bounds != 1) EXPECT_LE(inverse.value().u, 7);
+      EXPECT_LE(inverse.value().residual, 1e-12);
+    }
+  }
+  ModelFixture f;
+  Spun(f, 1, .1, .2);
+  Circle(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  EXPECT_FALSE(InvertSurface(model.value(), NodeId{20}, {4, 0, 0}, 1e-12).ok());
+}
+TEST(ParasolidSpunSurface, InversionPreservesPreferredPeriodsAndFallsBack) {
+  ModelFixture f;
+  Spun(f);
+  Circle(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const SurfaceParameterSeed seed{8., -9.};
+  const auto point = EvaluateSurface(model.value(), NodeId{20}, seed.u, seed.v);
+  ASSERT_TRUE(point.ok());
+  const auto exact =
+      InvertSurface(model.value(), NodeId{20}, point.value().position, 0, seed);
+  ASSERT_TRUE(exact.ok());
+  EXPECT_EQ(exact.value().u, seed.u);
+  EXPECT_EQ(exact.value().v, seed.v);
+  EXPECT_EQ(exact.value().residual, 0);
+  // At the opposite meridian the local residual is normal to both partials.
+  const auto fallback = InvertSurface(model.value(), NodeId{20}, {4, 0, 0},
+                                      1e-12, {std::numbers::pi, 0});
+  ASSERT_TRUE(fallback.ok()) << fallback.error().message;
+  EXPECT_LE(fallback.value().residual, 1e-12);
+}
+TEST(ParasolidSpunSurface, InversionRefinesAcceptedSourceFrameResiduals) {
+  ModelFixture f;
+  Spun(f, 1, {}, {}, {}, {0, 0, 1 + 2e-11});
+  Circle(f, {3, 0, 0}, {0, 1, 0}, {1 + 2e-11, 0, 0});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto point = EvaluateSurface(model.value(), NodeId{20}, .8, 1.2);
+  ASSERT_TRUE(point.ok());
+  const auto inverse =
+      InvertSurface(model.value(), NodeId{20}, point.value().position, 1e-14);
+  ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+  EXPECT_LE(inverse.value().residual, 1e-14);
+}
+TEST(ParasolidSpunSurface, InversionRejectsOffSurfaceAndInvalidRequests) {
+  ModelFixture f;
+  Spun(f);
+  Circle(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (Vector3 point : {Vector3{0, 0, 0}, Vector3{4.01, 0, 0}}) {
+    const auto inverse = InvertSurface(model.value(), NodeId{20}, point, 1e-6);
+    ASSERT_FALSE(inverse.ok());
+    EXPECT_EQ(inverse.error().code, ErrorCode::kInvalidRecord);
+  }
+  EXPECT_TRUE(InvertSurface(model.value(), NodeId{20}, {4.01, 0, 0}, .02).ok());
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (auto result :
+       {InvertSurface(model.value(), NodeId{20}, {nan, 0, 0}, 1e-6),
+        InvertSurface(model.value(), NodeId{20}, {4, 0, 0}, -1),
+        InvertSurface(model.value(), NodeId{20}, {4, 0, 0}, nan),
+        InvertSurface(model.value(), NodeId{20}, {4, 0, 0}, 1e-6, {nan, 0})}) {
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+}
+TEST(ParasolidSpunSurface, InversionRestrictsProfilesToRegularMeridianRings) {
+  for (int kind = 0; kind < 4; ++kind) {
+    ModelFixture f;
+    Spun(f);
+    if (kind == 0) Line(f);
+    if (kind == 1) Circle(f, {1, 0, 0});
+    if (kind == 2) Circle(f, {.5, 0, 0});
+    if (kind == 3) Circle(f, {3, 0, 0}, {0, 0, 1});
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto inverse = InvertSurface(model.value(), NodeId{20}, {4, 0, 0}, 1);
+    ASSERT_FALSE(inverse.ok());
+    EXPECT_EQ(inverse.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
 TEST(ParasolidSpunSurface, ResolvesForwardProfileAndPreservesNullableMetadata) {
   ModelFixture f;
   Spun(f);

@@ -130,10 +130,17 @@ struct SurfaceParameterSeed {
 /// roots are not guaranteed.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const GeometryPayload& geometry, Vector3 point, double tolerance);
+/// The model overload also inverts circular SPUN_SURF rings whose profile
+/// lies in a meridian plane and whose major radius exceeds its profile radius.
+/// It preserves source profile bounds and refines against the source evaluator:
+/// at most 128 evaluations shared by the preferred and analytic starts, with
+/// 24 updates and eight damping trials per update. Exhaustion returns
+/// kResourceLimit. Other spun profiles remain unsupported.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const Model& model, NodeId surface, Vector3 point, double tolerance);
 
-/// Supplies a preferred starting UV pair for bounded NURBS inversion. Both
+/// Supplies a preferred starting UV pair for bounded NURBS or model-based
+/// circular spun inversion. Spun seeds are clamped to stored profile bounds. Both
 /// coordinates must be finite and, for NURBS, inside the defined knot domain.
 /// Other deterministic starts are tried if local iteration fails. Analytic
 /// surfaces validate the finite seed and use their direct inversion formulas.

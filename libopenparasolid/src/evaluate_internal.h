@@ -27,6 +27,9 @@ namespace openparasolid::internal {
 [[nodiscard]] Result<GeometryPayload> ResolveOffsetSurface(
     const Model& model, NodeId surface,
     std::optional<SurfaceParameterSeed> parameters = std::nullopt);
+[[nodiscard]] Result<SurfaceParameters> InvertSpunSurface(
+    const Model& model, NodeId surface, Vector3 point, double tolerance,
+    std::optional<SurfaceParameterSeed> seed = std::nullopt);
 [[nodiscard]] Result<SurfaceParameters> InvertOffsetSurface(
     const Model& model, NodeId surface, Vector3 point, double tolerance,
     std::optional<SurfaceParameterSeed> seed = std::nullopt);
