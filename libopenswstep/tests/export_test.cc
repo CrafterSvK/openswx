@@ -896,6 +896,142 @@ TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
   EXPECT_EQ(result.value().statistics.solids, 1);
   EXPECT_EQ(result.value().statistics.faces, 6);
 }
+TEST(OpenSwStep, ExportsConvexCurvedContoursWithCircularHoles) {
+  for (const bool inward : {false, true})
+    for (const bool first : {false, true})
+      for (const bool seams : {false, true}) {
+        const auto fixture =
+            test::RoundedRectangleWithCircularHoles(inward, first, seams);
+        for (const auto& source :
+             {fixture, test::RotateAndTranslate(fixture)}) {
+          const auto result = Export(source);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          EXPECT_EQ(result.value().statistics.faces, 1);
+          EXPECT_EQ(result.value().statistics.edges, 10);
+          EXPECT_EQ(result.value().statistics.vertices, 10);
+          CheckReferences(result.value());
+        }
+      }
+  for (const auto& source :
+       {test::WithCircularHole(test::Stadium(), {-1, 0, 0}),
+        test::WithCircularHole(test::HalfDisk(), {0, .5, 0}),
+        test::WithCircularHole(test::MajorCircularSegment(), {0, 0, 0}),
+        test::WithCircularHole(test::CircularLens(), {0, 0, 0}),
+        test::WithCircularHole(test::SplitCircle(), {0, 0, 0}),
+        test::WithCircularHole(
+            test::RotateLineProfile(test::MajorCircularSegment(),
+                                    7 * std::numbers::pi / 4),
+            {0, 0, 0})}) {
+    const auto result = Export(source);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+  }
+}
+TEST(OpenSwStep, ExportsCurvedCapsAndCylindricalThroughBores) {
+  for (const bool seams : {false, true}) {
+    const auto fixture = test::CylinderSectorWithBore(seams);
+    for (const auto& source : {fixture, test::RotateAndTranslate(fixture)}) {
+      const auto result = Export(source);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.solids, 1);
+      EXPECT_EQ(result.value().statistics.faces, 6);
+      EXPECT_EQ(result.value().statistics.edges, 11);
+    }
+  }
+  const auto fixture = test::Serialize(test::CylinderSectorWithBore());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
+}
+TEST(OpenSwStep, RejectsCircularHolesOutsideOrTouchingCurvedContours) {
+  // The first disk crosses an interior arc point while staying inside all
+  // endpoint tangent half-planes. Testing only arc endpoints would accept it.
+  for (const auto center : {Vector3{1.6, .6, 0}, Vector3{1.75, 0, 0},
+                            Vector3{0, .75, 0}, Vector3{3, 0, 0}}) {
+    const auto result = Export(test::WithCircularHole(test::Stadium(), center));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(result.error().message.find("outside or touches"),
+              std::string::npos)
+        << result.error().message;
+  }
+  const auto near =
+      Export(test::WithCircularHole(test::Stadium(), {1.75 - 1e-7, 0, 0}));
+  ASSERT_FALSE(near.ok());
+  ASSERT_TRUE(
+      Export(test::WithCircularHole(test::Stadium(), {1.75 - 3e-7, 0, 0}))
+          .ok());
+}
+TEST(OpenSwStep, RejectsOverlappingNestedOrIncorrectlyWoundCurvedHoles) {
+  for (const double second_x : {1., 1.25, 1.5, 1.5 + 1e-7}) {
+    auto f = test::Stadium();
+    test::ConicLoopSpec a;
+    a.center = {1, 0, 0};
+    a.major = .25;
+    a.reverse_fin = true;
+    auto b = a;
+    b.center.x = second_x;
+    test::AddConicFaceLoops(f, 300, {a, b});
+    const auto result = Export(f);
+    ASSERT_FALSE(result.ok());
+    EXPECT_NE(result.error().message.find("overlap, touch or are nested"),
+              std::string::npos)
+        << result.error().message;
+  }
+  auto nested = test::WithCircularHole(test::Stadium(), {0, 0, 0}, .5);
+  test::ConicLoopSpec inner;
+  inner.major = .1;
+  inner.reverse_fin = true;
+  test::AddConicFaceLoops(nested, 300, {inner}, false, false, 20000);
+  ASSERT_FALSE(Export(nested).ok());
+  auto wrong = test::WithCircularHole(test::Stadium(), {0, 0, 0});
+  test::Set(wrong, 11001, "loop", 0);
+  test::Set(wrong, 11001, "forward", 0);
+  test::Set(wrong, 11001, "backward", 0);
+  test::Set(wrong, 11000, "loop", 10600);
+  test::Set(wrong, 11000, "forward", 11000);
+  test::Set(wrong, 11000, "backward", 11000);
+  test::Set(wrong, 10600, "halfedge", 11000);
+  const auto result = Export(wrong);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("correctly wound"), std::string::npos);
+}
+TEST(OpenSwStep, BoundsCurvedHoleChecksAndRejectsUnsupportedHoleContours) {
+  auto options = Options();
+  options.max_polygon_checks = 8;
+  const auto fixture = test::WithCircularHole(test::Stadium(), {0, 0, 0});
+  ASSERT_TRUE(Export(fixture, options).ok());
+  options.max_polygon_checks = 7;
+  const auto limited = Export(fixture, options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  options.max_polygon_checks = 25;
+  ASSERT_TRUE(Export(test::RoundedRectangleWithCircularHoles(), options).ok());
+  options.max_polygon_checks = 24;
+  const auto paired =
+      Export(test::RoundedRectangleWithCircularHoles(), options);
+  ASSERT_FALSE(paired.ok());
+  EXPECT_EQ(paired.error().code, ErrorCode::kResourceLimit);
+  const auto elliptic_outer =
+      Export(test::WithCircularHole(test::HalfEllipse(), {0, .5, 0}, .1));
+  ASSERT_FALSE(elliptic_outer.ok());
+  EXPECT_EQ(elliptic_outer.error().code, ErrorCode::kUnsupportedFormat);
+  auto elliptic_hole = test::Stadium();
+  test::ConicLoopSpec hole;
+  hole.ellipse = true;
+  hole.major = .25;
+  hole.minor = .2;
+  hole.reverse_fin = true;
+  test::AddConicFaceLoops(elliptic_hole, 300, {hole});
+  const auto unsupported = Export(elliptic_hole);
+  ASSERT_FALSE(unsupported.ok());
+  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+  const auto nonconvex =
+      Export(test::WithCircularHole(test::AnnularSector(), {1.5, 1.5, 0}, .1));
+  ASSERT_FALSE(nonconvex.ok());
+  EXPECT_EQ(nonconvex.error().code, ErrorCode::kUnsupportedFormat);
+}
 TEST(OpenSwStep, ExportsExactConePatchesAndClosedSectors) {
   for (const double slope : {1., -0.25}) {
     for (const double span :

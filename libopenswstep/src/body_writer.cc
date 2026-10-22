@@ -337,14 +337,29 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
-  if (face.source->loops.size() != 1 ||
-      face.source->loops.front().isolated_vertex)
-    return Result<bool>::Err(
-        Error(face.source->face, ErrorCode::kUnsupportedFormat,
-              "Curved planar faces require one non-isolated loop"));
+  std::optional<std::size_t> outer_index;
+  std::vector<ConicBoundary> holes;
+  for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
+    const auto& loop = face.source->loops[i];
+    if (loop.fins.size() == 1) {
+      const auto hole = ReadConicLoop(face.source->face, loop);
+      if (!hole.ok()) return Result<bool>::Err(hole.error());
+      holes.push_back(hole.value());
+    } else {
+      if (outer_index || loop.isolated_vertex)
+        return Result<bool>::Err(
+            Error(face.source->face, ErrorCode::kUnsupportedFormat,
+                  "Curved planar faces require one multi-edge outer loop and "
+                  "complete circular holes"));
+      outer_index = i;
+    }
+  }
+  if (!outer_index)
+    return Result<bool>::Err(Error(face.source->face, ErrorCode::kInvalidRecord,
+                                   "Curved planar face has no outer contour"));
   std::set<uint32_t> vertices;
   std::vector<PlanarCurve> curves;
-  for (const auto& fin : face.source->loops.front().fins) {
+  for (const auto& fin : face.source->loops[*outer_index].fins) {
     if (fin.use.fin_curve.value)
       return Result<bool>::Err(
           Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
@@ -359,6 +374,18 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
     curves.push_back({&basis.value()->payload, fin.start, fin.end});
     uses_[fin.use.edge.value].push_back(
         {faces_.size(), fin.use.sense == TopologySense::kForward});
+  }
+  if (!holes.empty()) {
+    const auto boundary = ValidateConvexCircularHoles(
+        curves, holes, *face.plane, face.natural_sense, options_.tolerance,
+        polygon_checks_remaining_);
+    if (!boundary.ok())
+      return Result<bool>::Err(Error(face.source->face, boundary.error().code,
+                                     boundary.error().message.c_str()));
+    face.planar_area = boundary.value().area;
+    face.reference_point = boundary.value().reference_point;
+    face.outer_loop = *outer_index;
+    return Result<bool>::Ok(true);
   }
   bool reverse_circle = false;
   for (const auto& curve : curves) {
@@ -380,7 +407,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                                      boundary.error().message.c_str()));
     face.planar_area = boundary.value().area;
     face.reference_point = boundary.value().reference_point;
-    face.outer_loop = 0;
+    face.outer_loop = *outer_index;
     return Result<bool>::Ok(true);
   }
   const auto boundary =
@@ -391,7 +418,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                                    boundary.error().message.c_str()));
   face.planar_area = boundary.value().area;
   face.reference_point = boundary.value().reference_point;
-  face.outer_loop = 0;
+  face.outer_loop = *outer_index;
   return Result<bool>::Ok(true);
 }
 Result<bool> BodyWriter::PrepareRuledPatchFace(FaceData& face) {
@@ -487,13 +514,16 @@ Result<bool> BodyWriter::PrepareFaces() {
       faces_.push_back(std::move(face));
       continue;
     }
-    if (plane && source.loops.size() == 1) {
+    if (plane) {
       bool curved = false;
-      for (const auto& fin : source.loops.front().fins) {
-        const auto basis = Basis(fin.curve);
-        if (!basis.ok()) return Result<bool>::Err(basis.error());
-        curved = curved ||
-                 !std::holds_alternative<LineGeometry>(basis.value()->payload);
+      for (const auto& loop : source.loops) {
+        if (loop.fins.size() == 1) continue;
+        for (const auto& fin : loop.fins) {
+          const auto basis = Basis(fin.curve);
+          if (!basis.ok()) return Result<bool>::Err(basis.error());
+          curved = curved || !std::holds_alternative<LineGeometry>(
+                                 basis.value()->payload);
+        }
       }
       if (curved) {
         const auto boundary = PrepareCurvedPlanarFace(face);

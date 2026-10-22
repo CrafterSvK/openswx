@@ -153,6 +153,60 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
         Invalid("Curved boundary segment is degenerate or unrepresentable"));
   return Return::Ok(result);
 }
+// Maximum of A*cos(t)+B*sin(t) on a directed interval no longer than 2*pi.
+// The endpoints and at most one interior maximum cover the entire arc.
+long double ArcMaximum(long double a, long double b, double start, double end) {
+  const long double first = start, last = end;
+  auto maximum = std::max(a * std::cos(first) + b * std::sin(first),
+                          a * std::cos(last) + b * std::sin(last));
+  const auto peak = std::atan2(b, a);
+  constexpr auto kTurn = 2 * std::numbers::pi_v<long double>;
+  auto offset = std::fmod(last > first ? peak - first : first - peak, kTurn);
+  if (offset < 0) offset += kTurn;
+  if (offset <= std::abs(last - first)) maximum = std::hypot(a, b);
+  return maximum;
+}
+Result<long double> DiskClearance(const PlanarCurve& curve, Vector3 center,
+                                  const Frame& frame) {
+  using Return = Result<long double>;
+  if (const auto* circle = std::get_if<CircleGeometry>(curve.geometry)) {
+    const auto& n = circle->normal;
+    const auto& x = circle->x_axis;
+    const auto rx = frame.Direction(x);
+    const auto ry = frame.Direction(
+        {n.y * x.z - n.z * x.y, n.z * x.x - n.x * x.z, n.x * x.y - n.y * x.x});
+    const auto point = frame.Point(center),
+               origin = frame.Point(circle->center);
+    const Point2 d{point.x - origin.x, point.y - origin.y};
+    const long double sign = curve.end > curve.start ? 1 : -1;
+    // Outward normals to projected tangents are N*cos(t)+M*sin(t).
+    // Use the largest singular value of their two-column frame as a bound
+    // on every normal length. It is one for exact coplanar unit frames; the
+    // explicit bound also covers accepted frame roundoff and small tilts.
+    const Point2 nc{sign * ry.y, -sign * ry.x};
+    const Point2 ns{-sign * rx.y, sign * rx.x};
+    const auto maximum =
+        ArcMaximum(d.x * nc.x + d.y * nc.y, d.x * ns.x + d.y * ns.y,
+                   curve.start, curve.end);
+    const auto aa = nc.x * nc.x + nc.y * nc.y;
+    const auto bb = ns.x * ns.x + ns.y * ns.y;
+    const auto ab = nc.x * ns.x + nc.y * ns.y;
+    const auto normal_bound =
+        std::sqrt((aa + bb + std::hypot(aa - bb, 2 * ab)) / 2);
+    return Return::Ok((circle->radius * std::abs(Cross(rx, ry)) - maximum) /
+                      normal_bound);
+  }
+  const auto a = EvaluateCurve(*curve.geometry, curve.start);
+  const auto b = EvaluateCurve(*curve.geometry, curve.end);
+  if (!a.ok()) return Return::Err(a.error());
+  if (!b.ok()) return Return::Err(b.error());
+  const auto first = frame.Point(a.value().position),
+             last = frame.Point(b.value().position),
+             point = frame.Point(center);
+  const Point2 tangent{last.x - first.x, last.y - first.y};
+  return Return::Ok(Cross(tangent, {point.x - first.x, point.y - first.y}) /
+                    std::hypot(tangent.x, tangent.y));
+}
 }  // namespace
 Result<ConvexBoundary> ValidateConvexPlanarLoop(
     std::span<const PlanarCurve> curves, const PlaneGeometry& plane,
@@ -216,5 +270,71 @@ Result<ConvexBoundary> ValidateConvexPlanarLoop(
     return Return::Err(
         Invalid("Curved planar loop does not make one convex revolution"));
   return Return::Ok({area2 / 2, first.value().position});
+}
+Result<ConvexBoundary> ValidateConvexCircularHoles(
+    std::span<const PlanarCurve> curves, std::span<const ConicBoundary> holes,
+    const PlaneGeometry& plane, bool natural_sense, double tolerance,
+    uint64_t& remaining_checks) {
+  using Return = Result<ConvexBoundary>;
+  for (const auto& curve : curves)
+    if (!curve.geometry ||
+        (!std::holds_alternative<LineGeometry>(*curve.geometry) &&
+         !std::holds_alternative<CircleGeometry>(*curve.geometry)))
+      return Return::Err(Unsupported(
+          "Curved contours with holes require LINE/CIRCLE outer edges"));
+  const auto outer = ValidateConvexPlanarLoop(curves, plane, natural_sense,
+                                              tolerance, remaining_checks);
+  if (!outer.ok()) return outer;
+  const auto& n = plane.normal;
+  const auto& x = plane.x_axis;
+  const double sign = natural_sense ? 1 : -1;
+  const Frame frame{
+      outer.value().reference_point,
+      x,
+      {sign * (n.y * x.z - n.z * x.y), sign * (n.z * x.x - n.x * x.z),
+       sign * (n.x * x.y - n.y * x.x)}};
+  auto result = outer.value();
+  const long double clearance = 2 * static_cast<long double>(tolerance);
+  for (std::size_t i = 0; i < holes.size(); ++i) {
+    const auto& hole = holes[i];
+    if (!hole.circle)
+      return Return::Err(Unsupported("Curved face holes require CIRCLE bases"));
+    // A hole must be a full coplanar circle wound against the outer normal.
+    const auto valid =
+        ValidatePlanarConics(holes.subspan(i, 1), plane, !natural_sense,
+                             tolerance, remaining_checks);
+    if (!valid.ok()) return Return::Err(valid.error());
+    for (const auto& curve : curves) {
+      if (!remaining_checks)
+        return Return::Err({ErrorCode::kResourceLimit, 0,
+                            "Curved hole comparison limit exceeded"});
+      --remaining_checks;
+      const auto distance = DiskClearance(curve, hole.center, frame);
+      if (!distance.ok()) return Return::Err(distance.error());
+      if (!std::isfinite(distance.value()) ||
+          distance.value() <= hole.major_radius + clearance)
+        return Return::Err(Invalid(
+            "Circular hole is outside or touches the convex curved contour"));
+    }
+    const auto a = frame.Point(hole.center);
+    for (std::size_t j = 0; j < i; ++j) {
+      if (!remaining_checks)
+        return Return::Err({ErrorCode::kResourceLimit, 0,
+                            "Curved hole comparison limit exceeded"});
+      --remaining_checks;
+      const auto b = frame.Point(holes[j].center);
+      const auto distance = std::hypot(a.x - b.x, a.y - b.y);
+      if (!std::isfinite(distance) ||
+          distance <= hole.major_radius + holes[j].major_radius + clearance)
+        return Return::Err(
+            Invalid("Circular curved-face holes overlap, touch "
+                    "or are nested"));
+    }
+    result.area -=
+        std::numbers::pi_v<long double> * hole.major_radius * hole.minor_radius;
+  }
+  if (!std::isfinite(result.area) || result.area <= 0)
+    return Return::Err(Invalid("Curved face net area is nonpositive"));
+  return Return::Ok(result);
 }
 }  // namespace openswstep::internal

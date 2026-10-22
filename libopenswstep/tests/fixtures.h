@@ -1277,6 +1277,28 @@ inline ModelFixture RoundedRectangle(bool reverse = false) {
   }
   return f;
 }
+inline ModelFixture RoundedRectangleWithCircularHoles(
+    bool inward = false, bool hole_first = false, bool named_seams = false) {
+  auto f = RoundedRectangle(inward);
+  ConicLoopSpec a;
+  a.center = {1, 1.5, 0};
+  a.major = .25;
+  a.reverse_fin = !inward;
+  auto b = a;
+  b.center.x = 3;
+  AddConicFaceLoops(f, 300, {a, b}, named_seams, hole_first);
+  return f;
+}
+inline ModelFixture WithCircularHole(ModelFixture f, Vector3 center,
+                                     double radius = .25,
+                                     bool named_seam = false) {
+  ConicLoopSpec hole;
+  hole.center = center;
+  hole.major = radius;
+  hole.reverse_fin = true;
+  AddConicFaceLoops(f, 300, {hole}, named_seam);
+  return f;
+}
 inline ModelFixture HalfDisk() {
   auto f = Polyhedron({{-1, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {{0, 1, 2}});
   // Keep the chord and one upper semicircle; reconnect the two source vertices
@@ -1444,40 +1466,51 @@ inline ModelFixture Cube() {
                      {3, 0, 4, 7}},
                     true);
 }
-inline ModelFixture CubeWithCircularBore(bool named_seams = false) {
-  auto f = Cube();
+// Caps are FACE 300/301, at z=0/height, with outward normals -Z/+Z.
+inline ModelFixture WithAxialBore(ModelFixture f, Vector3 center, double radius,
+                                  double height, uint32_t last_face,
+                                  bool named_seams) {
+  const auto face = last_face + 1;
+  const auto surface = face + 400;
+  const auto loop = face + 300;
   ConicLoopSpec bottom;
-  bottom.center = {.5, .5, 0};
-  bottom.major = .25;
+  bottom.center = center;
+  bottom.major = radius;
   auto top = bottom;
-  top.center.z = 1;
+  top.center.z = height;
   top.reverse_curve = true;
   AddConicFaceLoops(f, 300, {bottom}, named_seams, false, 10000);
   AddConicFaceLoops(f, 301, {top}, named_seams, true, 20000);
-  Set(f, 305, "next", 306);
-  Set(f, 305, "next_front", 306);
-  f.Add(14, 306,
-        {Pointer("loop", 606, 15), Pointer("surface", 706, 1006),
+  Set(f, last_face, "next", face);
+  Set(f, last_face, "next_front", face);
+  f.Add(14, face,
+        {Pointer("loop", loop, 15), Pointer("surface", surface, 1006),
          Pointer("shell", 5, 13), Pointer("front_shell", 4, 13),
-         Pointer("previous", 305, 14), Pointer("next", 0, 14),
-         Pointer("previous_front", 305, 14), Pointer("next_front", 0, 14),
+         Pointer("previous", last_face, 14), Pointer("next", 0, 14),
+         Pointer("previous_front", last_face, 14), Pointer("next_front", 0, 14),
          ByteValue("sense", '-', FieldType::kCharacter)});
-  f.Add(
-      51, 706,
-      {Numbers("origin", {.5, .5, 0}, FieldType::kVector),
-       Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {.25}),
-       Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
-       ByteValue("sense", '+', FieldType::kCharacter)});
+  f.Add(51, surface,
+        {Numbers("origin", {center.x, center.y, center.z}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector),
+         Numbers("radius", {radius}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
   for (uint32_t i = 0; i < 2; ++i) {
     const auto fin = 1001 + (i ? 20000u : 10000u);
-    f.Add(15, 606 + i,
-          {Pointer("face", 306, 14), Pointer("halfedge", fin, 17),
-           Pointer("next", i ? 0 : 607, 15)});
-    Set(f, fin, "loop", 606 + i);
+    f.Add(15, loop + i,
+          {Pointer("face", face, 14), Pointer("halfedge", fin, 17),
+           Pointer("next", i ? 0 : loop + 1, 15)});
+    Set(f, fin, "loop", loop + i);
     Set(f, fin, "forward", fin);
     Set(f, fin, "backward", fin);
   }
   return f;
+}
+inline ModelFixture CubeWithCircularBore(bool named_seams = false) {
+  return WithAxialBore(Cube(), {.5, .5, 0}, .25, 1, 305, named_seams);
+}
+inline ModelFixture CylinderSectorWithBore(bool named_seams = false) {
+  return WithAxialBore(CylinderSector(), {.4, .4, 0}, .1, 2, 304, named_seams);
 }
 struct Serialized {
   std::vector<uint8_t> bytes;
