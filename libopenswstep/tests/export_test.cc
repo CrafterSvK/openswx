@@ -840,11 +840,62 @@ TEST(OpenSwStep, HandlesConvexArcsOnTranslatedAndNegativelySensedPlanes) {
     ASSERT_TRUE(result.ok()) << result.error().message;
   }
 }
-TEST(OpenSwStep, RejectsPartialEllipseFaceBoundariesExplicitly) {
-  const auto result = Export(test::HalfEllipse());
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
-  EXPECT_NE(result.error().message.find("LINE/CIRCLE"), std::string::npos);
+TEST(OpenSwStep, ExportsConvexEllipseArcsWithoutApproximation) {
+  for (const auto& fixture :
+       {test::HalfEllipse(), test::MixedConicLens(),
+        test::EllipticProfile(test::RoundedRectangle()),
+        test::EllipticProfile(test::RoundedRectangle(true)),
+        test::EllipticProfile(test::CircularLens()),
+        test::EllipticProfile(test::MajorCircularSegment()),
+        test::EllipticProfile(test::SplitCircle()),
+        test::RotateAndTranslate(test::HalfEllipse()),
+        test::EllipticProfile(test::HalfDisk(), 100)}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    EXPECT_NE(result.value().text.find("=ELLIPSE("), std::string::npos);
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, ValidatesEllipseCurvaturePlaneAndSharedCornerBudget) {
+  const auto concave = Export(test::EllipticProfile(test::ConcaveArcFace()));
+  ASSERT_FALSE(concave.ok());
+  EXPECT_EQ(concave.error().code, ErrorCode::kUnsupportedFormat);
+  const auto repeated = Export(test::EllipticProfile(test::SplitCircle(true)));
+  ASSERT_FALSE(repeated.ok());
+  EXPECT_EQ(repeated.error().code, ErrorCode::kInvalidRecord);
+  auto options = Options();
+  options.max_polygon_checks = 2;
+  ASSERT_TRUE(Export(test::HalfEllipse(), options).ok());
+  options.max_polygon_checks = 1;
+  const auto limited = Export(test::HalfEllipse(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  auto negative = test::HalfEllipse();
+  test::Set(negative, 300, "sense", '-');
+  for (auto& node : negative.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  ASSERT_TRUE(Export(negative).ok());
+  auto reversed_normal = test::HalfEllipse();
+  test::Set(reversed_normal, 4001, "sense", '-');
+  for (auto& node : reversed_normal.report.nodes)
+    if (node.index == 4001) node.fields[1].values = {0., 0., -1.};
+  ASSERT_TRUE(Export(reversed_normal).ok());
+  auto tilted = test::HalfEllipse();
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4001)
+      node.fields[1].values = {0., std::sqrt(.5), std::sqrt(.5)};
+  const auto outside = Export(tilted);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kInvalidRecord);
+}
+TEST(OpenSwStep, ParsesConvexEllipseFacesThroughTheBinaryEntryPoint) {
+  const auto fixture =
+      test::Serialize(test::EllipticProfile(test::CircularLens()));
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.edges, 2);
 }
 TEST(OpenSwStep, ParsesConvexArcFacesThroughTheBinaryEntryPoint) {
   const auto fixture = test::Serialize(test::RoundedRectangle());

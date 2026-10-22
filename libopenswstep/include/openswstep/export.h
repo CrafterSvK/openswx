@@ -86,18 +86,17 @@ struct StepDocument {
 /// coaxial full-circle loops at distinct axial levels and positive cut radii.
 /// Regular ring TORUS bands use two coaxial full-circle cuts; winding selects
 /// the meridian interval, including its periodic seam and complementary band.
-/// Planar faces also support a single convex LINE/CIRCLE contour, including
-/// split circles and two-edge segments/lenses. Nonconvex curved contours,
-/// mixed curved/polygon hole loops, partial ellipse edges, partial azimuths,
-/// apex loops, explicit seam fins, horn/apple/lemon tori and elliptical holes
-/// remain unsupported.
-/// Sheet orientation is propagated across shared edges. Solid export requires
-/// one material region
-/// with one closed, connected shell, consistent face-side uses and positive
-/// signed volume. Foreign geometry, tolerant fin curves, isolated face
-/// loops, compound bodies, general bodies and other curve/surface types return
-/// explicit errors. Existing finite membership checks are retained; no global
-/// intersection or full CAD-kernel validity certificate is implied.
+/// Planar faces also support a single convex LINE/CIRCLE/ELLIPSE contour,
+/// including split conics, elliptic arcs and two-edge segments/lenses.
+/// Nonconvex curved contours, mixed curved/polygon hole loops, partial
+/// azimuths, apex loops, explicit seam fins, horn/apple/lemon tori and
+/// elliptical holes remain unsupported. Sheet orientation is propagated across
+/// shared edges. Solid export requires one material region with one closed,
+/// connected shell, consistent face-side uses and positive signed volume.
+/// Foreign geometry, tolerant fin curves, isolated face loops, compound bodies,
+/// general bodies and other curve/surface types return explicit errors.
+/// Existing finite membership checks are retained; no global intersection or
+/// full CAD-kernel validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
 /// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
 /// (plane/cylinder/cone), 5.2.2.5 (torus), 5.2.8 (senses) and 5.3.4.1 (geometry

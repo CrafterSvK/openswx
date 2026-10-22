@@ -19,9 +19,9 @@ struct ConvexBoundary {
   long double area;
   openparasolid::Vector3 reference_point;
 };
-// Checks one closed convex LINE/CIRCLE loop, with topology and endpoint closure
-// already established by body binding. Nonnegative directed curvature and
-// corner turns must total one revolution. Each corner consumes one shared
+// Checks one closed convex LINE/CIRCLE/ELLIPSE loop, with topology and endpoint
+// closure already established by body binding. Nonnegative directed curvature
+// and corner turns must total one revolution. Each corner consumes one shared
 // comparison check. No polygonal approximation is constructed.
 [[nodiscard]] openparasolid::Result<ConvexBoundary> ValidateConvexPlanarLoop(
     std::span<const PlanarCurve> curves,

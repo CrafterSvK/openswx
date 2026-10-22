@@ -12,7 +12,7 @@
 namespace openswstep::internal {
 namespace {
 using namespace openparasolid;
-constexpr long double kCirclePlaneAlignmentTolerance = 1e-9L;
+constexpr long double kConicPlaneAlignmentTolerance = 1e-9L;
 struct Point2 {
   long double x, y;
 };
@@ -52,6 +52,24 @@ Result<Point2> Tangent(Vector3 value, const Frame& frame, bool forward) {
   const long double sign = forward ? 1 : -1;
   return Result<Point2>::Ok({sign * t.x / length, sign * t.y / length});
 }
+// Integrate the change of tangent angle, not the ellipse parameter. Four
+// equal steps keep each parameter interval at most pi/2 and avoid angle-wrap
+// ambiguity, including arcs longer than pi and complete revolutions.
+long double EllipseTurning(double start, double end, long double major,
+                           long double minor) {
+  const auto a = major / std::max(major, minor);
+  const auto b = minor / std::max(major, minor);
+  constexpr int kParameterSteps = 4;
+  const auto step = (static_cast<long double>(end) - start) / kParameterSteps;
+  long double turning = 0;
+  for (int i = 0; i < kParameterSteps; ++i) {
+    const auto t = static_cast<long double>(start) + i * step;
+    const auto dot = a * a * std::sin(t) * std::sin(t + step) +
+                     b * b * std::cos(t) * std::cos(t + step);
+    turning += std::atan2(a * b * std::abs(std::sin(step)), dot);
+  }
+  return turning;
+}
 Result<Segment> ReadSegment(const PlanarCurve& curve,
                             const PlaneGeometry& plane, const Frame& frame,
                             double tolerance) {
@@ -62,9 +80,10 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
         Invalid("Planar curve requires a finite nonzero interval"));
   const auto* line = std::get_if<LineGeometry>(curve.geometry);
   const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
-  if (!line && !circle)
-    return Return::Err(
-        Unsupported("Convex curved boundaries require LINE/CIRCLE bases"));
+  const auto* ellipse = std::get_if<EllipseGeometry>(curve.geometry);
+  if (!line && !circle && !ellipse)
+    return Return::Err(Unsupported(
+        "Convex curved boundaries require LINE/CIRCLE/ELLIPSE bases"));
   const auto first = EvaluateCurve(*curve.geometry, curve.start);
   if (!first.ok()) return Return::Err(first.error());
   const auto last = EvaluateCurve(*curve.geometry, curve.end);
@@ -85,38 +104,48 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
              b = frame.Point(last.value().position);
   Segment result{first_tangent.value(), last_tangent.value(), Cross(a, b), 0,
                  std::hypot(b.x - a.x, b.y - a.y)};
-  if (circle) {
+  if (circle || ellipse) {
+    const auto center3 = circle ? circle->center : ellipse->center;
+    const long double major = circle ? circle->radius : ellipse->major_radius;
+    const long double minor = circle ? circle->radius : ellipse->minor_radius;
+    if (!std::isfinite(major) || !std::isfinite(minor) || major <= 0 ||
+        minor <= 0)
+      return Return::Err(Invalid("Supporting conic radii must be positive"));
     const auto span = curve.end - curve.start;
     if (!std::isfinite(span) || std::abs(span) > 2 * std::numbers::pi)
       return Return::Err(
           Unsupported("Curved boundary arc exceeds one conic turn"));
-    const auto& n = circle->normal;
-    const auto& x = circle->x_axis;
+    const auto& n = circle ? circle->normal : ellipse->normal;
+    const auto& x = circle ? circle->x_axis : ellipse->x_axis;
     const Vector3 y{n.y * x.z - n.z * x.y, n.z * x.x - n.x * x.z,
                     n.x * x.y - n.y * x.x};
     const auto center_residual =
-        std::abs(Project(circle->center, plane.origin, plane.normal));
-    const auto excursion =
-        circle->radius *
-        std::hypot(Project(x, {}, plane.normal), Project(y, {}, plane.normal));
+        std::abs(Project(center3, plane.origin, plane.normal));
+    const auto excursion = std::hypot(major * Project(x, {}, plane.normal),
+                                      minor * Project(y, {}, plane.normal));
     if (!std::isfinite(center_residual + excursion) ||
         center_residual + excursion > tolerance)
       return Return::Err(
-          Invalid("Complete supporting circle is outside the face plane"));
+          Invalid("Complete supporting conic is outside the face plane"));
     const auto rx = frame.Direction(x), ry = frame.Direction(y);
     const auto determinant = Cross(rx, ry);
     if (!std::isfinite(determinant) ||
-        std::abs(determinant) < 1 - kCirclePlaneAlignmentTolerance)
-      return Return::Err(Invalid("Supporting circle plane is misaligned"));
+        std::abs(determinant) < 1 - kConicPlaneAlignmentTolerance)
+      return Return::Err(Invalid("Supporting conic plane is misaligned"));
     result.curvature = determinant > 0 ? span : -span;
     if (result.curvature <= 0)
       return Return::Err(Unsupported(
           "Curved planar export requires a convex source-oriented boundary"));
-    const auto center = frame.Point(circle->center);
+    if (ellipse)
+      result.curvature = EllipseTurning(curve.start, curve.end, major, minor);
+    const auto center = frame.Point(center3);
     result.area2 = Cross(center, {b.x - a.x, b.y - a.y}) +
-                   static_cast<long double>(circle->radius) * circle->radius *
-                       determinant * span;
-    result.length = static_cast<long double>(circle->radius) * std::abs(span);
+                   major * minor * determinant * span;
+    // Conservative length bounds avoid numerical arc-length quadrature. The
+    // upper bound also makes area and corner-noise checks conservative.
+    if (std::min(major, minor) * std::abs(span) <= tolerance)
+      return Return::Err(Invalid("Conic arc length cannot be resolved"));
+    result.length = std::max(major, minor) * std::abs(span);
   }
   if (!std::isfinite(result.area2) || !std::isfinite(result.length) ||
       result.length <= tolerance)

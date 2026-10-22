@@ -880,6 +880,64 @@ inline ModelFixture ConcaveArcFace() {
   CircleBasis(f, 4004, {2, 2, 0}, 1, '-');
   return f;
 }
+// Affinely stretch XY-plane LINE/CIRCLE fixtures into exact ellipse profiles.
+// Source circle frames in these fixtures have normal +Z and reference X +X.
+inline ModelFixture EllipticProfile(ModelFixture f, double stretch = 2) {
+  struct Replacement {
+    uint32_t id;
+    Vector3 center;
+    double radius;
+    uint64_t sense;
+  };
+  std::vector<Replacement> replacements;
+  for (auto& node : f.report.nodes) {
+    if (node.node_type == 31) {
+      replacements.push_back(
+          {node.index,
+           {stretch * std::get<double>(node.fields[0].values[0]),
+            std::get<double>(node.fields[0].values[1]),
+            std::get<double>(node.fields[0].values[2])},
+           std::get<double>(node.fields[3].values[0]),
+           std::get<uint64_t>(node.fields[4].values[0])});
+    } else if (node.node_type == 29 || node.node_type == 30) {
+      node.fields[0].values[0] =
+          stretch * std::get<double>(node.fields[0].values[0]);
+      if (node.node_type == 30) {
+        auto& direction = node.fields[1].values;
+        const auto unit = Unit({stretch * std::get<double>(direction[0]),
+                                std::get<double>(direction[1]),
+                                std::get<double>(direction[2])});
+        direction = {unit.x, unit.y, unit.z};
+      }
+    }
+  }
+  for (const auto& replacement : replacements) {
+    RemoveNode(f, replacement.id);
+    f.Add(32, replacement.id,
+          {Numbers("center",
+                   {replacement.center.x, replacement.center.y,
+                    replacement.center.z},
+                   FieldType::kVector),
+           Numbers("normal", {0, 0, 1}, FieldType::kVector),
+           Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           Numbers("major_radius", {stretch * replacement.radius}),
+           Numbers("minor_radius", {replacement.radius}),
+           ByteValue("sense", replacement.sense, FieldType::kCharacter)});
+  }
+  return f;
+}
+inline ModelFixture MixedConicLens() {
+  auto f = CircularLens();
+  RemoveNode(f, 4001);
+  f.Add(32, 4001,
+        {Numbers("center", {0, -1, 0}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         Numbers("major_radius", {2}),
+         Numbers("minor_radius", {2 / std::sqrt(3.)}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
 inline ModelFixture Acorn() {
   auto f = Polyhedron({{0, 0, 0}, {1, 0, 0}}, {});
   Set(f, 4, "edge", 0);

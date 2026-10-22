@@ -19,6 +19,15 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 CASES = {
+    "mixed-conic-lens": (2, 2, 1, 0, "area", math.pi / 2 + 2 * math.pi / (3 * math.sqrt(3)) - 2),
+    "half-ellipse": (2, 2, 1, 0, "area", math.pi),
+    "oblique-half-ellipse": (2, 2, 1, 0, "area", math.pi),
+    "eccentric-half-ellipse": (2, 2, 1, 0, "area", 50 * math.pi),
+    "elliptic-rounded-rectangle": (8, 8, 1, 0, "area", 16 + 2 * math.pi),
+    "elliptic-rounded-reverse": (8, 8, 1, 0, "area", 16 + 2 * math.pi),
+    "elliptic-lens": (2, 2, 1, 0, "area", 2 * math.pi - 4),
+    "major-elliptic-segment": (2, 2, 1, 0, "area", 3 * math.pi / 2 + 1),
+    "split-ellipse": (4, 4, 1, 0, "area", 2 * math.pi),
     "rounded-rectangle": (8, 8, 1, 0, "area", 8 + math.pi),
     "rounded-rectangle-reverse": (8, 8, 1, 0, "area", 8 + math.pi),
     "half-disk": (2, 2, 1, 0, "area", math.pi / 2),
