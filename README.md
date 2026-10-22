@@ -61,7 +61,8 @@ binding. The supported subset covers analytic wire bodies, point-only
 acorns, planar polygon sheets with holes and closed planar solids with through
 holes. Planar sheets also support exact circle/ellipse disks and circular faces
 with round holes. Full cylindrical bands, solid cylinders and tubes retain
-analytic surfaces and shared circular boundaries. Source units, payload
+analytic surfaces and shared circular boundaries. Complete conical frustums and
+conical tubes also retain their analytic surfaces. Source units, payload
 selection and body identity are
 explicit. Unsupported geometry returns a typed
 error; it is never silently omitted or tessellated. See the

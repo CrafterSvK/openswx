@@ -35,5 +35,18 @@ struct ConicBoundary {
     std::span<const ConicBoundary> loops,
     const openparasolid::CylinderGeometry& cylinder, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
+// Analytic data for a full conical band, ordered along the source axis.
+struct CircularBand {
+  long double height;
+  openparasolid::Vector3 lower_center;
+  long double lower_radius;
+  long double upper_radius;
+};
+// Validates two coaxial circular cuts on the positive-radius cone branch.
+// Apex loops and partial bands are unsupported. One shared check is consumed.
+[[nodiscard]] openparasolid::Result<CircularBand> ValidateConeLoops(
+    std::span<const ConicBoundary> loops,
+    const openparasolid::ConeGeometry& cone, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks);
 }  // namespace openswstep::internal
 #endif  // OPENSWSTEP_SRC_CONIC_BOUNDARY_H_

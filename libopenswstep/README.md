@@ -19,6 +19,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Circular planar faces with disjoint circular holes | Exact circular outer/inner bounds, including annuli and nonconcentric holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
+| Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
 Coordinates remain in the source frame. **The caller must specify metres or
@@ -70,12 +71,21 @@ may introduce periodic seam edges on cylindrical faces and split circular
 boundaries when their seams have different phases. The exported edge statistics
 count source boundary edges rather than the additional importer edges.
 
+Complete conical bands use the same coaxial cut, winding and budget checks as
+cylinders, with the linear profile `r(z) = r_ref + z * sin(a) / cos(a)` used by
+libopenparasolid. Both cut radii must exceed the source tolerance; linearity
+keeps the band on the positive-radius branch between them. Signed volume
+includes the analytic conical flux, including inward conical tube walls.
+Narrowing source cones use a positive STEP semi-angle and reversed exported
+axis. The reference origin may be at the apex, provided both boundary circles
+are away from it. Apex boundary loops and partial conical sectors are unsupported.
+
 These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, mixed line/conic face boundaries, multi-edge conic loops, elliptical
-holes, partial cylindrical bands, explicit cylindrical seam fins, other
+holes, partial cylindrical/conical bands, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
 mixed-dimensional bodies, multiple material regions and solid void shells are
@@ -130,7 +140,7 @@ Positive entity, output byte and polygon comparison budgets bound serialization
 and polygon checks. The shared polygon budget counts nonadjacent segments within
 each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Circular containment and hole-pair comparisons consume
-one check each from the same budget; each cylindrical cut pair consumes one
+one check each from the same budget; each cylindrical/conical cut pair consumes one
 check. Parser, model and body-binding budgets remain independently configurable
 in `ExportOptions`. The file adapter checks source file size before container
 inspection; libopenswx's per-stream decompression/extraction bounds
@@ -163,7 +173,7 @@ GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon holes, through holes, cylindrical
-bands, invalid topology, budget boundaries and preserved source diagnostics.
+bands, conical frustums, invalid topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
 Python interpreter providing the `OCP` bindings:
@@ -177,7 +187,7 @@ ctest --test-dir build -R openswstep_occt_roundtrip --output-on-failure
 
 It imports generated synthetic STEP documents, runs `BRepCheck_Analyzer`, checks
 unique vertex/edge/face/solid counts and compares volumes, areas and curve
-lengths, including hole areas and analytic cylinder/tube volumes. Different seam
+lengths, including hole areas and analytic cylinder/frustum/tube volumes. Different seam
 phases exercise importer-created periodic seams and ring splits. OCCT is
 exclusively a test dependency and is never linked into the export library. Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
@@ -186,9 +196,9 @@ The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 40 export successfully, including ten face-bearing bodies
 with 51 faces; 30 successes contain only wire/point geometry. All 40 generated
 documents pass OCCT import and B-rep validity checks. The other 17 return
-unsupported-format errors. Cylinder support adds one closed three-face solid
-and preserves all 39 previous successes; the remaining private samples still
-require other geometry features. These are raw body selections, including
+unsupported-format errors. Conical-band support preserves all 40 previous
+successes; the remaining private bodies require additional geometry features
+before their complete export can succeed. These are raw body selections, including
 archival partition snapshots, rather than automatic active-configuration
 conversions.
 
@@ -199,8 +209,9 @@ Run `doxygen Doxyfile` from this directory to generate public API HTML at
 
 - Siemens *Parasolid XT Format Reference*, July 2022: sections 4.3.3–4.3.10
   (body through vertex), 5.2.1.1–5.2.1.3 (line/circle/ellipse),
-  5.2.2.1–5.2.2.2 (plane/cylinder), 5.2.8 (curve/surface senses) and 5.3.4.1 (attaching geometry to topology).
+  5.2.2.1–5.2.2.3 (plane/cylinder/cone), 5.2.8 (curve/surface senses) and 5.3.4.1 (attaching geometry to topology).
   The local reading copy is in the workspace's `xt-doc`; it is not bundled here.
+- [STEP conical-surface attributes](https://www.steptools.com/docs/stp_aim/html/t_conical_surface.html).
 - [STEP advanced-face restrictions](https://www.steptools.com/docs/stp_aim/html/t_advanced_face.html).
 - [STEP edge-based wireframe representation](https://www.steptools.com/docs/stp_aim/html/t_edge_based_wireframe_shape_representation.html)
   and [permitted wireframe edge curves](https://www.steptools.com/docs/stp_aim/html/t_valid_wireframe_edge_curve.html).

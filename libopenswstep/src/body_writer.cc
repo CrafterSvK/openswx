@@ -24,12 +24,14 @@ struct FaceData {
   const FaceTrimming* source = nullptr;
   const PlaneGeometry* plane = nullptr;
   const CylinderGeometry* cylinder = nullptr;
+  const ConeGeometry* cone = nullptr;
   bool natural_sense = true;
   std::vector<std::vector<Vector3>> polygons;
   std::optional<std::size_t> outer_loop = 0;
   long double conic_area = 0;
   long double axial_height = 0;
   Vector3 reference_point;
+  std::optional<CircularBand> cone_band;
 };
 struct EdgeUse {
   std::size_t face;
@@ -244,6 +246,18 @@ Result<std::vector<ConicBoundary>> BodyWriter::ConicLoops(
 Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
   const auto loops = ConicLoops(face);
   if (!loops.ok()) return Result<bool>::Err(loops.error());
+  if (face.cone) {
+    const auto band =
+        ValidateConeLoops(loops.value(), *face.cone, face.natural_sense,
+                          options_.tolerance, polygon_checks_remaining_);
+    if (!band.ok())
+      return Result<bool>::Err(Error(face.source->face, band.error().code,
+                                     band.error().message.c_str()));
+    face.cone_band = band.value();
+    face.reference_point = band.value().lower_center;
+    face.outer_loop = std::nullopt;
+    return Result<bool>::Ok(true);
+  }
   if (face.cylinder) {
     const auto height =
         ValidateCylinderLoops(loops.value(), *face.cylinder, face.natural_sense,
@@ -286,10 +300,11 @@ Result<bool> BodyWriter::PrepareFaces() {
     const auto* plane = std::get_if<PlaneGeometry>(&surface.value()->payload);
     const auto* cylinder =
         std::get_if<CylinderGeometry>(&surface.value()->payload);
-    if (!plane && !cylinder)
+    const auto* cone = std::get_if<ConeGeometry>(&surface.value()->payload);
+    if (!plane && !cylinder && !cone)
       return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
                                      "Face export currently supports PLANE and "
-                                     "full-band CYLINDER surfaces"));
+                                     "full-band CYLINDER/CONE surfaces"));
     if (!source.face_sense ||
         (*source.face_sense != '+' && *source.face_sense != '-') ||
         !surface.value()->sense ||
@@ -300,8 +315,9 @@ Result<bool> BodyWriter::PrepareFaces() {
     face.source = &source;
     face.plane = plane;
     face.cylinder = cylinder;
+    face.cone = cone;
     face.natural_sense = source.face_sense == surface.value()->sense;
-    if (cylinder || source.loops.front().fins.size() == 1) {
+    if (cylinder || cone || source.loops.front().fins.size() == 1) {
       const auto conic = PrepareConicFace(face);
       if (!conic.ok()) return conic;
       faces_.push_back(std::move(face));
@@ -497,9 +513,25 @@ Result<bool> BodyWriter::CheckSolid() {
   long double volume6 = 0;
   for (std::size_t i = 0; i < faces_.size(); ++i) {
     const auto& face = faces_[i];
-    if (face.cylinder || face.conic_area > 0) {
+    if (face.cylinder || face.cone || face.conic_area > 0) {
       const auto sign = face.natural_sense != reversed_[i] ? 1.L : -1.L;
-      if (face.cylinder) {
+      if (face.cone) {
+        const auto& band = *face.cone_band;
+        const auto& axis = face.cone->axis;
+        const auto distance =
+            (static_cast<long double>(band.lower_center.x) - origin.x) *
+                axis.x +
+            (static_cast<long double>(band.lower_center.y) - origin.y) *
+                axis.y +
+            (static_cast<long double>(band.lower_center.z) - origin.z) * axis.z;
+        const auto slope = static_cast<long double>(face.cone->sin_half_angle) /
+                           face.cone->cos_half_angle;
+        // For r(z)=r0+k*z, the full radial flux is
+        // pi*h*(r0+r1)*(r0-k*d), where d is the lower cut's axial offset.
+        volume6 += sign * 2 * std::numbers::pi_v<long double> * band.height *
+                   (band.lower_radius + band.upper_radius) *
+                   std::fma(-slope, distance, band.lower_radius);
+      } else if (face.cylinder) {
         // Divergence theorem: the complete radial integral of a cylindrical
         // band is 2*pi*r^2*h; translation terms cancel around the full turn.
         const auto radius = static_cast<long double>(face.cylinder->radius);
@@ -565,7 +597,20 @@ Result<Id> BodyWriter::Face(std::size_t index) {
         "(''," + Reference(loop) + ',' + Logical(!reversed_[index]) + ')'));
   }
   Id surface = 0;
-  if (face.cylinder) {
+  if (face.cone) {
+    const auto& cone = *face.cone;
+    // Use a positive STEP semi-angle. A narrowing source cone retains its
+    // geometry and outward normal by reversing the exported axis instead.
+    const auto axis = cone.sin_half_angle < 0
+                          ? Vector3{-cone.axis.x, -cone.axis.y, -cone.axis.z}
+                          : cone.axis;
+    const auto placement = writer_.Placement(cone.origin, axis, cone.x_axis);
+    const auto angle =
+        std::atan2(std::abs(cone.sin_half_angle), cone.cos_half_angle);
+    surface = writer_.Add("CONICAL_SURFACE(''," + Reference(placement) + ',' +
+                          writer_.Number(cone.radius) + ',' +
+                          writer_.Number(angle) + ')');
+  } else if (face.cylinder) {
     const auto& cylinder = *face.cylinder;
     const auto placement =
         writer_.Placement(cylinder.origin, cylinder.axis, cylinder.x_axis);

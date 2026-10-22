@@ -627,6 +627,77 @@ TEST(OpenSwStep, PreservesDistinctSeamPhasesOnCylinderCuts) {
     CheckReferences(result.value());
   }
 }
+TEST(OpenSwStep, ExportsExactExpandingAndNarrowingConicalFrustums) {
+  for (const bool narrowing : {false, true})
+    for (const bool named_seams : {false, true}) {
+      const auto result = Export(test::Frustum(narrowing, false, named_seams));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.solids, 1);
+      EXPECT_EQ(result.value().statistics.faces, 3);
+      EXPECT_EQ(result.value().statistics.edges, 2);
+      EXPECT_NE(result.value().text.find("=CONICAL_SURFACE("),
+                std::string::npos);
+      CheckReferences(result.value());
+    }
+  const auto tube = Export(test::Frustum(false, true, true));
+  ASSERT_TRUE(tube.ok()) << tube.error().message;
+  EXPECT_EQ(tube.value().statistics.faces, 4);
+  EXPECT_EQ(tube.value().statistics.edges, 4);
+}
+TEST(OpenSwStep, HandlesConicalSheetsAndReversedAxesAndLoops) {
+  for (const auto& f : {test::Frustum(false, false, false, false, true),
+                        test::ReversedFrustum(), test::ReversedFrustum(true),
+                        test::FrustumAtApexOrigin(),
+                        test::RotateAndTranslate(test::Frustum())}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, RejectsConicalApexCutsAndInvalidProfiles) {
+  for (const double radius : {0., 1e-8, 4.}) {
+    auto f = test::Frustum(false, false, false, false, true);
+    for (auto& node : f.report.nodes)
+      if (node.index == 4001) node.fields[3].values = {radius};
+    EXPECT_FALSE(Export(f).ok());
+  }
+  auto tilted = test::Frustum(false, false, false, false, true);
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4001)
+      node.fields[1].values = {0., std::sin(1e-6), std::cos(1e-6)};
+  const auto result = Export(tilted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("tilted"), std::string::npos);
+}
+TEST(OpenSwStep, BoundsConicalBandsAndRejectsInvertedConicalSolids) {
+  auto options = Options();
+  options.max_polygon_checks = 4;
+  ASSERT_TRUE(Export(test::Frustum(false, true), options).ok());
+  options.max_polygon_checks = 3;
+  const auto limited = Export(test::Frustum(false, true), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  auto inverted = test::Frustum(false, true);
+  for (uint32_t i = 0; i < 4; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto negative = Export(inverted);
+  ASSERT_FALSE(negative.ok());
+  EXPECT_NE(negative.error().message.find("signed volume"), std::string::npos);
+}
+TEST(OpenSwStep, ParsesConicalSolidsThroughTheBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::Frustum(false, true, true));
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
+  EXPECT_EQ(result.value().statistics.faces, 4);
+}
 class StepFileTest : public testing::Test {
  protected:
   std::filesystem::path root;

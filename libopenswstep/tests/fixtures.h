@@ -352,7 +352,8 @@ inline ModelFixture NegativePerforatedSheet() {
 inline ModelFixture RotateAndTranslate(ModelFixture f) {
   for (auto& node : f.report.nodes) {
     if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
-        node.node_type != 32 && node.node_type != 50 && node.node_type != 51)
+        node.node_type != 32 && node.node_type != 50 && node.node_type != 51 &&
+        node.node_type != 52)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
@@ -642,6 +643,55 @@ inline ModelFixture ShiftedCylinderSeams(bool named_seams = true) {
       node.fields[2].values = {std::cos(phase), std::sin(phase), 0.};
     }
   }
+  return f;
+}
+inline ModelFixture Frustum(bool narrowing = false, bool tube = false,
+                            bool named_seams = false, bool solid = true,
+                            bool mantle_only = false) {
+  auto f = Cylinder(tube, named_seams, solid, mantle_only);
+  const double slope = narrowing ? -1. : 1.;
+  for (uint32_t mantle = 0; mantle < (tube ? 2u : 1u); ++mantle) {
+    const double base = mantle ? 1. : 3.;
+    RemoveNode(f, 702 + mantle);
+    f.Add(52, 702 + mantle,
+          {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+           Numbers("axis", {0, 0, 1}, FieldType::kVector),
+           Numbers("radius", {base}),
+           Numbers("sin_half_angle", {slope / std::sqrt(2.)}),
+           Numbers("cos_half_angle", {1 / std::sqrt(2.)}),
+           Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    for (auto& node : f.report.nodes) {
+      if (node.index == 4001 + 2 * mantle)
+        node.fields[3].values = {base + 2 * slope};
+      if (named_seams && node.index == 501 + 2 * mantle)
+        node.fields[0].values = {base + 2 * slope, 0., 2.};
+    }
+  }
+  return f;
+}
+inline ModelFixture ReversedFrustum(bool axis = false) {
+  auto f = Frustum();
+  if (axis) {
+    for (auto& node : f.report.nodes)
+      if (node.index == 702) {
+        node.fields[1].values = {0., 0., -1.};
+        node.fields[3].values = {-1 / std::sqrt(2.)};
+      }
+  } else {
+    Set(f, 302, "loop", 605);
+    Set(f, 605, "next", 604);
+    Set(f, 604, "next", 0);
+  }
+  return f;
+}
+inline ModelFixture FrustumAtApexOrigin() {
+  auto f = Frustum();
+  for (auto& node : f.report.nodes)
+    if (node.index == 702) {
+      node.fields[0].values = {0., 0., -3.};
+      node.fields[2].values = {0.};
+    }
   return f;
 }
 inline ModelFixture Acorn() {

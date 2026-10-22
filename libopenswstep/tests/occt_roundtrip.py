@@ -18,6 +18,16 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 CASES = {
+    "frustum": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
+    "frustum-apex-origin": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
+    "frustum-narrowing": (2, 3, 3, 1, "volume", 26 * math.pi / 3),
+    "frustum-seams": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
+    "conical-tube": (4, 6, 4, 1, "volume", 24 * math.pi),
+    "conical-tube-seams": (4, 6, 4, 1, "volume", 24 * math.pi),
+    "conical-mantle": (2, 3, 1, 0, "area", 16 * math.pi * math.sqrt(2)),
+    "oblique-frustum": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
+    "frustum-loop-order": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
+    "frustum-axis": (2, 3, 3, 1, "volume", 98 * math.pi / 3),
     # OCCT creates a seam edge on each complete periodic cylinder face,
     # splitting one circular boundary when the two source seam phases differ.
     "cylinder": (2, 3, 3, 1, "volume", 18 * math.pi),

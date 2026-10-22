@@ -16,6 +16,16 @@ int main(int argc, char** argv) {
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
           {"tetra", test::Tetrahedron()},
+          {"frustum", test::Frustum()},
+          {"frustum-apex-origin", test::FrustumAtApexOrigin()},
+          {"frustum-narrowing", test::Frustum(true)},
+          {"frustum-seams", test::Frustum(false, false, true)},
+          {"conical-tube", test::Frustum(false, true)},
+          {"conical-tube-seams", test::Frustum(false, true, true)},
+          {"conical-mantle", test::Frustum(false, false, false, false, true)},
+          {"oblique-frustum", test::RotateAndTranslate(test::Frustum())},
+          {"frustum-loop-order", test::ReversedFrustum()},
+          {"frustum-axis", test::ReversedFrustum(true)},
           {"cylinder", test::Cylinder()},
           {"cylinder-shifted-seams", test::ShiftedCylinderSeams()},
           {"cylinder-shifted-frames", test::ShiftedCylinderSeams(false)},

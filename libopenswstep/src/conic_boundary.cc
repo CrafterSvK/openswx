@@ -120,21 +120,22 @@ Result<std::size_t> ValidatePlanarConics(
   }
   return Return::Ok(*outer);
 }
-Result<long double> ValidateCylinderLoops(
-    std::span<const ConicBoundary> loops,
-    const openparasolid::CylinderGeometry& cylinder, bool natural_sense,
-    double tolerance, uint64_t& remaining_checks) {
-  using Return = Result<long double>;
+namespace {
+Result<CircularBand> ValidateCircularBand(std::span<const ConicBoundary> loops,
+                                          Vector3 origin, Vector3 axis,
+                                          double reference_radius,
+                                          long double slope, bool natural_sense,
+                                          double tolerance,
+                                          uint64_t& remaining_checks) {
+  using Return = Result<CircularBand>;
   if (!std::isfinite(tolerance) || tolerance <= 0)
     return Return::Err({ErrorCode::kInvalidOptions, 0,
-                        "Cylinder tolerance must be positive and finite"});
+                        "Circular band tolerance must be positive and finite"});
   if (loops.size() != 2)
-    return Return::Err(
-        {ErrorCode::kUnsupportedFormat, 0,
-         "Cylindrical band requires two complete circular loops"});
-  if (!std::isfinite(cylinder.radius) || cylinder.radius <= tolerance)
-    return Return::Err(Invalid("Cylinder radius is degenerate"));
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Circular band requires two complete circular loops"});
   bool forward[2];
+  long double radii[2];
   constexpr double kFullTurn = 2 * std::numbers::pi;
   constexpr double kTurnTolerance = 1e-12;
   constexpr long double kNormalAlignmentTolerance = 1e-10L;
@@ -142,48 +143,91 @@ Result<long double> ValidateCylinderLoops(
     const auto& loop = loops[i];
     if (!loop.circle)
       return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                          "Cylindrical band boundaries require CIRCLE bases"});
+                          "Circular band boundaries require CIRCLE bases"});
     const auto span = std::abs(loop.end - loop.start);
     if (!std::isfinite(span) || span > kFullTurn ||
         kFullTurn - span > kTurnTolerance)
-      return Return::Err(Invalid("Cylinder boundary requires one full turn"));
-    const auto alignment = Dot(loop.normal, cylinder.axis);
+      return Return::Err(
+          Invalid("Circular band boundary requires one full turn"));
+    const auto alignment = Dot(loop.normal, axis);
     const auto axial_variation =
         loop.major_radius *
-        std::hypot(Dot(loop.x_axis, cylinder.axis),
-                   Dot(Cross(loop.normal, loop.x_axis), cylinder.axis));
+        std::hypot(Dot(loop.x_axis, axis),
+                   Dot(Cross(loop.normal, loop.x_axis), axis));
     if (!std::isfinite(loop.major_radius) || loop.major_radius <= tolerance ||
         !std::isfinite(alignment) ||
         std::abs(alignment) < 1 - kNormalAlignmentTolerance ||
         !std::isfinite(axial_variation) || axial_variation > tolerance)
       return Return::Err(
-          Invalid("Cylinder cut circle is tilted or degenerate"));
-    const auto level = Project(loop.center, cylinder.origin, cylinder.axis);
-    const auto dx = static_cast<long double>(loop.center.x) - cylinder.origin.x;
-    const auto dy = static_cast<long double>(loop.center.y) - cylinder.origin.y;
-    const auto dz = static_cast<long double>(loop.center.z) - cylinder.origin.z;
-    const auto radial_offset =
-        std::hypot(dx - level * cylinder.axis.x, dy - level * cylinder.axis.y,
-                   dz - level * cylinder.axis.z);
+          Invalid("Circular band cut circle is tilted or degenerate"));
+    const auto level = Project(loop.center, origin, axis);
+    const auto dx = static_cast<long double>(loop.center.x) - origin.x;
+    const auto dy = static_cast<long double>(loop.center.y) - origin.y;
+    const auto dz = static_cast<long double>(loop.center.z) - origin.z;
+    const auto radial_offset = std::hypot(
+        dx - level * axis.x, dy - level * axis.y, dz - level * axis.z);
+    const auto expected_radius =
+        std::fma(level, slope, static_cast<long double>(reference_radius));
+    // Bound the whole cut's profile error, including axial variation on a
+    // sloping cone; the binding samples alone cannot establish this bound.
+    const auto profile_error =
+        std::abs(static_cast<long double>(loop.major_radius) -
+                 expected_radius) +
+        std::abs(slope) * axial_variation;
     if (!std::isfinite(level) || !std::isfinite(radial_offset) ||
-        radial_offset + std::abs(static_cast<long double>(loop.major_radius) -
-                                 cylinder.radius) >
-            tolerance)
-      return Return::Err(
-          Invalid("Cylinder cut circle is not coaxial at the source radius"));
+        !std::isfinite(expected_radius) || expected_radius <= tolerance ||
+        !std::isfinite(profile_error) ||
+        radial_offset + profile_error > tolerance)
+      return Return::Err(Invalid(
+          "Circular band cut circle is not coaxial at the source radius"));
+    radii[i] = expected_radius;
     forward[i] = (loop.end > loop.start) == (alignment > 0);
   }
   if (const auto error = Charge(remaining_checks)) return Return::Err(*error);
-  const auto delta = Project(loops[1].center, loops[0].center, cylinder.axis);
+  const auto delta = Project(loops[1].center, loops[0].center, axis);
   const auto height = std::abs(delta);
   if (!std::isfinite(height) ||
       height <= 2 * static_cast<long double>(tolerance))
-    return Return::Err(
-        Invalid("Cylinder cut levels coincide or are tolerance-ambiguous"));
+    return Return::Err(Invalid(
+        "Circular band cut levels coincide or are tolerance-ambiguous"));
   const std::size_t lower = delta > 0 ? 0 : 1;
   if (forward[lower] != natural_sense || forward[1 - lower] == natural_sense)
-    return Return::Err(
-        Invalid("Cylinder boundary winding disagrees with the face normal"));
-  return Return::Ok(height);
+    return Return::Err(Invalid(
+        "Circular band boundary winding disagrees with the face normal"));
+  return Return::Ok(
+      {height, loops[lower].center, radii[lower], radii[1 - lower]});
+}
+}  // namespace
+Result<long double> ValidateCylinderLoops(
+    std::span<const ConicBoundary> loops,
+    const openparasolid::CylinderGeometry& cylinder, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks) {
+  if (!std::isfinite(cylinder.radius) || cylinder.radius <= tolerance)
+    return Result<long double>::Err(Invalid("Cylinder radius is degenerate"));
+  const auto band = ValidateCircularBand(loops, cylinder.origin, cylinder.axis,
+                                         cylinder.radius, 0, natural_sense,
+                                         tolerance, remaining_checks);
+  if (!band.ok()) return Result<long double>::Err(band.error());
+  return Result<long double>::Ok(band.value().height);
+}
+Result<CircularBand> ValidateConeLoops(std::span<const ConicBoundary> loops,
+                                       const openparasolid::ConeGeometry& cone,
+                                       bool natural_sense, double tolerance,
+                                       uint64_t& remaining_checks) {
+  constexpr double kFrameTolerance = 1e-10;
+  if (!std::isfinite(cone.radius) || cone.radius < 0 ||
+      !std::isfinite(cone.sin_half_angle) || cone.sin_half_angle == 0 ||
+      !std::isfinite(cone.cos_half_angle) || cone.cos_half_angle <= 0 ||
+      std::abs(std::hypot(cone.sin_half_angle, cone.cos_half_angle) - 1) >
+          kFrameTolerance)
+    return Result<CircularBand>::Err(
+        Invalid("Cone requires a nonnegative reference radius and nonzero "
+                "signed acute half-angle"));
+  const auto slope =
+      static_cast<long double>(cone.sin_half_angle) / cone.cos_half_angle;
+  if (!std::isfinite(slope))
+    return Result<CircularBand>::Err(Invalid("Cone slope is unrepresentable"));
+  return ValidateCircularBand(loops, cone.origin, cone.axis, cone.radius, slope,
+                              natural_sense, tolerance, remaining_checks);
 }
 }  // namespace openswstep::internal
