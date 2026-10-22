@@ -587,6 +587,42 @@ inline ModelFixture PolygonCircularHoles(bool polygon_hole = false,
   AddConicFaceLoops(f, 300, {hole, second}, named_seams, hole_first);
   return f;
 }
+inline ModelFixture CircularPolygonHoles(bool two_polygons = false,
+                                         bool circular_hole = false,
+                                         bool outer_first = false,
+                                         bool named_seams = false,
+                                         bool concave_hole = false) {
+  std::vector<Vector3> points{{-1, -1, 0}, {-1, 1, 0}, {1, 1, 0}, {1, -1, 0}};
+  std::vector<std::vector<unsigned>> loops{{0, 1, 2, 3}};
+  if (two_polygons) {
+    points = {{-3, -1, 0}, {-3, 1, 0}, {-1, 1, 0}, {-1, -1, 0},
+              {1, -1, 0},  {1, 1, 0},  {3, 1, 0},  {3, -1, 0}};
+    loops = {{0, 1, 2, 3}, {4, 5, 6, 7}};
+  } else if (concave_hole) {
+    points = {{-1, -1, 0}, {-1, 1, 0}, {0, 1, 0},
+              {0, 0, 0},   {1, 0, 0},  {1, -1, 0}};
+    loops = {{0, 1, 2, 3, 4, 5}};
+  }
+  auto f = PlanarFace(points, loops);
+  ConicLoopSpec outer;
+  outer.major = 6;
+  std::vector<ConicLoopSpec> circles{outer};
+  if (circular_hole) {
+    ConicLoopSpec inner;
+    inner.center = {0, 3, 0};
+    inner.reverse_curve = true;
+    circles.push_back(inner);
+  }
+  AddConicFaceLoops(f, 300, circles, named_seams, outer_first);
+  return f;
+}
+inline ModelFixture ReorderedCircularPolygonHoles() {
+  auto f = CircularPolygonHoles(false, true);
+  Set(f, 600, "next", 10601);
+  Set(f, 10601, "next", 10600);
+  Set(f, 10600, "next", 0);
+  return f;
+}
 inline ModelFixture CircularAnnulus(bool hole_first = false,
                                     bool named_seams = false) {
   ConicLoopSpec outer;

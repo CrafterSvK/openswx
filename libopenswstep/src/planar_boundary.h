@@ -20,17 +20,18 @@ namespace openswstep::internal {
     std::span<const std::vector<openparasolid::Vector3>> polygons,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
-struct PerforatedPolygon {
+struct PlanarRegion {
   std::size_t outer_loop;
   long double area;
+  bool circular_outer = false;
 };
-// Adds full circular holes to the polygon subset above. Circle centers must
-// lie in the material, with entire circles separated from every polygon edge
-// and other circle by more than two source tolerances. Each edge-distance,
-// containment-edge and circle-pair check consumes the shared budget. Returns
-// the outer index in the polygon span and the exact net planar area.
-[[nodiscard]] openparasolid::Result<PerforatedPolygon>
-ValidatePolygonCircularHoles(
+// Validates mixed polygon/full-circle loops with one polygonal or circular
+// outer loop and disjoint polygonal/circular holes. Circle-related clearances
+// exceed two source tolerances. Segment, containment-edge, disk-distance,
+// vertex-in-circle and circle-pair checks share the comparison budget. The
+// result's outer index addresses the circle span when circular_outer is true,
+// otherwise polygons.
+[[nodiscard]] openparasolid::Result<PlanarRegion> ValidateMixedPlanarLoops(
     std::span<const std::vector<openparasolid::Vector3>> polygons,
     std::span<const ConicBoundary> circles,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,

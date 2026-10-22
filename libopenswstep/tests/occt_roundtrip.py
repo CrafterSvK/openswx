@@ -19,6 +19,15 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 CASES = {
+    "circle-polygon-hole": (5, 5, 1, 0, "area", 36 * math.pi - 4),
+    "circle-polygon-seams": (5, 5, 1, 0, "area", 36 * math.pi - 4),
+    "circle-polygon-holes": (9, 9, 1, 0, "area", 36 * math.pi - 8),
+    "circle-mixed-holes": (10, 10, 1, 0, "area", 35 * math.pi - 8),
+    "circle-mixed-first": (10, 10, 1, 0, "area", 35 * math.pi - 8),
+    "circle-concave-hole": (7, 7, 1, 0, "area", 36 * math.pi - 3),
+    "circle-concave-mixed": (8, 8, 1, 0, "area", 35 * math.pi - 3),
+    "circle-mixed-reordered": (6, 6, 1, 0, "area", 35 * math.pi - 4),
+    "oblique-circle-mixed": (10, 10, 1, 0, "area", 35 * math.pi - 8),
     "polygon-circular-holes": (6, 6, 1, 0, "area", 96 - 2 * math.pi),
     "polygon-circular-seams": (6, 6, 1, 0, "area", 96 - 2 * math.pi),
     "polygon-mixed-holes": (10, 10, 1, 0, "area", 92 - 2 * math.pi),

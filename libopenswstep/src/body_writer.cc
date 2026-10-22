@@ -405,6 +405,7 @@ Result<bool> BodyWriter::PrepareFaces() {
       }
     }
     std::vector<ConicBoundary> circles;
+    std::vector<std::size_t> circle_indices;
     std::vector<std::size_t> polygon_indices;
     for (std::size_t i = 0; i < source.loops.size(); ++i) {
       const auto& loop = source.loops[i];
@@ -412,6 +413,7 @@ Result<bool> BodyWriter::PrepareFaces() {
         const auto conic = ReadConicLoop(source.face, loop);
         if (!conic.ok()) return Result<bool>::Err(conic.error());
         circles.push_back(conic.value());
+        circle_indices.push_back(i);
         continue;
       }
       if (loop.isolated_vertex || loop.fins.size() < 3)
@@ -449,13 +451,15 @@ Result<bool> BodyWriter::PrepareFaces() {
       face.polygons.push_back(std::move(polygon));
     }
     if (!circles.empty()) {
-      const auto boundary = ValidatePolygonCircularHoles(
+      const auto boundary = ValidateMixedPlanarLoops(
           face.polygons, circles, *plane, face.natural_sense,
           options_.tolerance, polygon_checks_remaining_);
       if (!boundary.ok())
         return Result<bool>::Err(Error(source.face, boundary.error().code,
                                        boundary.error().message.c_str()));
-      face.outer_loop = polygon_indices[boundary.value().outer_loop];
+      face.outer_loop = boundary.value().circular_outer
+                            ? circle_indices[boundary.value().outer_loop]
+                            : polygon_indices[boundary.value().outer_loop];
       face.planar_area = boundary.value().area;
       face.reference_point = face.polygons.front().front();
       faces_.push_back(std::move(face));

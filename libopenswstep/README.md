@@ -17,7 +17,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
-| Circular planar faces with disjoint circular holes | Exact circular outer/inner bounds, including annuli and nonconcentric holes |
+| Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
@@ -59,6 +59,16 @@ hole is rejected. Each source circle remains an exact shared `EDGE_CURVE`.
 The net area subtracts both polygonal and circular holes and contributes
 analytically to the solid-volume check. Supported closed shells therefore also
 include polygonal prisms with complete cylindrical through bores.
+
+Conversely, a complete one-edge circle may bound a face with polygonal and/or
+circular holes. Every polygon vertex must lie strictly inside the outer disk,
+with more than two source tolerances of radial clearance. The disk's convexity
+then bounds all straight segments and the enclosed polygon, even for a concave
+hole profile. Polygon self/inter-loop intersections, nesting and disk-to-polygon
+clearance use the same checks as the polygon-outer subset. The outward-wound
+source circle determines the outer loop regardless of list order; the original
+curves, vertices and loops remain unchanged. Net area is the outer disk area
+minus all polygon and circular hole areas.
 
 The mixed line/conic-arc subset supports one convex outer contour with at
 least two edges and distinct non-null source vertices. It checks nonnegative
@@ -139,7 +149,7 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, nonconvex curved face boundaries, holes in multi-edge curved contours,
-circular outer boundaries with polygonal holes, elliptical holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
+elliptical holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -200,10 +210,11 @@ each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Convex line/arc contours consume one check per corner.
 Circular containment and hole-pair comparisons consume one check each from the
 same budget. Mixed polygon/circle boundaries also consume one check per
-circle-to-segment distance and per containment edge; each cylindrical/conical/
-toroidal cut pair consumes one check. Parser, model and body-binding budgets
-remain independently configurable in `ExportOptions`. The file adapter checks source file size before container
-inspection; libopenswx's per-stream decompression/extraction bounds
+circle-to-segment distance and per containment edge. Circular outer boundaries
+consume one radial containment check per polygon vertex. Each cylindrical/
+conical/toroidal cut pair consumes one check. Parser, model and body-binding
+budgets remain independently configurable in `ExportOptions`. The file adapter
+checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
 
 Serialization is deterministic: numeric output is locale-independent, reals
@@ -255,16 +266,16 @@ Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 44 export successfully, including fourteen face-bearing bodies
-with 103 faces; 30 successes contain only wire/point geometry. All 44 generated
-documents pass OCCT import and B-rep validity checks. The other 13 return
-unsupported-format errors. Mixed polygon/circular-hole support adds two complete
-bodies with 26 and 17 faces and preserves all 42 previous successes. Synthetic
-cases independently check mixed hole areas and cylindrical through-bore volumes,
-including named seams, reordered loops, concave boundaries and translated frames.
-The remaining private bodies require additional geometry features before their
-complete export can succeed. These are raw body selections, including archival
-partition snapshots, rather than automatic active-configuration conversions.
+extracted streams: 45 export successfully, including fifteen face-bearing bodies
+with 118 faces; 30 successes contain only wire/point geometry. All 45 generated
+documents pass OCCT import and B-rep validity checks. The other 12 return
+unsupported-format errors. Circular-outer polygon-hole support adds one complete
+body with 15 faces and preserves all 44 previous successes. Synthetic cases
+independently check mixed hole areas, concave polygon holes, source loop ordering,
+named seams, reversed orientations and translated frames. The remaining private
+bodies require additional geometry features before their complete export can
+succeed. These are raw body selections, including archival partition snapshots,
+rather than automatic active-configuration conversions.
 
 Run `doxygen Doxyfile` from this directory to generate public API HTML at
 `../build/openswstep-docs/html/index.html`; documentation warnings fail generation.

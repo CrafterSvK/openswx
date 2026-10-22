@@ -118,6 +118,75 @@ Result<bool> Contains(const Loop& loop, Point2 point, uint64_t& remaining) {
   }
   return Result<bool>::Ok(inside);
 }
+Result<bool> CheckPolygonLoops(std::span<const Loop> loops,
+                               std::optional<std::size_t> outer,
+                               double tolerance, uint64_t& remaining_checks) {
+  using Return = Result<bool>;
+  for (std::size_t l = 0; l < loops.size(); ++l) {
+    const auto& points = loops[l].points;
+    for (std::size_t i = 0; i < points.size(); ++i)
+      for (std::size_t j = i + 1; j < points.size(); ++j) {
+        if (j == i + 1 || (i == 0 && j + 1 == points.size())) continue;
+        if (const auto error = CheckSegments(
+                points[i], points[(i + 1) % points.size()], points[j],
+                points[(j + 1) % points.size()], tolerance, remaining_checks))
+          return Return::Err(*error);
+      }
+    for (std::size_t other = l + 1; other < loops.size(); ++other)
+      for (std::size_t i = 0; i < points.size(); ++i)
+        for (std::size_t j = 0; j < loops[other].points.size(); ++j) {
+          const auto& second = loops[other].points;
+          if (const auto error = CheckSegments(
+                  points[i], points[(i + 1) % points.size()], second[j],
+                  second[(j + 1) % second.size()], tolerance, remaining_checks))
+            return Return::Err(*error);
+        }
+  }
+  for (std::size_t i = 0; i < loops.size(); ++i) {
+    if (outer && i == *outer) continue;
+    if (outer) {
+      const auto inside =
+          Contains(loops[*outer], loops[i].points.front(), remaining_checks);
+      if (!inside.ok()) return Return::Err(inside.error());
+      if (!inside.value())
+        return Return::Err(Invalid("Hole lies outside the outer polygon"));
+    }
+    for (std::size_t j = i + 1; j < loops.size(); ++j) {
+      if (outer && j == *outer) continue;
+      const auto first =
+          Contains(loops[i], loops[j].points.front(), remaining_checks);
+      if (!first.ok()) return Return::Err(first.error());
+      const auto second =
+          Contains(loops[j], loops[i].points.front(), remaining_checks);
+      if (!second.ok()) return Return::Err(second.error());
+      if (first.value() || second.value())
+        return Return::Err(Invalid(
+            "Nested hole loops do not define one connected planar face"));
+    }
+  }
+  return Return::Ok(true);
+}
+// Returns whether the disk center lies in the polygon, after establishing
+// strict clearance between the whole disk and every polygon segment.
+Result<bool> SeparateDisk(const Loop& loop, Point2 center, long double radius,
+                          long double clearance, uint64_t& remaining) {
+  for (std::size_t e = 0; e < loop.points.size(); ++e) {
+    if (const auto error = Charge(remaining)) return Result<bool>::Err(*error);
+    const auto a = loop.points[e],
+               b = loop.points[(e + 1) % loop.points.size()];
+    const auto length = std::hypot(b.x - a.x, b.y - a.y);
+    const auto dx = (b.x - a.x) / length, dy = (b.y - a.y) / length;
+    const auto along =
+        std::clamp((center.x - a.x) * dx + (center.y - a.y) * dy, 0.L, length);
+    const auto distance =
+        std::hypot(center.x - a.x - along * dx, center.y - a.y - along * dy);
+    if (!std::isfinite(distance) || distance <= radius + clearance)
+      return Result<bool>::Err(
+          Invalid("Circular hole crosses, encloses, touches or is too close to "
+                  "a polygon boundary"));
+  }
+  return Contains(loop, center, remaining);
+}
 }  // namespace
 openparasolid::Result<std::size_t> ValidatePlanarLoops(
     std::span<const std::vector<Vector3>> polygons,
@@ -151,58 +220,90 @@ openparasolid::Result<std::size_t> ValidatePlanarLoops(
   if (!outer)
     return Return::Err(
         Invalid("Planar face has no correctly wound outer loop"));
-  for (std::size_t l = 0; l < loops.size(); ++l) {
-    const auto& points = loops[l].points;
-    for (std::size_t i = 0; i < points.size(); ++i)
-      for (std::size_t j = i + 1; j < points.size(); ++j) {
-        if (j == i + 1 || (i == 0 && j + 1 == points.size())) continue;
-        if (const auto error = CheckSegments(
-                points[i], points[(i + 1) % points.size()], points[j],
-                points[(j + 1) % points.size()], tolerance, remaining_checks))
-          return Return::Err(*error);
-      }
-    for (std::size_t other = l + 1; other < loops.size(); ++other)
-      for (std::size_t i = 0; i < points.size(); ++i)
-        for (std::size_t j = 0; j < loops[other].points.size(); ++j) {
-          const auto& second = loops[other].points;
-          if (const auto error = CheckSegments(
-                  points[i], points[(i + 1) % points.size()], second[j],
-                  second[(j + 1) % second.size()], tolerance, remaining_checks))
-            return Return::Err(*error);
-        }
-  }
-  for (std::size_t i = 0; i < loops.size(); ++i) {
-    if (i == *outer) continue;
-    const auto inside =
-        Contains(loops[*outer], loops[i].points.front(), remaining_checks);
-    if (!inside.ok()) return Return::Err(inside.error());
-    if (!inside.value())
-      return Return::Err(Invalid("Hole lies outside the outer polygon"));
-    for (std::size_t j = i + 1; j < loops.size(); ++j) {
-      if (j == *outer) continue;
-      const auto first =
-          Contains(loops[i], loops[j].points.front(), remaining_checks);
-      if (!first.ok()) return Return::Err(first.error());
-      const auto second =
-          Contains(loops[j], loops[i].points.front(), remaining_checks);
-      if (!second.ok()) return Return::Err(second.error());
-      if (first.value() || second.value())
-        return Return::Err(Invalid(
-            "Nested hole loops do not define one connected planar face"));
-    }
-  }
+  const auto checked =
+      CheckPolygonLoops(loops, outer, tolerance, remaining_checks);
+  if (!checked.ok()) return Return::Err(checked.error());
   return Return::Ok(*outer);
 }
-Result<PerforatedPolygon> ValidatePolygonCircularHoles(
+namespace {
+Result<PlanarRegion> ValidateCircularPolygonHoles(
     std::span<const std::vector<Vector3>> polygons,
     std::span<const ConicBoundary> circles,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
     double tolerance, uint64_t& remaining_checks) {
-  using Return = Result<PerforatedPolygon>;
+  using Return = Result<PlanarRegion>;
+  const auto outer = ValidatePlanarConics(circles, plane, natural_sense,
+                                          tolerance, remaining_checks);
+  if (!outer.ok()) return Return::Err(outer.error());
+  const auto origin = circles[outer.value()].center;
+  const auto& n = plane.normal;
+  const auto& x = plane.x_axis;
+  const Vector3 y{n.y * x.z - n.z * x.y, n.z * x.x - n.x * x.z,
+                  n.x * x.y - n.y * x.x};
+  const long double clearance = 2 * static_cast<long double>(tolerance);
+  const long double outer_radius = circles[outer.value()].major_radius;
+  long double area = 0;
+  for (std::size_t c = 0; c < circles.size(); ++c) {
+    const long double radius = circles[c].major_radius;
+    const auto disk_area = std::numbers::pi_v<long double> * radius * radius;
+    area += c == outer.value() ? disk_area : -disk_area;
+  }
+  std::vector<Loop> loops;
+  for (const auto& polygon : polygons) {
+    if (polygon.size() < 3)
+      return Return::Err(Invalid("Polygon requires at least three vertices"));
+    auto projected = ProjectLoop(polygon, plane, origin, tolerance);
+    if (!projected.ok()) return Return::Err(projected.error());
+    auto loop = std::move(projected).value();
+    if ((loop.area > 0) == natural_sense)
+      return Return::Err(
+          Invalid("Polygon hole winding agrees with the outer loop"));
+    // A disk is convex: bounding every polygon vertex bounds every straight
+    // segment and its enclosed polygon, including concave hole profiles.
+    for (const auto point : loop.points) {
+      if (const auto error = Charge(remaining_checks))
+        return Return::Err(*error);
+      const auto distance = std::hypot(point.x, point.y);
+      if (!std::isfinite(distance) || distance + clearance >= outer_radius)
+        return Return::Err(
+            Invalid("Polygon hole is outside, touching or too "
+                    "close to the outer circle"));
+    }
+    for (std::size_t c = 0; c < circles.size(); ++c) {
+      if (c == outer.value()) continue;
+      const Point2 center{Project(circles[c].center, origin, x),
+                          Project(circles[c].center, origin, y)};
+      const auto inside = SeparateDisk(loop, center, circles[c].major_radius,
+                                       clearance, remaining_checks);
+      if (!inside.ok()) return Return::Err(inside.error());
+      if (inside.value())
+        return Return::Err(
+            Invalid("Circular hole is nested inside a polygon hole"));
+    }
+    area -= std::abs(loop.area) / 2;
+    loops.push_back(std::move(loop));
+  }
+  const auto checked =
+      CheckPolygonLoops(loops, std::nullopt, tolerance, remaining_checks);
+  if (!checked.ok()) return Return::Err(checked.error());
+  if (!std::isfinite(area) || area <= 0)
+    return Return::Err(
+        Invalid("Perforated circle area is nonpositive or unrepresentable"));
+  return Return::Ok({outer.value(), area, true});
+}
+}  // namespace
+Result<PlanarRegion> ValidateMixedPlanarLoops(
+    std::span<const std::vector<Vector3>> polygons,
+    std::span<const ConicBoundary> circles,
+    const openparasolid::PlaneGeometry& plane, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks) {
+  using Return = Result<PlanarRegion>;
+  for (const auto& circle : circles)
+    if (!circle.circle)
+      return Return::Err(
+          {ErrorCode::kUnsupportedFormat, 0,
+           "Mixed conic/polygon boundaries require CIRCLE bases"});
   for (std::size_t i = 0; i < circles.size(); ++i) {
-    if (!circles[i].circle)
-      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                          "Polygon conic holes require CIRCLE bases"});
     // A hole is a correctly wound single conic for the opposite face normal.
     // Reuse the full-turn, entire-plane and radius checks of the conic subset.
     const auto valid =
@@ -213,9 +314,9 @@ Result<PerforatedPolygon> ValidatePolygonCircularHoles(
           ValidatePlanarConics(circles.subspan(i, 1), plane, natural_sense,
                                tolerance, remaining_checks);
       if (outward.ok())
-        return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                            "Circular outer loops with polygon boundaries "
-                            "are not supported"});
+        return ValidateCircularPolygonHoles(polygons, circles, plane,
+                                            natural_sense, tolerance,
+                                            remaining_checks);
       return Return::Err(valid.error());
     }
   }
@@ -243,23 +344,8 @@ Result<PerforatedPolygon> ValidatePolygonCircularHoles(
     const long double radius = circle.major_radius;
     for (std::size_t l = 0; l < loops.size(); ++l) {
       const auto& loop = loops[l];
-      for (std::size_t e = 0; e < loop.points.size(); ++e) {
-        if (const auto error = Charge(remaining_checks))
-          return Return::Err(*error);
-        const auto a = loop.points[e],
-                   b = loop.points[(e + 1) % loop.points.size()];
-        const auto length = std::hypot(b.x - a.x, b.y - a.y);
-        const auto dx = (b.x - a.x) / length, dy = (b.y - a.y) / length;
-        const auto along = std::clamp(
-            (center.x - a.x) * dx + (center.y - a.y) * dy, 0.L, length);
-        const auto distance = std::hypot(center.x - a.x - along * dx,
-                                         center.y - a.y - along * dy);
-        if (!std::isfinite(distance) || distance <= radius + clearance)
-          return Return::Err(Invalid(
-              "Circular hole crosses, encloses, touches or is too close to "
-              "a polygon boundary"));
-      }
-      const auto inside = Contains(loop, center, remaining_checks);
+      const auto inside =
+          SeparateDisk(loop, center, radius, clearance, remaining_checks);
       if (!inside.ok()) return Return::Err(inside.error());
       if (inside.value() != (l == outer.value()))
         return Return::Err(

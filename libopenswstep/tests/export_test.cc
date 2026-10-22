@@ -794,6 +794,126 @@ TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
     ASSERT_TRUE(sheet.ok()) << sheet.error().message;
   }
 }
+TEST(OpenSwStep, ExportsCircularFacesWithPolygonalAndCircularHoles) {
+  for (const bool two : {false, true})
+    for (const bool circle : {false, true})
+      for (const bool first : {false, true})
+        for (const bool seams : {false, true}) {
+          const auto result =
+              Export(test::CircularPolygonHoles(two, circle, first, seams));
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          const auto edges = (two ? 8 : 4) + (circle ? 2 : 1);
+          EXPECT_EQ(result.value().statistics.faces, 1);
+          EXPECT_EQ(result.value().statistics.edges, edges);
+          EXPECT_EQ(result.value().statistics.vertices, edges);
+          CheckReferences(result.value());
+        }
+  for (const auto& fixture :
+       {test::CircularPolygonHoles(false, true, false, false, true),
+        test::ReorderedCircularPolygonHoles(),
+        test::RotateAndTranslate(test::CircularPolygonHoles(true, true))}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+  }
+}
+TEST(OpenSwStep, PreservesMixedCircleOuterOrientationAndSharedBudget) {
+  auto negative = test::CircularPolygonHoles();
+  test::Set(negative, 300, "sense", '-');
+  for (auto& node : negative.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  const auto result = Export(negative);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  auto reversed = test::CircularPolygonHoles();
+  test::Set(reversed, 14000, "sense", '-');
+  for (auto& node : reversed.report.nodes)
+    if (node.index == 14000) node.fields[1].values = {0., 0., -1.};
+  ASSERT_TRUE(Export(reversed).ok());
+  auto options = Options();
+  // Four vertex-to-circle tests and two nonadjacent polygon edge pairs.
+  options.max_polygon_checks = 6;
+  ASSERT_TRUE(Export(test::CircularPolygonHoles(), options).ok());
+  options.max_polygon_checks = 5;
+  const auto limited = Export(test::CircularPolygonHoles(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsPolygonHolesOutsideOrTouchingOuterCircle) {
+  for (const double radius : {1., std::sqrt(2.), std::sqrt(2.) + 1e-7}) {
+    auto fixture = test::CircularPolygonHoles();
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 14000) node.fields[3].values = {radius};
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+}
+TEST(OpenSwStep, RejectsIntersectingOrNestedHolesInsideCircularFaces) {
+  for (const Vector3 center : {Vector3{0, 0, 0}, Vector3{0, 1.5, 0},
+                               Vector3{0, 2, 0}, Vector3{0, 2 + 1e-7, 0}}) {
+    auto fixture = test::CircularPolygonHoles(false, true);
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 14001)
+        node.fields[0].values = {center.x, center.y, center.z};
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+  // A large circular hole enclosing a polygon hole has no edge crossings.
+  auto enclosing = test::CircularPolygonHoles(false, true);
+  for (auto& node : enclosing.report.nodes)
+    if (node.index == 14001) {
+      node.fields[0].values = {0., 0., 0.};
+      node.fields[3].values = {2.};
+    }
+  EXPECT_FALSE(Export(enclosing).ok());
+  auto nested_circle = test::CircularPolygonHoles(false, true);
+  for (auto& node : nested_circle.report.nodes)
+    if (node.index == 14001) {
+      node.fields[0].values = {0., 0., 0.};
+      node.fields[3].values = {.25};
+    }
+  const auto nested = Export(nested_circle);
+  ASSERT_FALSE(nested.ok());
+  EXPECT_NE(nested.error().message.find("nested inside"), std::string::npos);
+  // Both polygon holes are strictly inside the circle, but one encloses the
+  // other without any edge intersections.
+  auto nested_polygons = test::PlanarFace({{-3, -3, 0},
+                                           {-3, 3, 0},
+                                           {3, 3, 0},
+                                           {3, -3, 0},
+                                           {-1, -1, 0},
+                                           {-1, 1, 0},
+                                           {1, 1, 0},
+                                           {1, -1, 0}},
+                                          {{0, 1, 2, 3}, {4, 5, 6, 7}});
+  test::ConicLoopSpec outer;
+  outer.major = 6;
+  test::AddConicFaceLoops(nested_polygons, 300, {outer});
+  const auto nested_result = Export(nested_polygons);
+  ASSERT_FALSE(nested_result.ok());
+  EXPECT_NE(nested_result.error().message.find("Nested hole loops"),
+            std::string::npos);
+  // Two valid hole profiles become touching or crossing when shifted.
+  for (const double shift : {2., 3.}) {
+    auto fixture = test::CircularPolygonHoles(true);
+    for (auto& node : fixture.report.nodes)
+      if (node.node_type == 29 && node.index >= 504 && node.index <= 507)
+        node.fields[0].values[0] =
+            std::get<double>(node.fields[0].values[0]) - shift;
+    for (auto& node : fixture.report.nodes)
+      if (node.node_type == 30 && node.index >= 4004 && node.index <= 4007)
+        node.fields[0].values[0] =
+            std::get<double>(node.fields[0].values[0]) - shift;
+    EXPECT_FALSE(Export(fixture).ok());
+  }
+}
+TEST(OpenSwStep, ParsesCircularPolygonHolesThroughBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::ReorderedCircularPolygonHoles());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.edges, 6);
+}
 TEST(OpenSwStep, ExportsPolygonFacesWithCircularAndPolygonalHoles) {
   for (const bool polygon_hole : {false, true})
     for (const bool hole_first : {false, true})
@@ -862,7 +982,7 @@ TEST(OpenSwStep, RejectsOverlappingNestedOrIncorrectlyWoundMixedHoles) {
   test::Set(wrong, 14000, "sense", '+');
   const auto outward = Export(wrong);
   ASSERT_FALSE(outward.ok());
-  EXPECT_EQ(outward.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_EQ(outward.error().code, ErrorCode::kInvalidRecord);
   auto negative = test::PolygonCircularHoles(true, true);
   test::Set(negative, 300, "sense", '-');
   for (auto& node : negative.report.nodes)
