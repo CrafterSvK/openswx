@@ -91,6 +91,21 @@ std::optional<uint8_t> TopologyByte(const DecodedNode& node,
   }
   return value;
 }
+std::optional<double> EdgeTolerance(const DecodedNode& node,
+                                    const TypeDefinition& schema) {
+  std::optional<double> value;
+  bool found = false;
+  for (std::size_t i = 0; i < schema.fields.size(); ++i) {
+    if (schema.fields[i].name != "tolerance") continue;
+    if (found) return std::nullopt;
+    found = true;
+    const auto& field = node.fields[i];
+    if (schema.fields[i].type == FieldType::kDouble && field.elements == 1 &&
+        field.values.size() == 1)
+      if (const auto* raw = std::get_if<double>(&field.values[0])) value = *raw;
+  }
+  return value;
+}
 bool Contains(std::initializer_list<uint16_t> values, uint16_t value) {
   return std::find(values.begin(), values.end(), value) != values.end();
 }
@@ -502,7 +517,8 @@ std::optional<ParseError> ModelAssembler::ValidateAndIndex() {
              : std::nullopt,
          node.node_type == 12
              ? TopologyByte(node, schema, "body_type", FieldType::kByte)
-             : std::nullopt});
+             : std::nullopt,
+         node.node_type == 16 ? EdgeTolerance(node, schema) : std::nullopt});
   }
   return std::nullopt;
 }
@@ -577,7 +593,7 @@ std::optional<ParseError> ModelAssembler::BuildGeometry() {
     ModelFields fields(node, report_.schemas[node.schema_index].definition);
     const GeometryContext context{report_, model_.positions_,
                                   options_.max_values - copied_values};
-    auto built = node.node_type == 38    ? BuildIntersection(node, fields, context)
+    auto built = node.node_type == 38 ? BuildIntersection(node, fields, context)
                  : node.node_type == 67  ? BuildSweptSurface(node, fields)
                  : node.node_type == 68  ? BuildSpunSurface(node, fields)
                  : node.node_type == 133 ? BuildTrimmedCurve(node, fields)

@@ -31,13 +31,18 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles, including split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | SPUN_SURF with an unbounded circular generator in an axial meridian plane of a regular ring torus | Equivalent analytic `TOROIDAL_SURFACE`, preserving source normal orientation and boundary edges |
+| Certified paired planar/rotational tolerant circular edges | Shared exact circular 3D master with `SURFACE_CURVE`, both source `PCURVE` representations and declared edge uncertainty |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
 Coordinates remain in the source frame. **The caller must specify metres or
 millimetres**; units are declared in the STEP context, without scaling source
 coordinates. Binding tolerance is positive, finite, in those source length
-units, and is also written as the STEP uncertainty. Natural conic parameters
-remain radians. Source vertex/edge identities are reused within the exported
+units, and is the base STEP uncertainty. Certified tolerant edges may use a
+larger explicitly transmitted `EDGE.tolerance`; the maximum actually used is
+written to STEP and returned as `ExportStatistics::length_uncertainty`.
+`use_source_edge_tolerances = false` requires the caller tolerance alone.
+Neither mode widens the reader's binding or ordinary boundary checks.
+Natural conic parameters remain radians. Source vertex/edge identities are reused within the exported
 body. Conic intervals longer than one turn are rejected because a single
 `EDGE_CURVE` cannot preserve their turn count.
 
@@ -332,17 +337,41 @@ and closure; analytic center/radius/plane comparisons certify their common
 support, and signed spans must make exactly one revolution without reversals.
 Only the validation cut is combined: STEP keeps every source edge and vertex.
 Each arc consumes one shared comparison in addition to the band's cut-pair
-check. Fin-specific curves still require explicit shared-edge/pcurve mapping.
+check. The paired tolerant circular subset below provides one such explicit mapping.
+
+Paired tolerant edges with no recorded 3D edge curve support one planar
+`SP_CURVE` and one constant-profile `SP_CURVE` on a recognized circular spun
+torus. Both must span their full clamped, nonperiodic polynomial spline domains
+and have distinct endpoint vertices. The rotational pcurve is linear with a
+constant generator parameter: its exact 3D image is a circle. The planar
+pcurve comprises quadratic Bezier spans. Bernstein bounds on each complete
+span's squared radius certify agreement with that circle within the edge
+allowance, with axial/frame/coordinate roundoff reserved. Derivative bounds and
+angular half-planes certify monotone winding and the same directed partial-turn
+branch. Endpoint samples alone cannot certify these edges. Adaptive subdivision
+consumes the shared comparison budget and has an explicit depth limit.
+
+The exact rotational circle supplies one shared 3D master curve.
+`SURFACE_CURVE` retains both `PCURVE` representations: original planar spline
+controls/knots and the exact affine change from spun generator/azimuth parameters
+to torus azimuth/meridian parameters. No circle is fitted to the approximate
+planar spline. Source topology, pcurves and declared edge tolerances are
+retained. The optional source allowance is applied only after this geometric
+certificate; strict mode rejects source discrepancies exceeding caller tolerance.
+The serialized STEP uncertainty reports any larger source allowance actually
+used. These are tolerant B-reps: associated pcurves need not coincide exactly
+with their 3D master. General tolerant edges, rational/periodic pcurves, partial
+spline domains and other surface pairings remain unsupported.
 
 These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
+General 3D NURBS curves/surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
 uncertified curved-hole envelopes, curved outer contours with curved holes,
 nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
-non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
+non-planar surfaces, other tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
 mixed-dimensional bodies, multiple material regions and solid void shells are
 not supported. Unsupported selected geometry fails the entire export. No partial document is returned and no part of the selected body is
@@ -467,29 +496,34 @@ volumes. Different seam phases exercise importer-created periodic seams and ring
 splits. Oblique full-cylinder cuts expose an OCCT import limitation: rebuilt
 B-spline pcurves deviate from the unchanged exact 3D ellipse. Five such synthetic
 measure checks use a documented relative tolerance of 5e-6; all other cases keep
-1e-9. Exact exporter flux formulas have separate analytic unit tests.
+1e-9. Exact exporter flux formulas have separate analytic unit tests. Four tolerant
+synthetic models additionally verify that all eight original 3D master edges
+remain exact circles after import; their volume comparisons retain 1e-9
+relative tolerance. OCCT may rebuild inconsistent pcurves from the 3D master
+and creates its own B-spline meridian seam.
 OCCT is exclusively a test dependency and is never linked into the export library.
 Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 51 export successfully, including twenty-one face-bearing
-bodies with 367 faces; 30 successes contain only wire/point geometry. All 51
-generated documents pass OCCT import and B-rep validity checks. Profiled cylinder
-bands and certified concave minor-arc contours add one complete body with 117
-faces and 324 edges, preserving all 50 previous successes. The other six return
+extracted streams: 52 export successfully, including twenty-two face-bearing
+bodies with 372 faces; 30 successes contain only wire/point geometry. All 52
+generated documents pass OCCT import and B-rep validity checks. Paired tolerant
+circular-edge support adds a complete body with 5 faces and 6 source edges,
+preserving all 51 previous successes. Its planar pcurves deviate by about
+1.85e-7 source metres from their exact rotational circles; the transmitted
+edge tolerance is 2.5e-7 metres. That source allowance is now retained and
+reported rather than inferred from endpoint samples. The other five return
 unsupported-format errors. Their first remaining geometry obstacles are:
 
 | Bodies | Missing support |
 | --- | --- |
 | 2 | Implicit plane/cone intersection curves and faces trimmed by them |
 | 2 | NURBS surfaces and implicit intersections with analytic surfaces |
-| 2 | Fin-specific SP_CURVE mappings and shared tolerant edges; one also needs unresolved trim intervals |
+| 1 | Unresolved trim intervals and other fin-specific SP_CURVE mappings |
 
-Circular spun-torus recognition covers six rotational supporting surfaces in
-those last two bodies, including both source normal orientations. The complete
-body count remains 51/57: fin-specific curves still block their export. Resolving
-trim intervals alone does not make them exportable.
+Circular spun-torus recognition covers the remaining rotational supporting
+surfaces, but resolving trim intervals alone does not complete the final body.
 These counts describe this private regression selection, not general format
 coverage. No private source files or generated exports are stored here.
 
@@ -510,7 +544,9 @@ Run `doxygen Doxyfile` from this directory to generate public API HTML at
 
 - Siemens *Parasolid XT Format Reference*, July 2022: sections 4.3.3–4.3.10
   (body through vertex), 5.2.1.1–5.2.1.3 (line/circle/ellipse),
-  5.2.2.1–5.2.2.3 (plane/cylinder/cone), 5.2.2.5 (torus), 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (curve/surface senses) and 5.3.4.1 (attaching geometry to topology).
+  5.2.2.1–5.2.2.3 (plane/cylinder/cone), 5.2.2.5 (torus), 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (curve/surface senses),
+  5.2.1.8 (SP_curve, p. 51), 5.3.4.1 (attaching geometry to topology) and
+  5.3.11 (Edge, p. 98).
   The local reading copy is in the workspace's `xt-doc`; it is not bundled here.
 - [STEP toroidal-surface attributes](https://www.steptools.com/docs/stp_aim/html/t_toroidal_surface.html).
 - [STEP conical-surface attributes](https://www.steptools.com/docs/stp_aim/html/t_conical_surface.html).

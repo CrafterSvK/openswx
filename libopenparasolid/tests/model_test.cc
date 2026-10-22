@@ -9,6 +9,18 @@
 namespace openparasolid {
 namespace {
 using namespace test;
+TEST(ParasolidModel, RetainsTransmittedEdgeTolerancesWithoutInferringDefaults) {
+  ModelFixture f;
+  f.Add(16, 1, {Numbers("tolerance", {2.5e-7})});
+  f.Add(16, 2, {});
+  f.Add(14, 3, {Numbers("tolerance", {1.})});
+  const auto result = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(result.ok());
+  ASSERT_TRUE(result.value().FindNode(NodeId{1})->edge_tolerance.has_value());
+  EXPECT_DOUBLE_EQ(*result.value().FindNode(NodeId{1})->edge_tolerance, 2.5e-7);
+  EXPECT_FALSE(result.value().FindNode(NodeId{2})->edge_tolerance.has_value());
+  EXPECT_FALSE(result.value().FindNode(NodeId{3})->edge_tolerance.has_value());
+}
 TEST(ParasolidModel, ResolvesForwardNullCyclicAndTypedReferences) {
   ModelFixture f;
   f.Add(74, 8,

@@ -11,6 +11,9 @@
 #include "openswstep/version.h"
 
 namespace openswstep::internal {
+void StepWriter::IncludeSourceTolerance(double tolerance) {
+  uncertainty_ = std::max(uncertainty_, tolerance);
+}
 std::string Reference(Id id) { return "#" + std::to_string(id); }
 std::string References(std::span<const Id> ids) {
   std::string text = "(";
@@ -99,7 +102,8 @@ Result<StepDocument> StepWriter::Finish(std::string_view representation,
       Add("PRODUCT_CONTEXT(''," + Reference(application) + ",'mechanical')");
   const auto product = Add("PRODUCT('body'," + Quote(options_.product_name) +
                            ",'',(" + Reference(product_context) + "))");
-  Add("PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(" + Reference(product) + "))");
+  Add("PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,(" + Reference(product) +
+      "))");
   const auto formation =
       Add("PRODUCT_DEFINITION_FORMATION('',''," + Reference(product) + ')');
   const auto definition_context =
@@ -118,10 +122,9 @@ Result<StepDocument> StepWriter::Finish(std::string_view representation,
       Add("(NAMED_UNIT(*) PLANE_ANGLE_UNIT() SI_UNIT($,.RADIAN.))");
   const auto solid_angle =
       Add("(NAMED_UNIT(*) SI_UNIT($,.STERADIAN.) SOLID_ANGLE_UNIT())");
-  const auto uncertainty =
-      Add("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(" +
-          Number(options_.tolerance) + ")," + Reference(length) +
-          ",'distance_accuracy_value','')");
+  const auto uncertainty = Add("UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(" +
+                               Number(uncertainty_) + ")," + Reference(length) +
+                               ",'distance_accuracy_value','')");
   const auto context =
       Add("(GEOMETRIC_REPRESENTATION_CONTEXT(3) "
           "GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((" +
@@ -147,6 +150,7 @@ Result<StepDocument> StepWriter::Finish(std::string_view representation,
     return Result<StepDocument>::Err(
         {ErrorCode::kResourceLimit, 0, "STEP output byte limit exceeded"});
   statistics.entities = count_;
+  statistics.length_uncertainty = uncertainty_;
   return Result<StepDocument>::Ok(
       {header + entities_ + std::string(footer), statistics});
 }

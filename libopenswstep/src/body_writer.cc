@@ -21,6 +21,7 @@
 #include "sphere_boundary.h"
 #include "spun_torus.h"
 #include "step_writer.h"
+#include "tolerant_circle.h"
 #include "torus_boundary.h"
 
 namespace openswstep::internal {
@@ -78,12 +79,21 @@ struct FaceComponent {
 class BodyWriter {
  public:
   BodyWriter(const Model& model, const BodyGeometryBinding& body,
-             const ExportOptions& options)
+             const ExportOptions& options,
+             std::span<const CircularEdgeRecovery> recoveries, uint64_t checks)
       : model_(model),
         body_(body),
         options_(options),
         writer_(options),
-        polygon_checks_remaining_(options.max_polygon_checks) {}
+        polygon_checks_remaining_(checks) {
+    for (const auto& recovery : recoveries) {
+      recovered_curves_.emplace(
+          recovery.curve.value,
+          GeometryObject{recovery.curve, '+', recovery.circle});
+      recovered_edges_.emplace(recovery.curve.value, &recovery);
+      writer_.IncludeSourceTolerance(recovery.tolerance);
+    }
+  }
   Result<StepDocument> Build();
 
  private:
@@ -91,6 +101,8 @@ class BodyWriter {
   Result<const GeometryObject*> Basis(NodeId id) const;
   ParseError Error(NodeId id, ErrorCode code, const char* message) const;
   Result<Id> Curve(NodeId id);
+  Id Surface(const FaceData& face);
+  Id ParameterCurve(const NurbsCurveGeometry& curve, Id surface);
   Result<Id> Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
                   double first, double last);
   Id Vertex(NodeId id);
@@ -117,6 +129,9 @@ class BodyWriter {
   std::map<uint32_t, Id> vertices_;
   std::map<uint32_t, Id> edges_;
   std::map<uint32_t, Id> curves_;
+  std::map<uint32_t, Id> surfaces_;
+  std::map<uint32_t, GeometryObject> recovered_curves_;
+  std::map<uint32_t, const CircularEdgeRecovery*> recovered_edges_;
   std::map<uint32_t, std::vector<EdgeUse>> uses_;
   std::vector<FaceData> faces_;
   std::vector<bool> reversed_;
@@ -138,6 +153,9 @@ Result<const GeometryObject*> BodyWriter::Geometry(NodeId id) const {
   return Result<const GeometryObject*>::Ok(&model_.geometry()[*node->geometry]);
 }
 Result<const GeometryObject*> BodyWriter::Basis(NodeId id) const {
+  if (const auto found = recovered_curves_.find(id.value);
+      found != recovered_curves_.end())
+    return Result<const GeometryObject*>::Ok(&found->second);
   std::set<uint32_t> visited;
   for (unsigned depth = 0; depth <= 64; ++depth) {
     if (!visited.insert(id.value).second)
@@ -187,6 +205,22 @@ Result<Id> BodyWriter::Curve(NodeId id) {
     return Result<Id>::Err(Error(
         id, ErrorCode::kUnsupportedFormat,
         "Curve export currently supports LINE, CIRCLE and ELLIPSE bases"));
+  }
+  if (const auto found = recovered_edges_.find(key);
+      found != recovered_edges_.end()) {
+    std::vector<Id> pcurves;
+    for (const auto& use : found->second->uses) {
+      const auto face =
+          std::find_if(faces_.begin(), faces_.end(), [&](const auto& value) {
+            return value.source->surface == use.surface;
+          });
+      if (face == faces_.end())
+        return Result<Id>::Err(Error(use.surface, ErrorCode::kInvalidRecord,
+                                     "Recovered pcurve surface is absent"));
+      pcurves.push_back(ParameterCurve(use.pcurve, Surface(*face)));
+    }
+    result = writer_.Add("SURFACE_CURVE(''," + Reference(result) + ',' +
+                         References(pcurves) + ",.CURVE_3D.)");
   }
   curves_.emplace(key, result);
   return Result<Id>::Ok(result);
@@ -1005,30 +1039,10 @@ Result<bool> BodyWriter::CheckSolid() {
               "Closed shell has nonpositive or unrepresentable signed volume"));
   return Result<bool>::Ok(true);
 }
-Result<Id> BodyWriter::Face(std::size_t index) {
-  const auto& face = faces_[index];
-  std::vector<Id> bounds;
-  for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
-    std::vector<Id> uses;
-    for (const auto& fin : face.source->loops[i].fins) {
-      const bool forward = fin.use.sense == TopologySense::kForward;
-      const auto edge =
-          Edge(fin.use.edge, fin.curve,
-               forward ? fin.use.start_vertex : fin.use.end_vertex,
-               forward ? fin.use.end_vertex : fin.use.start_vertex,
-               forward ? fin.start : fin.end, forward ? fin.end : fin.start);
-      if (!edge.ok()) return edge;
-      uses.push_back(writer_.Add("ORIENTED_EDGE('',*,*," +
-                                 Reference(edge.value()) + ',' +
-                                 Logical(forward) + ')'));
-    }
-    const auto loop = writer_.Add("EDGE_LOOP(''," + References(uses) + ')');
-    bounds.push_back(writer_.Add(
-        std::string(face.outer_loop && i == *face.outer_loop
-                        ? "FACE_OUTER_BOUND"
-                        : "FACE_BOUND") +
-        "(''," + Reference(loop) + ',' + Logical(!reversed_[index]) + ')'));
-  }
+Id BodyWriter::Surface(const FaceData& face) {
+  if (const auto found = surfaces_.find(face.source->surface.value);
+      found != surfaces_.end())
+    return found->second;
   Id surface = 0;
   if (face.sphere) {
     const auto& sphere = *face.sphere;
@@ -1067,6 +1081,63 @@ Result<Id> BodyWriter::Face(std::size_t index) {
         face.plane->origin, face.plane->normal, face.plane->x_axis);
     surface = writer_.Add("PLANE(''," + Reference(placement) + ')');
   }
+  surfaces_.emplace(face.source->surface.value, surface);
+  return surface;
+}
+Id BodyWriter::ParameterCurve(const NurbsCurveGeometry& curve, Id surface) {
+  std::vector<Id> points;
+  for (std::size_t i = 0; i < curve.controls.values.size(); i += 2)
+    points.push_back(writer_.Add(
+        "CARTESIAN_POINT('',(" + writer_.Number(curve.controls.values[i]) +
+        ',' + writer_.Number(curve.controls.values[i + 1]) + "))"));
+  std::string multiplicities = "(", knots = "(";
+  for (std::size_t i = 0; i < curve.axis.knots.size(); ++i) {
+    if (i) {
+      multiplicities += ',';
+      knots += ',';
+    }
+    multiplicities += std::to_string(curve.axis.multiplicities[i]);
+    knots += writer_.Number(curve.axis.knots[i]);
+  }
+  multiplicities += ')';
+  knots += ')';
+  const auto spline = writer_.Add(
+      "B_SPLINE_CURVE_WITH_KNOTS(''," + std::to_string(curve.axis.degree) +
+      ',' + References(points) + ",.UNSPECIFIED.,.F.,.F.," + multiplicities +
+      ',' + knots + ",.UNSPECIFIED.)");
+  const auto context = writer_.Add(
+      "(GEOMETRIC_REPRESENTATION_CONTEXT(2) REPRESENTATION_CONTEXT('','2D'))");
+  const auto representation =
+      writer_.Add("DEFINITIONAL_REPRESENTATION('',(" + Reference(spline) +
+                  ")," + Reference(context) + ')');
+  return writer_.Add("PCURVE(''," + Reference(surface) + ',' +
+                     Reference(representation) + ')');
+}
+Result<Id> BodyWriter::Face(std::size_t index) {
+  const auto& face = faces_[index];
+  std::vector<Id> bounds;
+  for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
+    std::vector<Id> uses;
+    for (const auto& fin : face.source->loops[i].fins) {
+      const bool forward = fin.use.sense == TopologySense::kForward;
+      const auto edge =
+          Edge(fin.use.edge, fin.curve,
+               forward ? fin.use.start_vertex : fin.use.end_vertex,
+               forward ? fin.use.end_vertex : fin.use.start_vertex,
+               forward ? fin.start : fin.end, forward ? fin.end : fin.start);
+      if (!edge.ok()) return edge;
+      uses.push_back(writer_.Add("ORIENTED_EDGE('',*,*," +
+                                 Reference(edge.value()) + ',' +
+                                 Logical(forward) + ')'));
+    }
+    const auto loop = writer_.Add("EDGE_LOOP(''," + References(uses) + ')');
+    bounds.push_back(writer_.Add(
+        std::string(face.outer_loop && i == *face.outer_loop
+                        ? "FACE_OUTER_BOUND"
+                        : "FACE_BOUND") +
+        "(''," + Reference(loop) + ',' + Logical(!reversed_[index]) + ')'));
+  }
+  const auto surface = Surface(face);
   const auto result = writer_.Add(
       "ADVANCED_FACE(''," + References(bounds) + "," + Reference(surface) +
       ',' + Logical(face.natural_sense != reversed_[index]) + ')');
@@ -1189,6 +1260,29 @@ Result<StepDocument> BodyWriter::Build() {
 Result<StepDocument> BuildBody(const Model& model,
                                const BodyGeometryBinding& body,
                                const ExportOptions& options) {
-  return BodyWriter(model, body, options).Build();
+  uint64_t remaining = options.max_polygon_checks;
+  const auto recovered =
+      RecoverTolerantCircles(model, body, options.tolerance,
+                             options.use_source_edge_tolerances, remaining);
+  if (!recovered.ok()) return Result<StepDocument>::Err(recovered.error());
+  if (recovered.value().empty())
+    return BodyWriter(model, body, options, {}, remaining).Build();
+  auto normalized = body;
+  std::map<uint32_t, std::pair<NodeId, const CircularEdgeRecovery::Use*>> uses;
+  for (const auto& edge : recovered.value())
+    for (const auto& use : edge.uses)
+      uses.emplace(use.fin.value, std::pair{edge.curve, &use});
+  for (auto& face : normalized.faces)
+    for (auto& loop : face.loops)
+      for (auto& fin : loop.fins) {
+        const auto found = uses.find(fin.use.fin.value);
+        if (found == uses.end()) continue;
+        fin.curve = found->second.first;
+        fin.start = found->second.second->first;
+        fin.end = found->second.second->last;
+        fin.use.fin_curve = {};
+      }
+  return BodyWriter(model, normalized, options, recovered.value(), remaining)
+      .Build();
 }
 }  // namespace openswstep::internal

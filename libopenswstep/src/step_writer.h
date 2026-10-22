@@ -30,7 +30,9 @@ std::string Quote(std::string_view text);
 // Finish always propagates it and never publishes a partial document.
 class StepWriter {
  public:
-  explicit StepWriter(const ExportOptions& options) : options_(options) {}
+  explicit StepWriter(const ExportOptions& options)
+      : options_(options), uncertainty_(options.tolerance) {}
+  void IncludeSourceTolerance(double tolerance);
   Id Add(std::string entity);
   std::string Number(double value);
   Id Point(Vector3 value);
@@ -44,6 +46,7 @@ class StepWriter {
   const ExportOptions& options_;
   std::string entities_;
   uint64_t count_ = 0;
+  double uncertainty_;
   std::optional<ParseError> error_;
 };
 }  // namespace openswstep::internal

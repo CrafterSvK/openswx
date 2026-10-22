@@ -420,6 +420,11 @@ struct ModelNode {
   std::optional<uint8_t> region_type;
   /// Raw scalar byte BODY.body_type. Unknown values are retained.
   std::optional<uint8_t> body_type;
+  /// Transmitted scalar EDGE.tolerance in source length units, when present.
+  /// Retained without widening caller binding tolerances or certifying
+  /// geometry. Consumers must check finiteness and positivity before using it.
+  /// @see @ref xt_edgeschema "XT 5.3.11: Edge (p. 98)"
+  std::optional<double> edge_tolerance;
 };
 /// @brief Library semantic findings recorded while building the model.
 ///

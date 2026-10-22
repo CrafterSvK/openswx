@@ -19,6 +19,7 @@
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
 #include "../src/spun_torus.h"
+#include "../src/tolerant_circle.h"
 #include "../src/torus_boundary.h"
 #include "fixtures.h"
 
@@ -719,6 +720,110 @@ TEST(OpenSwStep, ExportsExactToroidalBandsAndClosedSolids) {
     EXPECT_EQ(result.value().statistics.faces, 1);
     EXPECT_EQ(result.value().statistics.solids, 0);
   }
+}
+TEST(OpenSwStep, ExportsCertifiedTolerantCircularEdgesWithSourcePcurves) {
+  const auto fixture = test::TolerantToroidalBand();
+  const auto result = Export(fixture);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.faces, 3);
+  EXPECT_EQ(result.value().statistics.edges, 8);
+  EXPECT_EQ(result.value().statistics.vertices, 8);
+  EXPECT_EQ(result.value().statistics.solids, 1);
+  EXPECT_DOUBLE_EQ(result.value().statistics.length_uncertainty, .001);
+  EXPECT_NE(result.value().text.find("=SURFACE_CURVE("), std::string::npos);
+  EXPECT_NE(result.value().text.find("=PCURVE("), std::string::npos);
+  EXPECT_NE(result.value().text.find("=B_SPLINE_CURVE_WITH_KNOTS("),
+            std::string::npos);
+  for (const auto& [type, count] : std::vector<std::pair<std::string, int>>{
+           {"=SURFACE_CURVE", 8},
+           {"=PCURVE", 16},
+           {"=B_SPLINE_CURVE_WITH_KNOTS", 16}}) {
+    std::size_t position = 0;
+    int found = 0;
+    while ((position = result.value().text.find(type, position)) !=
+           std::string::npos) {
+      ++found;
+      ++position;
+    }
+    EXPECT_EQ(found, count) << type;
+  }
+  EXPECT_NE(result.value().text.find("LENGTH_MEASURE(0.001)"),
+            std::string::npos);
+  CheckReferences(result.value());
+  const auto serialized = test::Serialize(fixture);
+  const auto parsed = ExportParasolid(serialized.bytes, NodeId{1}, Options(),
+                                      &serialized.catalog);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().text, result.value().text);
+}
+TEST(OpenSwStep,
+     RetainsTolerantEdgeOrientationUnderReversedAndTranslatedFrames) {
+  for (const bool profile : {false, true})
+    for (const bool axis : {false, true}) {
+      const auto fixture = test::TolerantToroidalBand(.001, profile, axis);
+      for (const auto& input : {fixture, test::RotateAndTranslate(fixture)}) {
+        const auto result = Export(input);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.solids, 1);
+        EXPECT_EQ(result.value().statistics.edges, 8);
+        EXPECT_DOUBLE_EQ(result.value().statistics.length_uncertainty, .001);
+      }
+    }
+}
+TEST(OpenSwStep, RejectsUnmappedTolerantBranchesAndInvalidVertexAgreement) {
+  const auto fixture = test::TolerantToroidalBand();
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const auto bound = BindBodyGeometry(model.value(), NodeId{1}, 1e-7);
+  ASSERT_TRUE(bound.ok());
+  auto incomplete = bound.value();
+  incomplete.faces.erase(incomplete.faces.begin());
+  uint64_t remaining = 10000;
+  const auto partial = internal::RecoverTolerantCircles(
+      model.value(), incomplete, 1e-7, true, remaining);
+  ASSERT_FALSE(partial.ok());
+  EXPECT_EQ(partial.error().code, ErrorCode::kUnsupportedFormat);
+  auto moved = bound.value();
+  moved.vertices.front().position.x += .01;
+  remaining = 10000;
+  const auto displaced = internal::RecoverTolerantCircles(
+      model.value(), moved, 1e-7, true, remaining);
+  ASSERT_FALSE(displaced.ok());
+  EXPECT_NE(displaced.error().message.find("vertex tolerance"),
+            std::string::npos);
+  auto truncated = bound.value();
+  truncated.faces.front().loops.front().fins.front().end = .5;
+  remaining = 10000;
+  const auto domain = internal::RecoverTolerantCircles(model.value(), truncated,
+                                                       1e-7, true, remaining);
+  ASSERT_FALSE(domain.ok());
+  EXPECT_NE(domain.error().message.find("full clamped spline domain"),
+            std::string::npos);
+}
+TEST(OpenSwStep, EnforcesSourceTolerancePolicyAndWholeSplineCertificate) {
+  auto options = Options();
+  options.use_source_edge_tolerances = false;
+  auto result = Export(test::TolerantToroidalBand(), options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  options.tolerance = .001;
+  result = Export(test::TolerantToroidalBand(), options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  result = Export(test::TolerantToroidalBand(1e-6));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  // Tolerance violations occur inside the Bezier spans: merely matching the
+  // source endpoints and midpoints must not certify the complete edge.
+  EXPECT_NE(result.error().message.find("exceeds the circular edge tolerance"),
+            std::string::npos);
+  options = Options();
+  options.max_polygon_checks = 1;
+  result = Export(test::TolerantToroidalBand(), options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  result = Export(test::TolerantToroidalBand(-1));
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
 }
 TEST(OpenSwStep, ExportsCircularSpunSurfacesWithCorrectNormals) {
   for (bool reverse_profile : {false, true})

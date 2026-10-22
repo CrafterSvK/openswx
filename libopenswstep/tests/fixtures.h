@@ -6,12 +6,14 @@
 #include <bit>
 #include <cmath>
 #include <map>
+#include <numbers>
 #include <set>
 #include <utility>
 #include <vector>
 
 #include "../../libopenparasolid/tests/model_test_helpers.h"
 #include "../../libopenparasolid/tests/test_helpers.h"
+#include "openparasolid/brep.h"
 
 namespace openswstep::test {
 using namespace openparasolid;
@@ -355,7 +357,7 @@ inline ModelFixture RotateAndTranslate(ModelFixture f) {
     if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
         node.node_type != 32 && node.node_type != 50 && node.node_type != 51 &&
         node.node_type != 52 && node.node_type != 53 && node.node_type != 54 &&
-        node.node_type != 68)
+        node.node_type != 68 && node.node_type != 133)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
@@ -367,7 +369,8 @@ inline ModelFixture RotateAndTranslate(ModelFixture f) {
           definitions[i].name == "position" ||
           definitions[i].name == "origin" || definitions[i].name == "center" ||
           definitions[i].name == "base" || definitions[i].name == "start" ||
-          definitions[i].name == "end";
+          definitions[i].name == "end" || definitions[i].name == "point_1" ||
+          definitions[i].name == "point_2";
       node.fields[i].values = {std::get<double>(old[1]) + (point ? 1e6 : 0),
                                std::get<double>(old[2]) + (point ? -2e6 : 0),
                                std::get<double>(old[0]) + (point ? 3e6 : 0)};
@@ -2016,6 +2019,125 @@ inline ModelFixture SplitToroidalBand() {
          ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
+// Independent synthetic polynomial circle approximation. The 3D master is
+// supplied by the exact constant-profile rotational use, not fitted to
+// controls.
+inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
+                                         bool reverse_profile = false,
+                                         bool reverse_axis = false) {
+  auto f = SpunToroidalBand(SplitToroidalBand(), reverse_profile, reverse_axis);
+  const auto model = ModelBuilder::Build(f.report);
+  const auto bound = BindBodyGeometry(model.value(), NodeId{1}, 1e-7);
+  for (const auto& face : bound.value().faces) {
+    const auto* node = model.value().FindNode(face.surface);
+    const auto& payload = model.value().geometry()[*node->geometry].payload;
+    const auto* plane = std::get_if<PlaneGeometry>(&payload);
+    for (const auto& loop : face.loops)
+      for (const auto& fin : loop.fins) {
+        const auto id = 10000 + 10 * fin.use.fin.value;
+        std::vector<ScalarValue> controls, knots, multiplicities;
+        unsigned degree = 1, count = 2;
+        if (plane) {
+          degree = 2;
+          constexpr unsigned kPieces = 4;
+          count = 2 * kPieces + 1;
+          const auto y = Cross(plane->normal, plane->x_axis);
+          const auto* circle = std::get_if<CircleGeometry>(
+              &model.value()
+                   .geometry()[*model.value().FindNode(fin.curve)->geometry]
+                   .payload);
+          const auto add = [&](double angle, double factor) {
+            const Vector3 p{
+                factor * circle->radius * std::cos(angle) - plane->origin.x,
+                factor * circle->radius * std::sin(angle) - plane->origin.y,
+                circle->center.z - plane->origin.z};
+            controls.emplace_back(p.x * plane->x_axis.x +
+                                  p.y * plane->x_axis.y +
+                                  p.z * plane->x_axis.z);
+            controls.emplace_back(p.x * y.x + p.y * y.y + p.z * y.z);
+          };
+          const auto delta = (fin.end - fin.start) / kPieces;
+          add(fin.start, 1);
+          for (unsigned i = 0; i < kPieces; ++i) {
+            add(fin.start + (i + .5) * delta, 1 / std::cos(delta / 2));
+            add(fin.start + (i + 1) * delta, 1);
+          }
+          for (unsigned i = 0; i <= kPieces; ++i) {
+            knots.emplace_back(double(i) / kPieces);
+            multiplicities.emplace_back(
+                int64_t{i == 0 || i == kPieces ? 3 : 2});
+          }
+        } else {
+          const auto* circle = std::get_if<CircleGeometry>(
+              &model.value()
+                   .geometry()[*model.value().FindNode(fin.curve)->geometry]
+                   .payload);
+          const double u = circle->center.z == 0 ? 0
+                                                 : (reverse_profile ? 1 : -1) *
+                                                       std::numbers::pi / 2;
+          const double orientation = reverse_axis ? -1 : 1;
+          controls = {u, orientation * fin.start, u, orientation * fin.end};
+          knots = {0., 1.};
+          multiplicities = {int64_t{2}, int64_t{2}};
+        }
+        f.Add(134, id + 1,
+              {Pointer("nurbs", id + 2, 136),
+               ByteValue("sense", '+', FieldType::kCharacter)});
+        f.Add(
+            136, id + 2,
+            {Integer("degree", degree, FieldType::kShort),
+             Integer("n_vertices", count),
+             Integer("vertex_dim", 2, FieldType::kShort),
+             Integer("n_knots", static_cast<int64_t>(knots.size())),
+             ByteValue("knot_type", 2), Logical("periodic", false),
+             Logical("closed", false), Logical("rational", false),
+             ByteValue("curve_form", 1),
+             Pointer("bspline_vertices", id + 3, 45),
+             Pointer("knots", id + 4, 128), Pointer("knot_mult", id + 5, 127)});
+        f.Add(45, id + 3,
+              {Array("vertices", FieldType::kDouble, std::move(controls))});
+        f.Add(128, id + 4,
+              {Array("knots", FieldType::kDouble, std::move(knots))});
+        f.Add(127, id + 5,
+              {Array("multiplicities", FieldType::kShort,
+                     std::move(multiplicities))});
+        f.Add(137, id + 6,
+              {Pointer("surface", face.surface.value, 1006),
+               Pointer("b_curve", id + 1, 134),
+               ByteValue("sense", '+', FieldType::kCharacter)});
+        const auto a =
+            EvaluateCurve(model.value(), fin.curve, fin.start).value().position;
+        const auto b =
+            EvaluateCurve(model.value(), fin.curve, fin.end).value().position;
+        f.Add(133, id + 7,
+              {Pointer("basis_curve", id + 6, 1008),
+               Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+               Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+               Numbers("parm_1", {0}), Numbers("parm_2", {1}),
+               ByteValue("sense", '+', FieldType::kCharacter)});
+        Set(f, fin.use.fin.value, "curve", id + 7);
+      }
+  }
+  std::vector<std::pair<uint32_t, std::vector<ModelField>>> edges;
+  for (const auto& node : f.report.nodes)
+    if (node.node_type == 16) {
+      std::vector<ModelField> fields;
+      const auto& definitions =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < node.fields.size(); ++i) {
+        auto values = node.fields[i].values;
+        if (definitions[i].name == "curve") values = {uint64_t{0}};
+        fields.push_back({definitions[i], std::move(values)});
+      }
+      fields.push_back(Numbers("tolerance", {edge_tolerance}));
+      edges.push_back({node.index, std::move(fields)});
+    }
+  for (auto& [id, fields] : edges) {
+    RemoveNode(f, id);
+    f.Add(16, id, std::move(fields));
+  }
+  return f;
+}
 inline ModelFixture ConcaveMinorArcFace(double bottom = 0, double radius = 5) {
   auto f = Polyhedron({{0, bottom, 0},
                        {4, bottom, 0},
@@ -2044,6 +2166,7 @@ inline Serialized Serialize(const ModelFixture& f) {
           f.report.schemas[node.schema_index].definition);
       out.bytes.push_back(255);
     }
+    if (node.variable_length) U32(out.bytes, *node.variable_length);
     CompactIndex(out.bytes, node.index);
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
@@ -2055,6 +2178,12 @@ inline Serialized Serialize(const ModelFixture& f) {
                        static_cast<uint32_t>(std::get<uint64_t>(value)));
         else if (type == FieldType::kByte || type == FieldType::kCharacter)
           out.bytes.push_back(static_cast<uint8_t>(std::get<uint64_t>(value)));
+        else if (type == FieldType::kShort)
+          U16(out.bytes, static_cast<uint16_t>(std::get<int64_t>(value)));
+        else if (type == FieldType::kInteger)
+          U32(out.bytes, static_cast<uint32_t>(std::get<int64_t>(value)));
+        else if (type == FieldType::kLogical)
+          out.bytes.push_back(std::get<bool>(value) ? 1 : 0);
         else
           F64(out.bytes, std::holds_alternative<std::monostate>(value)
                              ? std::bit_cast<double>(0xc2bc928f996e0000ULL)

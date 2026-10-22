@@ -33,9 +33,15 @@ enum class LengthUnit {
 struct ExportOptions {
   /// Required source unit. No unit is guessed from model coordinates.
   LengthUnit length_unit = LengthUnit::kUnspecified;
-  /// Positive absolute binding/STEP uncertainty tolerance in source length
-  /// units.
+  /// Positive absolute binding tolerance and base STEP length uncertainty in
+  /// source units. Used source edge tolerances can raise only the output
+  /// uncertainty, as described by use_source_edge_tolerances.
   double tolerance = 1e-7;
+  /// Honor positive transmitted EDGE tolerances only for certified paired
+  /// tolerant circular edges. Their source pcurves are retained, and the STEP
+  /// length uncertainty records the maximum used tolerance. False requires
+  /// agreement within tolerance alone; binding tolerances are never widened.
+  bool use_source_edge_tolerances = true;
   /// Product name, printable ASCII, at most 1024 bytes. Quotes are escaped.
   std::string product_name = "SolidWorks body";
   /// Aggregate cap on generated STEP instances, including product metadata.
@@ -73,6 +79,9 @@ struct ExportStatistics {
       0;  ///< Exported planar, cylindrical, conical or toroidal faces.
   uint64_t shells = 0;  ///< Exported sheet or solid shells.
   uint64_t solids = 0;  ///< Exported manifold solid representations.
+
+  /// Actual STEP length uncertainty, including any used source edge tolerance.
+  double length_uncertainty = 0;
 };
 
 /// @brief Owned ISO 10303-21/AP214 document; no source model lifetime
@@ -134,18 +143,27 @@ struct StepDocument {
 /// curved holes, nonconvex curved holes, uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, apex
 /// loops, explicit seam fins, horn/apple/lemon tori and single-edge elliptical
-/// holes remain unsupported. Sheet orientation is propagated across shared
+/// holes remain unsupported. Paired tolerant edges without a recorded 3D curve
+/// can use an exact constant-profile circular SP_CURVE on a recognized spun
+/// torus and a quadratic polynomial planar SP_CURVE. Whole-span Bernstein
+/// bounds certify radial agreement, monotone azimuth and branch selection.
+/// STEP SURFACE_CURVE retains the original planar PCURVE and the affine-mapped
+/// rotational PCURVE, with the exact rotational circle as its 3D master.
+/// Transmitted positive EDGE tolerances may be honored separately from binding
+/// tolerance; ExportStatistics::length_uncertainty reports the output maximum.
+/// Rational, periodic, partial-domain or other fin-specific mappings remain
+/// unsupported. Sheet orientation is propagated across shared
 /// edges. Solid export requires one material region with one closed, connected
 /// shell, consistent face-side uses and positive signed volume. Foreign
-/// geometry, tolerant fin curves, isolated face loops, compound bodies, general
-/// bodies and other curve/surface types return explicit errors. Existing finite
-/// membership checks are retained; no global intersection or full CAD-kernel
-/// validity certificate is implied.
+/// geometry, other tolerant fin curves, isolated face loops, compound bodies,
+/// general bodies and other curve/surface types return explicit errors.
+/// Existing finite membership checks are retained; no global intersection or
+/// full CAD-kernel validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
 /// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
 /// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus),
-/// 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (senses)
-/// and 5.3.4.1 (geometry attachment).
+/// 5.2.2.11 (Spun_surf, p. 68), 5.2.8 (senses), 5.2.1.8 (SP_curve, p. 51),
+/// 5.3.4.1 (geometry attachment) and 5.3.11 (Edge, p. 98).
 /// @param model Borrowed model with stream-local node identities.
 /// @param body Explicit BODY identity in this model.
 /// @param options Units, tolerances and bounded work/storage settings.
