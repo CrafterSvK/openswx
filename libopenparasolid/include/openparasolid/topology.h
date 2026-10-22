@@ -234,6 +234,16 @@ struct ShellEdgeUseCount {
   uint64_t forward_fins = 0;
   uint64_t reverse_fins = 0;
 };
+enum class BoundaryGroupKind { kCycle, kChain, kBranched };
+struct ShellBoundaryGroup {
+  BoundaryGroupKind kind = BoundaryGroupKind::kCycle;
+  // All IDs sorted; groups are ordered by smallest edge ID. Ring edges with
+  // no recorded vertices form separate cycles with an empty vertex list.
+  std::vector<NodeId> edges;
+  std::vector<NodeId> vertices;
+  std::vector<NodeId> end_vertices;
+  std::vector<NodeId> branch_vertices;
+};
 struct ShellFaceComponent {
   // Sorted source face IDs; components are ordered by their smallest face ID.
   std::vector<NodeId> faces;
@@ -244,6 +254,10 @@ struct ShellFaceComponent {
   uint64_t higher_valence_edges = 0;
   uint64_t face_fins = 0;
   uint64_t isolated_loops = 0;
+  uint64_t boundary_cycles = 0;
+  uint64_t boundary_chains = 0;
+  uint64_t branched_boundaries = 0;
+  std::vector<ShellBoundaryGroup> boundary_groups;
 };
 struct ShellEdgeIncidence {
   NodeId shell;
@@ -256,6 +270,9 @@ struct ShellEdgeIncidence {
   std::vector<ShellEdgeUseCount> edges;
   uint64_t face_components = 0;
   std::vector<ShellFaceComponent> components;
+  uint64_t boundary_cycles = 0;
+  uint64_t boundary_chains = 0;
+  uint64_t branched_boundaries = 0;
 };
 struct ShellEdgeIncidenceOptions {
   uint64_t max_faces = 10000;
@@ -274,6 +291,11 @@ struct ShellEdgeIncidenceOptions {
 // face IDs are invalid records. Components retain edge IDs and incidence
 // counts; their counts sum to the shell totals. Component work/storage use the
 // same budgets, without another traversal or curve evaluation.
+// Groups valence-one edges by recorded vertex IDs within each face component.
+// Vertex degree two gives a cycle; degree one gives chain ends; degree above
+// two gives a branched group. Self-loops contribute degree two. A partially
+// missing endpoint pair is invalid. These are unordered graph diagnostics,
+// not oriented paths or geometric closure checks. Existing budgets apply.
 // Does not revalidate connectivity, orient face sides or compare geometry.
 // Paired edges alone do not certify manifold vertices, geometric connectedness,
 // shell closure, hole orientation or volume. Empty/wire/acorn shells have no

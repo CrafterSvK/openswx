@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <numeric>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -13,19 +14,18 @@
 namespace openparasolid {
 namespace {
 // Iterative path compression and union by size avoid recursion and pairwise
-// face comparisons, even for a high-valence edge shared by many faces.
-class FaceComponents {
+// expansion of high-valence edges or vertices.
+class DisjointSets {
  public:
-  explicit FaceComponents(std::size_t count)
-      : parents_(count), sizes_(count, 1) {
+  explicit DisjointSets(std::size_t count) : parents_(count), sizes_(count, 1) {
     std::iota(parents_.begin(), parents_.end(), std::size_t{0});
   }
-  std::size_t Find(std::size_t face) {
-    while (parents_[face] != face) {
-      parents_[face] = parents_[parents_[face]];
-      face = parents_[face];
+  std::size_t Find(std::size_t node) {
+    while (parents_[node] != node) {
+      parents_[node] = parents_[parents_[node]];
+      node = parents_[node];
     }
-    return face;
+    return node;
   }
   void Join(std::size_t first, std::size_t second) {
     first = Find(first);
@@ -40,6 +40,65 @@ class FaceComponents {
   std::vector<std::size_t> parents_;
   std::vector<std::size_t> sizes_;
 };
+struct BoundaryEdge {
+  NodeId edge;
+  NodeId start;
+  NodeId end;
+};
+Result<std::vector<ShellBoundaryGroup>> GroupBoundaryEdges(
+    std::span<const BoundaryEdge> edges) {
+  struct Vertex {
+    std::size_t first_edge;
+    uint64_t degree = 0;
+  };
+  DisjointSets sets(edges.size());
+  std::unordered_map<uint32_t, Vertex> vertices;
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    const auto& edge = edges[i];
+    if ((edge.start.value == 0) != (edge.end.value == 0))
+      return Result<std::vector<ShellBoundaryGroup>>::Err(
+          {ErrorCode::kInvalidRecord, 0,
+           "Partially missing boundary edge vertices"});
+    if (!edge.start.value) continue;
+    for (const auto vertex : {edge.start, edge.end}) {
+      auto [entry, inserted] = vertices.try_emplace(vertex.value, Vertex{i});
+      if (!inserted) sets.Join(i, entry->second.first_edge);
+      ++entry->second.degree;
+    }
+  }
+  std::vector<ShellBoundaryGroup> result;
+  std::vector<std::size_t> group_indices(edges.size(), edges.size());
+  for (std::size_t i = 0; i < edges.size(); ++i) {
+    auto& group = group_indices[sets.Find(i)];
+    if (group == edges.size()) {
+      group = result.size();
+      result.push_back({});
+    }
+    result[group].edges.push_back(edges[i].edge);
+  }
+  for (const auto& [id, vertex] : vertices) {
+    auto& group = result[group_indices[sets.Find(vertex.first_edge)]];
+    group.vertices.push_back(NodeId{id});
+    if (vertex.degree == 1)
+      group.end_vertices.push_back(NodeId{id});
+    else if (vertex.degree > 2)
+      group.branch_vertices.push_back(NodeId{id});
+  }
+  for (auto& group : result) {
+    if (!group.branch_vertices.empty())
+      group.kind = BoundaryGroupKind::kBranched;
+    else if (!group.end_vertices.empty())
+      group.kind = BoundaryGroupKind::kChain;
+    std::sort(group.edges.begin(), group.edges.end());
+    std::sort(group.vertices.begin(), group.vertices.end());
+    std::sort(group.end_vertices.begin(), group.end_vertices.end());
+    std::sort(group.branch_vertices.begin(), group.branch_vertices.end());
+  }
+  std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
+    return a.edges.front() < b.edges.front();
+  });
+  return Result<std::vector<ShellBoundaryGroup>>::Ok(std::move(result));
+}
 }  // namespace
 Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
     const ShellBoundary& shell, const ShellEdgeIncidenceOptions& options) {
@@ -56,10 +115,12 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
   struct EdgeState {
     ShellEdgeUseCount count;
     std::size_t first_face;
+    NodeId start;
+    NodeId end;
   };
   std::unordered_map<uint32_t, EdgeState> edges;
   std::unordered_set<uint32_t> face_ids;
-  FaceComponents components(shell.faces.size());
+  DisjointSets components(shell.faces.size());
   struct FaceCounts {
     uint64_t fins = 0;
     uint64_t isolated_loops = 0;
@@ -98,9 +159,12 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
           if (edges.size() == options.max_edges)
             return fail(ErrorCode::kResourceLimit,
                         "Shell incidence edge limit");
-          found =
-              edges.emplace(fin.edge.value, EdgeState{{fin.edge}, face_index})
-                  .first;
+          found = edges
+                      .emplace(fin.edge.value, EdgeState{{fin.edge},
+                                                         face_index,
+                                                         fin.start_vertex,
+                                                         fin.end_vertex})
+                      .first;
         }
         components.Join(face_index, found->second.first_face);
         if (fin.sense == TopologySense::kForward)
@@ -127,6 +191,8 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
     component.face_fins += face_counts[i].fins;
     component.isolated_loops += face_counts[i].isolated_loops;
   }
+  std::vector<std::vector<BoundaryEdge>> boundary_edges(
+      result.components.size());
   result.edges.reserve(edges.size());
   for (const auto& [id, state] : edges) {
     const auto& count = state.count;
@@ -137,6 +203,8 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
     if (uses == 1) {
       ++result.boundary_edges;
       ++component.boundary_edges;
+      boundary_edges[group_indices[components.Find(state.first_face)]]
+          .push_back({NodeId{id}, state.start, state.end});
     } else if (uses == 2) {
       ++result.paired_edges;
       ++component.paired_edges;
@@ -145,6 +213,24 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
       ++component.higher_valence_edges;
     }
     result.edges.push_back(count);
+  }
+  for (std::size_t i = 0; i < result.components.size(); ++i) {
+    auto groups = GroupBoundaryEdges(boundary_edges[i]);
+    if (!groups.ok()) return Result<ShellEdgeIncidence>::Err(groups.error());
+    auto& component = result.components[i];
+    component.boundary_groups = std::move(groups).value();
+    for (const auto& group : component.boundary_groups) {
+      if (group.kind == BoundaryGroupKind::kCycle) {
+        ++component.boundary_cycles;
+        ++result.boundary_cycles;
+      } else if (group.kind == BoundaryGroupKind::kChain) {
+        ++component.boundary_chains;
+        ++result.boundary_chains;
+      } else {
+        ++component.branched_boundaries;
+        ++result.branched_boundaries;
+      }
+    }
   }
   std::sort(result.edges.begin(), result.edges.end(),
             [](const auto& a, const auto& b) { return a.edge < b.edge; });

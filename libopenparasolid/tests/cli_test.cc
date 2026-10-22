@@ -182,7 +182,15 @@ TEST(ParasolidBodyTopologyReport, RetainsRadialVertexAndShellIncidence) {
                                        {"paired_edges", 0},
                                        {"higher_valence_edges", 0},
                                        {"face_fins", 1},
-                                       {"isolated_loops", 1}}));
+                                       {"isolated_loops", 1},
+                                       {"boundary_cycles", 0},
+                                       {"boundary_chains", 1},
+                                       {"branched_boundaries", 0}}));
+  EXPECT_EQ(component["boundary_groups"][0]["kind"], "chain");
+  EXPECT_EQ(component["boundary_groups"][0]["edges"], json::array({8}));
+  EXPECT_EQ(component["boundary_groups"][0]["end_vertices"],
+            json::array({9, 10}));
+  EXPECT_EQ(report["shell_edge_incidence"]["boundary_chains"], 1);
   EXPECT_FALSE(summary["shell_edge_incidence"].contains("components"));
   EXPECT_EQ(report["shell_edge_incidence"]["isolated_loops"], 1);
   EXPECT_EQ(s["edge_incidence"]["edges"][0]["edge"], 8);

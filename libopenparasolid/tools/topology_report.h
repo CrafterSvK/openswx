@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -23,6 +24,21 @@ inline json FinUseReport(const FinUse& fin) {
       {"fin_curve", fin.fin_curve.value},
       {"sense", fin.sense == TopologySense::kForward ? "forward" : "reverse"}};
 }
+inline json BoundaryGroupReport(const ShellBoundaryGroup& group) {
+  auto ids = [](std::span<const NodeId> values) {
+    json result = json::array();
+    for (const auto id : values) result.push_back(id.value);
+    return result;
+  };
+  const char* kind = group.kind == BoundaryGroupKind::kCycle   ? "cycle"
+                     : group.kind == BoundaryGroupKind::kChain ? "chain"
+                                                               : "branched";
+  return {{"kind", kind},
+          {"edges", ids(group.edges)},
+          {"vertices", ids(group.vertices)},
+          {"end_vertices", ids(group.end_vertices)},
+          {"branch_vertices", ids(group.branch_vertices)}};
+}
 inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
                                  bool summary) {
   json out{{"boundary_edges", incidence.boundary_edges},
@@ -30,7 +46,10 @@ inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
            {"higher_valence_edges", incidence.higher_valence_edges},
            {"face_fins", incidence.face_fins},
            {"isolated_loops", incidence.isolated_loops},
-           {"face_components", incidence.face_components}};
+           {"face_components", incidence.face_components},
+           {"boundary_cycles", incidence.boundary_cycles},
+           {"boundary_chains", incidence.boundary_chains},
+           {"branched_boundaries", incidence.branched_boundaries}};
   if (!summary) {
     out["components"] = json::array();
     for (const auto& component : incidence.components) {
@@ -38,15 +57,22 @@ inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
       for (const auto face : component.faces) faces.push_back(face.value);
       json edges = json::array();
       for (const auto edge : component.edges) edges.push_back(edge.value);
+      json boundary_groups = json::array();
+      for (const auto& group : component.boundary_groups)
+        boundary_groups.push_back(BoundaryGroupReport(group));
       out["components"].push_back(
           {{"faces", std::move(faces)},
            {"edges", std::move(edges)},
+           {"boundary_groups", std::move(boundary_groups)},
            {"counts",
             {{"boundary_edges", component.boundary_edges},
              {"paired_edges", component.paired_edges},
              {"higher_valence_edges", component.higher_valence_edges},
              {"face_fins", component.face_fins},
-             {"isolated_loops", component.isolated_loops}}}});
+             {"isolated_loops", component.isolated_loops},
+             {"boundary_cycles", component.boundary_cycles},
+             {"boundary_chains", component.boundary_chains},
+             {"branched_boundaries", component.branched_boundaries}}}});
     }
     out["edges"] = json::array();
     for (const auto& edge : incidence.edges) {
@@ -85,6 +111,9 @@ inline Result<json> BodyTopologyReport(const ValidatedBodyTopology& body,
       total_incidence.face_fins += counts.face_fins;
       total_incidence.isolated_loops += counts.isolated_loops;
       total_incidence.face_components += counts.face_components;
+      total_incidence.boundary_cycles += counts.boundary_cycles;
+      total_incidence.boundary_chains += counts.boundary_chains;
+      total_incidence.branched_boundaries += counts.branched_boundaries;
       incidence_reports.push_back(ShellIncidenceReport(counts, summary));
     }
   }

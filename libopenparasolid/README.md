@@ -2145,6 +2145,60 @@ edge partitions and every component counter: the 47 face components retain
 geometry outcomes remain unchanged. Private inputs and reports remain outside
 the repository.
 
+## Connected boundary edge groups
+
+Shell incidence analysis now groups valence-one edges within each face
+component by recorded vertex IDs. `ShellBoundaryGroup` retains sorted edge and
+vertex IDs, degree-one `end_vertices`, and degree-above-two `branch_vertices`.
+Groups are ordered by their smallest edge ID; these arrays are ID sets, not an
+ordered boundary walk.
+
+| Kind | Recorded graph condition |
+|---|---|
+| `cycle` | Every recorded vertex has degree two, or the group is a single vertex-free ring edge. |
+| `chain` | No branch vertices and two degree-one endpoints. |
+| `branched` | At least one vertex has degree above two; dangling endpoints are also retained. |
+
+Self-loops contribute degree two. Two parallel edges can form a cycle. Edges
+with both endpoints null are separate ring groups; one missing endpoint is an
+invalid record. Vertex-only contact does not merge different face components.
+Geometrically coincident points with different vertex IDs are not merged.
+Paired/higher-valence edges, wires and isolated vertex loops are excluded from
+boundary groups.
+
+The API and inspector add `boundary_cycles`, `boundary_chains` and
+`branched_boundaries` counters per component, shell and body aggregate. Full
+per-component output additionally contains `boundary_groups`, for example:
+
+```json
+{
+  "kind": "chain",
+  "edges": [30, 40],
+  "vertices": [10, 20, 50],
+  "end_vertices": [10, 50],
+  "branch_vertices": []
+}
+```
+
+Summaries retain counters and omit group membership. Groups are diagnostic;
+they do not change otherwise valid topology's CLI status. A graph cycle is not
+a certificate of geometric closure, consistent orientation, nonintersection,
+hole classification or a valid solid. No tessellation is introduced.
+
+The analysis uses cached edge endpoints, iterative grouping and vertex degree
+counts, with at most two endpoint visits per boundary edge. Existing edge/fin
+budgets bound group storage; the vertex-degree map has at most two entries
+per boundary edge. No new settings, dependencies, source topology traversal or
+curve evaluations are required. Added public result fields follow existing members.
+
+Tests cover cycles, chains, branches with dangling endpoints, self-loops,
+vertex-free rings, parallel edges, stable ordering, component separation,
+partial endpoint errors and report serialization. An independent graph search
+and degree count verifies every group in all 57 private body reports. Their
+30 boundary edge occurrences form nine cycles, with no chains or branched
+groups. Previous incidence counts and geometry outcomes remain unchanged.
+Private inputs, scripts and generated reports remain outside the repository.
+
 ## Inspecting validated body topology
 
 ```bash

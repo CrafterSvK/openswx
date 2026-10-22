@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <utility>
 
@@ -627,6 +628,73 @@ TEST(ParasolidShellIncidence, LocalizesDifferentValencesToTheirComponents) {
   EXPECT_EQ(fins, result.value().face_fins);
   EXPECT_EQ(isolated_count, result.value().isolated_loops);
   EXPECT_EQ(edges, result.value().edges.size());
+}
+TEST(ParasolidShellIncidence, ClassifiesBoundaryGroupsByRecordedVertexDegrees) {
+  ShellBoundary shell;
+  ComponentFace(shell, 1, {10, 11, 12, 20, 21, 30, 31, 32, 40, 50, 60, 61});
+  auto& fins = shell.faces[0].loops[0].fins;
+  const std::array<std::array<uint32_t, 2>, 12> endpoints{{
+      {1, 2}, {2, 3}, {3, 1}, {4, 5}, {5, 6}, {7, 8},
+      {7, 9}, {7, 10}, {0, 0}, {11, 11}, {12, 13}, {12, 13}}};
+  for (std::size_t i = 0; i < fins.size(); ++i) {
+    fins[i].start_vertex = NodeId{endpoints[i][0]};
+    fins[i].end_vertex = NodeId{endpoints[i][1]};
+  }
+  for (int order = 0; order < 2; ++order) {
+    const auto result = AnalyzeShellEdgeIncidence(shell, {1, 1, 12, 12});
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().boundary_cycles, 4);
+    EXPECT_EQ(result.value().boundary_chains, 1);
+    EXPECT_EQ(result.value().branched_boundaries, 1);
+    const auto& component = result.value().components[0];
+    EXPECT_EQ(component.boundary_cycles, 4);
+    EXPECT_EQ(component.boundary_chains, 1);
+    EXPECT_EQ(component.branched_boundaries, 1);
+    const auto& groups = component.boundary_groups;
+    ASSERT_EQ(groups.size(), 6);
+    EXPECT_EQ(groups[0].kind, BoundaryGroupKind::kCycle);
+    EXPECT_EQ(groups[0].edges, (std::vector<NodeId>{{10}, {11}, {12}}));
+    EXPECT_EQ(groups[1].kind, BoundaryGroupKind::kChain);
+    EXPECT_EQ(groups[1].end_vertices, (std::vector<NodeId>{{4}, {6}}));
+    EXPECT_EQ(groups[2].kind, BoundaryGroupKind::kBranched);
+    EXPECT_EQ(groups[2].branch_vertices, (std::vector<NodeId>{{7}}));
+    EXPECT_EQ(groups[2].end_vertices, (std::vector<NodeId>{{8}, {9}, {10}}));
+    EXPECT_EQ(groups[3].kind, BoundaryGroupKind::kCycle);
+    EXPECT_EQ(groups[3].edges, (std::vector<NodeId>{{40}}));
+    EXPECT_TRUE(groups[3].vertices.empty());
+    EXPECT_EQ(groups[4].kind, BoundaryGroupKind::kCycle);
+    EXPECT_EQ(groups[4].vertices, (std::vector<NodeId>{{11}}));
+    EXPECT_EQ(groups[5].kind, BoundaryGroupKind::kCycle);
+    EXPECT_EQ(groups[5].vertices, (std::vector<NodeId>{{12}, {13}}));
+    std::reverse(fins.begin(), fins.end());
+  }
+}
+TEST(ParasolidShellIncidence, BoundaryGroupsStayWithinTheirFaceComponent) {
+  ShellBoundary shell;
+  ComponentFace(shell, 1, {10});
+  ComponentFace(shell, 2, {20});
+  shell.faces[0].loops[0].fins[0].start_vertex = NodeId{1};
+  shell.faces[0].loops[0].fins[0].end_vertex = NodeId{2};
+  shell.faces[1].loops[0].fins[0].start_vertex = NodeId{1};
+  shell.faces[1].loops[0].fins[0].end_vertex = NodeId{3};
+  const auto result = AnalyzeShellEdgeIncidence(shell);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().boundary_chains, 2);
+  ASSERT_EQ(result.value().components.size(), 2);
+  for (const auto& component : result.value().components) {
+    ASSERT_EQ(component.boundary_groups.size(), 1);
+    EXPECT_EQ(component.boundary_groups[0].edges.size(), 1);
+    EXPECT_EQ(component.boundary_groups[0].kind, BoundaryGroupKind::kChain);
+  }
+}
+TEST(ParasolidShellIncidence, RejectsPartiallyMissingBoundaryVertices) {
+  ShellBoundary shell;
+  ComponentFace(shell, 1, {10});
+  auto& fin = shell.faces[0].loops[0].fins[0];
+  fin.start_vertex = NodeId{};
+  const auto result = AnalyzeShellEdgeIncidence(shell);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
 }
 }  // namespace
 }  // namespace openparasolid
