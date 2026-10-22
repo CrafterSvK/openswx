@@ -44,10 +44,11 @@ Result<const GeometryObject*> Basis(const Model& model, NodeId id) {
 }
 struct ParameterCurve {
   const SurfaceCurveGeometry* surface_curve;
-  const NurbsCurveGeometry* spline;
+  NurbsCurveGeometry spline;
 };
 Result<ParameterCurve> ReadParameterCurve(const Model& model,
-                                          const BoundFinGeometry& fin) {
+                                          const BoundFinGeometry& fin,
+                                          bool ring) {
   using Return = Result<ParameterCurve>;
   const auto basis = Basis(model, fin.curve);
   if (!basis.ok()) return Return::Err(basis.error());
@@ -62,20 +63,37 @@ Result<ParameterCurve> ReadParameterCurve(const Model& model,
   const auto* spline =
       std::get_if<NurbsCurveGeometry>(&object.value()->payload);
   if (!spline || spline->controls.rational || spline->controls.dimension != 2 ||
-      spline->axis.periodic || spline->axis.knots.size() < 2 ||
+      (spline->axis.periodic && !ring) || spline->axis.knots.size() < 2 ||
       spline->axis.knots.size() != spline->axis.multiplicities.size() ||
       spline->controls.values.size() !=
           2 * uint64_t{spline->axis.control_count})
     return Return::Err(Unsupported(
         "Tolerant circular edges require nonperiodic polynomial 2D splines"));
-  const auto& axis = spline->axis;
+  auto result = *spline;
+  auto& axis = result.axis;
+  if (ring && axis.degree == 2 && axis.knots.size() >= 4 &&
+      axis.multiplicities.front() == 1 && axis.multiplicities.back() == 1 &&
+      axis.multiplicities[1] == 2 &&
+      axis.multiplicities[axis.knots.size() - 2] == 2) {
+    // These exterior knots have no influence inside the natural domain:
+    // multiplicity p at each domain endpoint already splits quadratic spans.
+    // Replace only the inactive exterior knots by endpoint clamps. The source
+    // controls and every polynomial piece in the selected domain stay exact.
+    axis.knots.erase(axis.knots.begin());
+    axis.knots.pop_back();
+    axis.multiplicities.erase(axis.multiplicities.begin());
+    axis.multiplicities.pop_back();
+    axis.multiplicities.front() = 3;
+    axis.multiplicities.back() = 3;
+  }
   if (axis.multiplicities.front() != axis.degree + 1 ||
       axis.multiplicities.back() != axis.degree + 1 ||
       !((fin.start == axis.knots.front() && fin.end == axis.knots.back()) ||
         (fin.end == axis.knots.front() && fin.start == axis.knots.back())))
     return Return::Err(Unsupported(
         "Tolerant circular edges require the full clamped spline domain"));
-  return Return::Ok({curve, spline});
+  axis.periodic = false;
+  return Return::Ok({curve, std::move(result)});
 }
 long double Dot(Vector3 a, Vector3 b) {
   return static_cast<long double>(a.x) * b.x +
@@ -239,15 +257,16 @@ Result<CircularEdgeRecovery> RecoverPair(
     return Return::Err(
         Unsupported("Circular tolerant recovery requires two fin-specific "
                     "curves without an edge curve"));
+  const bool ring = fins[0]->use.start_vertex == fins[0]->use.end_vertex;
   const BoundFinGeometry* planar = nullptr;
   const BoundFinGeometry* rotational = nullptr;
   const PlaneGeometry* plane = nullptr;
   const SpunSurfaceGeometry* spun = nullptr;
   for (auto* fin : fins) {
-    if (!fin->use.start_vertex.value || !fin->use.end_vertex.value ||
-        fin->use.start_vertex == fin->use.end_vertex)
+    if ((fin->use.start_vertex == fin->use.end_vertex) != ring ||
+        (!ring && (!fin->use.start_vertex.value || !fin->use.end_vertex.value)))
       return Return::Err(Unsupported(
-          "Tolerant circular recovery requires distinct endpoint vertices"));
+          "Tolerant circular edge uses disagree about their endpoints"));
     const auto surface = Geometry(model, fin->surface);
     if (!surface.ok()) return Return::Err(surface.error());
     if (const auto* p = std::get_if<PlaneGeometry>(&surface.value()->payload)) {
@@ -263,11 +282,11 @@ Result<CircularEdgeRecovery> RecoverPair(
   if (!plane || !spun)
     return Return::Err(Unsupported(
         "Tolerant circular recovery requires a PLANE/SPUN_SURF pair"));
-  const auto pc = ReadParameterCurve(model, *planar),
-             rc = ReadParameterCurve(model, *rotational);
+  const auto pc = ReadParameterCurve(model, *planar, ring),
+             rc = ReadParameterCurve(model, *rotational, ring);
   if (!pc.ok()) return Return::Err(pc.error());
   if (!rc.ok()) return Return::Err(rc.error());
-  const auto& spline = *rc.value().spline;
+  const auto& spline = rc.value().spline;
   if (spline.axis.degree != 1 || spline.axis.control_count != 2 ||
       spline.axis.knots.size() != 2 ||
       spline.controls.values[0] != spline.controls.values[2])
@@ -310,11 +329,26 @@ Result<CircularEdgeRecovery> RecoverPair(
          last = spline.controls.values[3] + static_cast<double>(phase);
   if (rotational->start > rotational->end) std::swap(first, last);
   if (rotational->use.sense == TopologySense::kReverse) std::swap(first, last);
+  constexpr double kFullTurn = 2 * std::numbers::pi;
+  const auto span = last - first;
   if (!std::isfinite(first) || !std::isfinite(last) || first == last ||
-      circle.radius * std::abs(last - first) <= tolerance ||
-      std::abs(last - first) >= 2 * std::numbers::pi)
+      circle.radius * std::abs(span) <= tolerance ||
+      (ring ? std::abs(std::abs(span) - kFullTurn) > 1e-12
+            : std::abs(span) >= kFullTurn))
     return Return::Err(Unsupported(
-        "Tolerant circular recovery needs a resolved partial turn"));
+        "Tolerant circular recovery needs one resolved arc or ring turn"));
+  if (ring) {
+    // Make the recorded seam parameter zero on the exact 3D master. This
+    // preserves its spatial phase while avoiding roundoff in shifted 2*pi
+    // interval subtraction. Each original surface pcurve keeps its own phase.
+    const auto angle = std::remainder(first, kFullTurn);
+    const auto x = circle.x_axis, perpendicular = Cross(circle.normal, x);
+    circle.x_axis = {x.x * std::cos(angle) + perpendicular.x * std::sin(angle),
+                     x.y * std::cos(angle) + perpendicular.y * std::sin(angle),
+                     x.z * std::cos(angle) + perpendicular.z * std::sin(angle)};
+    first = 0;
+    last = span > 0 ? kFullTurn : -kFullTurn;
+  }
   const auto* edge = model.FindNode(planar->use.edge);
   if (use_source_tolerances && edge && edge->edge_tolerance) {
     const auto transmitted = *edge->edge_tolerance;
@@ -323,8 +357,8 @@ Result<CircularEdgeRecovery> RecoverPair(
                           "Source edge tolerance must be positive and finite"});
     tolerance = std::max(tolerance, transmitted);
   }
-  if (2 * circle.radius * std::abs(std::sin((last - first) / 2)) <=
-      2 * tolerance)
+  if (!ring && 2 * circle.radius * std::abs(std::sin((last - first) / 2)) <=
+                   2 * tolerance)
     return Return::Err(
         Unsupported("Tolerant circular endpoint separation is ambiguous"));
   const auto desired_first =
@@ -332,7 +366,7 @@ Result<CircularEdgeRecovery> RecoverPair(
   const auto desired_last =
       planar->use.sense == TopologySense::kForward ? last : first;
   const auto certified = CheckPlanarSpline(
-      *pc.value().spline, *plane, circle, tolerance,
+      pc.value().spline, *plane, circle, tolerance,
       desired_last - desired_first, planar->end > planar->start, remaining);
   if (!certified.ok()) return Return::Err(certified.error());
   CircularEdgeRecovery result{
@@ -347,21 +381,25 @@ Result<CircularEdgeRecovery> RecoverPair(
       if (!canonical.ok()) return Return::Err(canonical.error());
       if (!source.ok()) return Return::Err(source.error());
       const auto p = canonical.value().position, q = source.value().position;
-      const auto vertex = vertices.find(
-          (parameter == a ? fin->use.start_vertex : fin->use.end_vertex).value);
-      if (vertex == vertices.end())
-        return Return::Err(
-            {ErrorCode::kInvalidRecord, 0, "Recovered edge vertex is absent"});
-      const auto v = vertex->second;
-      if (std::hypot(p.x - v.x, p.y - v.y, p.z - v.z) > tolerance)
-        return Return::Err(Unsupported(
-            "Recovered circular edge exceeds its vertex tolerance"));
+      const auto vertex_id =
+          parameter == a ? fin->use.start_vertex : fin->use.end_vertex;
+      if (vertex_id.value) {
+        const auto vertex = vertices.find(vertex_id.value);
+        if (vertex == vertices.end())
+          return Return::Err({ErrorCode::kInvalidRecord, 0,
+                              "Recovered edge vertex is absent"});
+        const auto v = vertex->second;
+        if (std::hypot(p.x - v.x, p.y - v.y, p.z - v.z) > tolerance)
+          return Return::Err(Unsupported(
+              "Recovered circular edge exceeds its vertex tolerance"));
+      }
       if (std::hypot(p.x - q.x, p.y - q.y, p.z - q.z) > tolerance)
         return Return::Err(Unsupported(
             "Tolerant circular source endpoints select different arcs"));
     }
     NurbsCurveGeometry pcurve =
-        fin == planar ? *pc.value().spline : *rc.value().spline;
+        fin == planar ? pc.value().spline : rc.value().spline;
+    pcurve.axis.closed = ring && fin == planar;
     if (fin == rotational) {
       // STEP torus U is azimuth and V is meridian. SPUN's source pcurve is
       // (generator parameter, azimuth); this is an exact affine change here.
@@ -406,5 +444,114 @@ Result<std::vector<CircularEdgeRecovery>> RecoverTolerantCircles(
     result.push_back(recovered.value());
   }
   return Return::Ok(std::move(result));
+}
+Result<std::vector<FinParameterInterval>> ResolveClosedTolerantRingIntervals(
+    const Model& model, NodeId body,
+    std::span<const FinParameterInterval> overrides, double tolerance,
+    bool use_source_tolerances, const BodyGeometryBindingOptions& options,
+    uint64_t& remaining_checks) {
+  using Return = Result<std::vector<FinParameterInterval>>;
+  if (!std::isfinite(tolerance) || tolerance <= 0 || !options.max_faces ||
+      !options.max_fins || !options.max_vertices || !options.face.max_loops ||
+      !options.face.max_fins)
+    return Return::Err(
+        {ErrorCode::kInvalidOptions, 0,
+         "Closed ring recovery requires positive bounds and tolerance"});
+  const auto topology = ValidateBodyTopology(model, body, options.topology);
+  if (!topology.ok()) return Return::Err(topology.error());
+  std::map<uint32_t, const FinParameterInterval*> supplied;
+  for (const auto& interval : overrides)
+    if (!supplied.emplace(interval.fin.value, &interval).second)
+      return Return::Err({ErrorCode::kInvalidOptions, 0,
+                          "Duplicate closed-ring fin override"});
+  std::set<uint32_t> faces;
+  BodyGeometryBinding provisional;
+  std::vector<FinParameterInterval> intervals;
+  uint64_t visits = 0;
+  for (const auto& region : topology.value().boundary.regions)
+    for (const auto& shell : region.shells)
+      for (const auto& face : shell.faces) {
+        if (!faces.insert(face.face.value).second) continue;
+        if (faces.size() > options.max_faces ||
+            face.loops.size() > options.face.max_loops)
+          return Return::Err({ErrorCode::kResourceLimit, 0,
+                              "Closed-ring face limit exceeded"});
+        FaceTrimming candidate{face.face, face.surface, face.face_sense, {}};
+        uint64_t face_visits = 0;
+        for (const auto& loop : face.loops) {
+          const auto count = loop.isolated_vertex ? 1 : loop.fins.size();
+          if (count > options.max_fins - visits ||
+              count > options.face.max_fins - face_visits)
+            return Return::Err({ErrorCode::kResourceLimit, 0,
+                                "Closed-ring fin limit exceeded"});
+          visits += count;
+          face_visits += count;
+          if (loop.isolated_vertex || loop.fins.size() != 1) continue;
+          const auto& use = loop.fins.front();
+          if (!use.fin_curve.value || use.start_vertex != use.end_vertex)
+            continue;
+          const auto geometry = Geometry(model, use.fin_curve);
+          if (!geometry.ok()) return Return::Err(geometry.error());
+          const auto* trim =
+              std::get_if<TrimmedCurveGeometry>(&geometry.value()->payload);
+          if (!trim || geometry.value()->sense != '+')
+            return Return::Err(
+                Unsupported("Closed tolerant rings require an explicit "
+                            "positive-sense trim"));
+          for (const auto& [parameter, point] :
+               {std::pair{trim->parameter_1, trim->point_1},
+                std::pair{trim->parameter_2, trim->point_2}}) {
+            const auto sample = EvaluateCurve(model, use.fin_curve, parameter);
+            if (!sample.ok()) return Return::Err(sample.error());
+            const auto p = sample.value().position;
+            if (std::hypot(p.x - point.x, p.y - point.y, p.z - point.z) >
+                tolerance)
+              return Return::Err({ErrorCode::kInvalidRecord, 0,
+                                  "Stored closed-ring trim endpoint disagrees "
+                                  "with its curve"});
+          }
+          const auto a = trim->point_1, b = trim->point_2;
+          if (std::hypot(a.x - b.x, a.y - b.y, a.z - b.z) > tolerance)
+            return Return::Err(
+                Unsupported("Closed tolerant trim endpoints do not close"));
+          FinParameterInterval interval{use.fin, trim->parameter_1,
+                                        trim->parameter_2};
+          const auto found = supplied.find(use.fin.value);
+          if (found != supplied.end())
+            interval = *found->second;
+          else
+            intervals.push_back(interval);
+          candidate.loops.push_back(
+              {loop.loop,
+               {BoundFinGeometry{use, face.face, face.surface, use.fin_curve,
+                                 interval.start, interval.end,
+                                 options.intersection}},
+               {}});
+        }
+        if (!candidate.loops.empty())
+          provisional.faces.push_back(std::move(candidate));
+      }
+  if (intervals.empty()) return Return::Ok({});
+  if (topology.value().vertices.size() > options.max_vertices)
+    return Return::Err(
+        {ErrorCode::kResourceLimit, 0, "Closed-ring vertex limit exceeded"});
+  for (const auto& vertex : topology.value().vertices) {
+    const auto point = Geometry(model, vertex.point);
+    if (!point.ok()) return Return::Err(point.error());
+    const auto* position = std::get_if<PointGeometry>(&point.value()->payload);
+    if (!position)
+      return Return::Err({ErrorCode::kInvalidRecord, 0,
+                          "Closed-ring vertex has no point geometry"});
+    provisional.vertices.push_back(
+        {vertex.vertex, vertex.point, position->position});
+  }
+  // Stored trim order is only a candidate here. Full circular closure, both
+  // pcurve windings and their paired source edge orientation must agree before
+  // any interval is supplied to the reader. Final face/solid checks still
+  // apply.
+  const auto recovered = RecoverTolerantCircles(
+      model, provisional, tolerance, use_source_tolerances, remaining_checks);
+  if (!recovered.ok()) return Return::Err(recovered.error());
+  return Return::Ok(std::move(intervals));
 }
 }  // namespace openswstep::internal

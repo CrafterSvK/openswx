@@ -26,7 +26,8 @@ struct CircularEdgeRecovery {
   };
   std::vector<Use> uses;
 };
-// Recovers only paired, vertex-bounded tolerant edges between a planar SP_CURVE
+// Recovers only paired, vertex-bounded arcs or complete tolerant rings between
+// a planar SP_CURVE
 // and a constant-profile SP_CURVE on an unbounded circular SPUN_SURF. Retains
 // both parameter curves. The rotational use supplies the exact 3D circle;
 // bounded Bernstein checks certify the planar spline's whole-curve agreement,
@@ -36,5 +37,18 @@ RecoverTolerantCircles(const openparasolid::Model& model,
                        const openparasolid::BodyGeometryBinding& body,
                        double tolerance, bool use_source_tolerances,
                        uint64_t& remaining_checks);
+// Export-only recovery for single-fin ring loops with explicit stored trims.
+// Supplies intervals only after the entire paired circular geometry has passed
+// the same certificate used by the writer. Generic reader inference is
+// unchanged. Existing caller intervals take precedence. Preflight and final
+// validation share the caller's comparison budget.
+[[nodiscard]] openparasolid::Result<
+    std::vector<openparasolid::FinParameterInterval>>
+ResolveClosedTolerantRingIntervals(
+    const openparasolid::Model& model, openparasolid::NodeId body,
+    std::span<const openparasolid::FinParameterInterval> overrides,
+    double tolerance, bool use_source_tolerances,
+    const openparasolid::BodyGeometryBindingOptions& options,
+    uint64_t& remaining_checks);
 }  // namespace openswstep::internal
 #endif  // OPENSWSTEP_SRC_TOLERANT_CIRCLE_H_

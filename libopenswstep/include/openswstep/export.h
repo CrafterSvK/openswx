@@ -56,6 +56,8 @@ struct ExportOptions {
   /// cut pair. Split torus cuts consume one check per arc in addition to the
   /// cut-pair check. Concave minor-arc contours share chord-polygon, join-cone
   /// and nonadjacent envelope checks, including a preceding convex attempt.
+  /// Automatic closed tolerant-ring recovery charges both its preflight and
+  /// final Bernstein certificates to this same budget.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -63,7 +65,9 @@ struct ExportOptions {
   openparasolid::ModelOptions model;
   /// Limits and optional intersection settings for complete body binding.
   openparasolid::BodyGeometryBindingOptions binding;
-  /// Optional directed fin intervals; unspecified fins use inference.
+  /// Optional directed fin intervals; supplied intervals take precedence.
+  /// Missing closed tolerant-ring intervals may be resolved by the exporter
+  /// only after the paired circular pcurves are certified.
   std::vector<openparasolid::FinParameterInterval> fin_intervals;
   /// Optional directed natural-edge wire intervals; other wires use inference.
   std::vector<openparasolid::WireParameterInterval> wire_intervals;
@@ -151,14 +155,19 @@ struct StepDocument {
 /// rotational PCURVE, with the exact rotational circle as its 3D master.
 /// Transmitted positive EDGE tolerances may be honored separately from binding
 /// tolerance; ExportStatistics::length_uncertainty reports the output maximum.
-/// Rational, periodic, partial-domain or other fin-specific mappings remain
-/// unsupported. Sheet orientation is propagated across shared
-/// edges. Solid export requires one material region with one closed, connected
-/// shell, consistent face-side uses and positive signed volume. Foreign
-/// geometry, other tolerant fin curves, isolated face loops, compound bodies,
-/// general bodies and other curve/surface types return explicit errors.
-/// Existing finite membership checks are retained; no global intersection or
-/// full CAD-kernel validity certificate is implied.
+/// Complete rings can be vertex-free or retain one source seam vertex. Missing
+/// ring intervals use stored trim order only after paired full-turn proof;
+/// generic reader inference remains unchanged. Quadratic ring pcurves with
+/// one inactive exterior knot on each side and endpoint multiplicity two can
+/// be clamped exactly to their natural domain without changing controls or
+/// polynomial pieces. Other periodic layouts, rational/partial-domain or other
+/// fin-specific mappings remain unsupported. Sheet orientation is propagated
+/// across shared edges. Solid export requires one material region with one
+/// closed, connected shell, consistent face-side uses and positive signed
+/// volume. Foreign geometry, other tolerant fin curves, isolated face loops,
+/// compound bodies, general bodies and other curve/surface types return
+/// explicit errors. Existing finite membership checks are retained; no global
+/// intersection or full CAD-kernel validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
 /// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
 /// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus),

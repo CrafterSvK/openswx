@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "step_writer.h"
+#include "tolerant_circle.h"
 
 namespace openswstep {
 namespace internal {
@@ -33,6 +34,26 @@ openparasolid::Result<StepDocument> ExportBody(
   auto bound = openparasolid::BindBodyGeometryWithOverrides(
       model, body, options.fin_intervals, options.wire_intervals,
       options.tolerance, options.binding);
+  if (!bound.ok() &&
+      bound.error().code == openparasolid::ErrorCode::kUnsupportedFormat) {
+    uint64_t remaining = options.max_polygon_checks;
+    const auto recovered = internal::ResolveClosedTolerantRingIntervals(
+        model, body, options.fin_intervals, options.tolerance,
+        options.use_source_edge_tolerances, options.binding, remaining);
+    if (!recovered.ok()) return Result<StepDocument>::Err(recovered.error());
+    if (!recovered.value().empty()) {
+      auto intervals = options.fin_intervals;
+      intervals.insert(intervals.end(), recovered.value().begin(),
+                       recovered.value().end());
+      bound = openparasolid::BindBodyGeometryWithOverrides(
+          model, body, intervals, options.wire_intervals, options.tolerance,
+          options.binding);
+      if (!bound.ok()) return Result<StepDocument>::Err(bound.error());
+      auto writer_options = options;
+      writer_options.max_polygon_checks = remaining;
+      return internal::BuildBody(model, bound.value(), writer_options);
+    }
+  }
   if (!bound.ok()) return Result<StepDocument>::Err(bound.error());
   return internal::BuildBody(model, bound.value(), options);
 }

@@ -341,27 +341,48 @@ check. The paired tolerant circular subset below provides one such explicit mapp
 
 Paired tolerant edges with no recorded 3D edge curve support one planar
 `SP_CURVE` and one constant-profile `SP_CURVE` on a recognized circular spun
-torus. Both must span their full clamped, nonperiodic polynomial spline domains
-and have distinct endpoint vertices. The rotational pcurve is linear with a
+torus. Vertex-bounded arcs span their full clamped, nonperiodic polynomial
+spline domains. Complete rings can instead be vertex-free or retain one source
+seam vertex. The rotational pcurve is linear with a
 constant generator parameter: its exact 3D image is a circle. The planar
 pcurve comprises quadratic Bezier spans. Bernstein bounds on each complete
 span's squared radius certify agreement with that circle within the edge
 allowance, with axial/frame/coordinate roundoff reserved. Derivative bounds and
-angular half-planes certify monotone winding and the same directed partial-turn
-branch. Endpoint samples alone cannot certify these edges. Adaptive subdivision
+angular half-planes certify monotone winding and the same directed arc or
+single complete turn. Endpoint samples alone cannot certify these edges. Adaptive subdivision
 consumes the shared comparison budget and has an explicit depth limit.
 
 The exact rotational circle supplies one shared 3D master curve.
-`SURFACE_CURVE` retains both `PCURVE` representations: original planar spline
-controls/knots and the exact affine change from spun generator/azimuth parameters
+`SURFACE_CURVE` retains both `PCURVE` geometries: original planar spline controls,
+with exact knot-domain restriction where needed, and the exact affine change
+from spun generator/azimuth parameters
 to torus azimuth/meridian parameters. No circle is fitted to the approximate
 planar spline. Source topology, pcurves and declared edge tolerances are
 retained. The optional source allowance is applied only after this geometric
 certificate; strict mode rejects source discrepancies exceeding caller tolerance.
 The serialized STEP uncertainty reports any larger source allowance actually
 used. These are tolerant B-reps: associated pcurves need not coincide exactly
-with their 3D master. General tolerant edges, rational/periodic pcurves, partial
-spline domains and other surface pairings remain unsupported.
+with their 3D master. General tolerant edges, rational pcurves, arbitrary
+periodic layouts, partial spline domains and other surface pairings remain
+unsupported.
+
+Single-fin closed tolerant loops with stored `TRIMMED_CURVE` intervals can be
+resolved by the exporter after ordinary binding reports an unsupported case.
+Stored endpoint samples and closure are checked first; the entire paired circle
+certificate must pass before supplying any missing interval. Caller overrides
+are retained. Complete face winding, manifold and solid-volume checks still
+apply after rebinding. The generic reader continues to reject ambiguous closed
+fin intervals. Both the preflight and final certificates consume the same
+comparison budget; invalid input and resource failures do not trigger retries.
+
+Quadratic periodic ring pcurves can have one inactive exterior knot at each
+side of the natural domain and multiplicity two at its endpoints. On that
+specific layout the exterior knots are replaced by endpoint clamps without
+changing any control point or polynomial piece inside the selected domain.
+This is exact restriction, not spline fitting or automatic parameter wrapping.
+Other periodic layouts and incomplete-domain intervals remain unsupported.
+The exact circle master retains the recorded seam's spatial phase with a zero
+master parameter; both pcurves retain their own source phases.
 
 These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
@@ -499,31 +520,29 @@ measure checks use a documented relative tolerance of 5e-6; all other cases keep
 1e-9. Exact exporter flux formulas have separate analytic unit tests. Four tolerant
 synthetic models additionally verify that all eight original 3D master edges
 remain exact circles after import; their volume comparisons retain 1e-9
-relative tolerance. OCCT may rebuild inconsistent pcurves from the 3D master
+relative tolerance. Closed-ring regressions additionally cover original and
+synthetic seams, shifted source phases, exact periodic-domain restriction,
+reversed frames and binary source entry points. OCCT may rebuild inconsistent pcurves from the 3D master
 and creates its own B-spline meridian seam.
 OCCT is exclusively a test dependency and is never linked into the export library.
 Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 52 export successfully, including twenty-two face-bearing
-bodies with 372 faces; 30 successes contain only wire/point geometry. All 52
-generated documents pass OCCT import and B-rep validity checks. Paired tolerant
-circular-edge support adds a complete body with 5 faces and 6 source edges,
-preserving all 51 previous successes. Its planar pcurves deviate by about
-1.85e-7 source metres from their exact rotational circles; the transmitted
-edge tolerance is 2.5e-7 metres. That source allowance is now retained and
-reported rather than inferred from endpoint samples. The other five return
-unsupported-format errors. Their first remaining geometry obstacles are:
+extracted streams: 53 export successfully, including twenty-three face-bearing
+bodies with 388 faces; 30 successes contain only wire/point geometry. All 53
+generated documents pass OCCT import and B-rep validity checks. Closed tolerant
+ring resolution adds one complete body with 16 faces and 16 source edges,
+preserving all 52 previous successes. Its closed trim intervals are recovered
+only after whole-curve checks, including exact restriction of periodic planar
+pcurves to their natural domains. The other four return unsupported-format
+errors. Their first remaining geometry obstacles are:
 
 | Bodies | Missing support |
 | --- | --- |
 | 2 | Implicit plane/cone intersection curves and faces trimmed by them |
 | 2 | NURBS surfaces and implicit intersections with analytic surfaces |
-| 1 | Unresolved trim intervals and other fin-specific SP_CURVE mappings |
 
-Circular spun-torus recognition covers the remaining rotational supporting
-surfaces, but resolving trim intervals alone does not complete the final body.
 These counts describe this private regression selection, not general format
 coverage. No private source files or generated exports are stored here.
 

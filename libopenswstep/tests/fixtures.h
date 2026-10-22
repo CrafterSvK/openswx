@@ -2022,10 +2022,13 @@ inline ModelFixture SplitToroidalBand() {
 // Independent synthetic polynomial circle approximation. The 3D master is
 // supplied by the exact constant-profile rotational use, not fitted to
 // controls.
-inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
-                                         bool reverse_profile = false,
-                                         bool reverse_axis = false) {
-  auto f = SpunToroidalBand(SplitToroidalBand(), reverse_profile, reverse_axis);
+inline ModelFixture TolerantToroidalBand(
+    double edge_tolerance = .001, bool reverse_profile = false,
+    bool reverse_axis = false, bool rings = false, bool named_seams = false,
+    bool exterior_knots = false, double seam_phase = 0) {
+  auto f = SpunToroidalBand(
+      rings ? ToroidalBand(true, named_seams) : SplitToroidalBand(),
+      reverse_profile, reverse_axis);
   const auto model = ModelBuilder::Build(f.report);
   const auto bound = BindBodyGeometry(model.value(), NodeId{1}, 1e-7);
   for (const auto& face : bound.value().faces) {
@@ -2039,7 +2042,7 @@ inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
         unsigned degree = 1, count = 2;
         if (plane) {
           degree = 2;
-          constexpr unsigned kPieces = 4;
+          const unsigned kPieces = rings ? 16 : 4;
           count = 2 * kPieces + 1;
           const auto y = Cross(plane->normal, plane->x_axis);
           const auto* circle = std::get_if<CircleGeometry>(
@@ -2057,15 +2060,25 @@ inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
             controls.emplace_back(p.x * y.x + p.y * y.y + p.z * y.z);
           };
           const auto delta = (fin.end - fin.start) / kPieces;
-          add(fin.start, 1);
+          add(fin.start + seam_phase, 1);
           for (unsigned i = 0; i < kPieces; ++i) {
-            add(fin.start + (i + .5) * delta, 1 / std::cos(delta / 2));
-            add(fin.start + (i + 1) * delta, 1);
+            add(fin.start + seam_phase + (i + .5) * delta,
+                1 / std::cos(delta / 2));
+            add(fin.start + seam_phase + (i + 1) * delta, 1);
+          }
+          if (rings && exterior_knots) {
+            knots.emplace_back(-1. / kPieces);
+            multiplicities.emplace_back(int64_t{1});
           }
           for (unsigned i = 0; i <= kPieces; ++i) {
             knots.emplace_back(double(i) / kPieces);
-            multiplicities.emplace_back(
-                int64_t{i == 0 || i == kPieces ? 3 : 2});
+            multiplicities.emplace_back(int64_t{
+                i == 0 || i == kPieces ? (rings && exterior_knots ? 2 : 3)
+                                       : 2});
+          }
+          if (rings && exterior_knots) {
+            knots.emplace_back(1 + 1. / kPieces);
+            multiplicities.emplace_back(int64_t{1});
           }
         } else {
           const auto* circle = std::get_if<CircleGeometry>(
@@ -2076,7 +2089,8 @@ inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
                                                  : (reverse_profile ? 1 : -1) *
                                                        std::numbers::pi / 2;
           const double orientation = reverse_axis ? -1 : 1;
-          controls = {u, orientation * fin.start, u, orientation * fin.end};
+          controls = {u, orientation * (fin.start + seam_phase), u,
+                      orientation * (fin.end + seam_phase)};
           knots = {0., 1.};
           multiplicities = {int64_t{2}, int64_t{2}};
         }
@@ -2089,8 +2103,9 @@ inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
              Integer("n_vertices", count),
              Integer("vertex_dim", 2, FieldType::kShort),
              Integer("n_knots", static_cast<int64_t>(knots.size())),
-             ByteValue("knot_type", 2), Logical("periodic", false),
-             Logical("closed", false), Logical("rational", false),
+             ByteValue("knot_type", 2),
+             Logical("periodic", plane && rings && exterior_knots),
+             Logical("closed", plane && rings), Logical("rational", false),
              ByteValue("curve_form", 1),
              Pointer("bspline_vertices", id + 3, 45),
              Pointer("knots", id + 4, 128), Pointer("knot_mult", id + 5, 127)});
@@ -2106,9 +2121,13 @@ inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
                Pointer("b_curve", id + 1, 134),
                ByteValue("sense", '+', FieldType::kCharacter)});
         const auto a =
-            EvaluateCurve(model.value(), fin.curve, fin.start).value().position;
+            EvaluateCurve(model.value(), fin.curve, fin.start + seam_phase)
+                .value()
+                .position;
         const auto b =
-            EvaluateCurve(model.value(), fin.curve, fin.end).value().position;
+            EvaluateCurve(model.value(), fin.curve, fin.end + seam_phase)
+                .value()
+                .position;
         f.Add(133, id + 7,
               {Pointer("basis_curve", id + 6, 1008),
                Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
@@ -2136,7 +2155,25 @@ inline ModelFixture TolerantToroidalBand(double edge_tolerance = .001,
     RemoveNode(f, id);
     f.Add(16, id, std::move(fields));
   }
+  if (seam_phase != 0)
+    for (auto& node : f.report.nodes)
+      if (node.node_type == 29) {
+        const double x = std::get<double>(node.fields[0].values[0]),
+                     y = std::get<double>(node.fields[0].values[1]);
+        node.fields[0].values[0] =
+            x * std::cos(seam_phase) - y * std::sin(seam_phase);
+        node.fields[0].values[1] =
+            x * std::sin(seam_phase) + y * std::cos(seam_phase);
+      }
   return f;
+}
+inline ModelFixture ClosedTolerantToroidalBand(bool exterior_knots = true,
+                                               bool named_seams = false,
+                                               bool reverse_profile = false,
+                                               bool reverse_axis = false,
+                                               double seam_phase = 0) {
+  return TolerantToroidalBand(.001, reverse_profile, reverse_axis, true,
+                              named_seams, exterior_knots, seam_phase);
 }
 inline ModelFixture ConcaveMinorArcFace(double bottom = 0, double radius = 5) {
   auto f = Polyhedron({{0, bottom, 0},

@@ -721,6 +721,177 @@ TEST(OpenSwStep, ExportsExactToroidalBandsAndClosedSolids) {
     EXPECT_EQ(result.value().statistics.solids, 0);
   }
 }
+TEST(OpenSwStep, ExportsClosedTolerantRingsWithSourceOrSyntheticSeams) {
+  for (const bool exterior : {false, true})
+    for (const bool named : {false, true}) {
+      const auto fixture = test::ClosedTolerantToroidalBand(exterior, named);
+      const auto result = Export(fixture);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, 3);
+      EXPECT_EQ(result.value().statistics.edges, 2);
+      EXPECT_EQ(result.value().statistics.vertices, 2);
+      EXPECT_EQ(result.value().statistics.solids, 1);
+      EXPECT_DOUBLE_EQ(result.value().statistics.length_uncertainty, .001);
+      CheckReferences(result.value());
+      const auto serialized = test::Serialize(fixture);
+      const auto binary = ExportParasolid(serialized.bytes, NodeId{1},
+                                          Options(), &serialized.catalog);
+      ASSERT_TRUE(binary.ok()) << binary.error().message;
+      EXPECT_EQ(binary.value().text, result.value().text);
+    }
+  for (const bool profile : {false, true})
+    for (const bool axis : {false, true}) {
+      const auto fixture = test::RotateAndTranslate(
+          test::ClosedTolerantToroidalBand(true, true, profile, axis));
+      const auto result = Export(fixture);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.solids, 1);
+    }
+}
+TEST(OpenSwStep, PreservesClosedTolerantRingSeamPhasesAcrossParameterTurns) {
+  for (const double phase : {std::numbers::pi / 2, 3 * std::numbers::pi / 2,
+                             -std::numbers::pi / 3, 8 * std::numbers::pi + .4})
+    for (const bool named : {false, true}) {
+      const auto result = Export(
+          test::ClosedTolerantToroidalBand(true, named, false, false, phase));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.edges, 2);
+      EXPECT_EQ(result.value().statistics.vertices, 2);
+      EXPECT_EQ(result.value().statistics.solids, 1);
+    }
+}
+TEST(OpenSwStep, RecoversRingIntervalsOnlyAfterTheCompletePairedCertificate) {
+  const auto model =
+      ModelBuilder::Build(test::ClosedTolerantToroidalBand().report);
+  ASSERT_TRUE(model.ok());
+  const auto direct = BindBodyGeometry(model.value(), NodeId{1}, 1e-7);
+  ASSERT_FALSE(direct.ok());
+  EXPECT_EQ(direct.error().code, ErrorCode::kUnsupportedFormat);
+  auto options = Options();
+  constexpr uint64_t kBudget = 100000;
+  uint64_t remaining = kBudget;
+  const auto inferred = internal::ResolveClosedTolerantRingIntervals(
+      model.value(), NodeId{1}, {}, options.tolerance, true, options.binding,
+      remaining);
+  ASSERT_TRUE(inferred.ok()) << inferred.error().message;
+  ASSERT_EQ(inferred.value().size(), 4);
+  const auto used = kBudget - remaining;
+  EXPECT_GT(used, 0);
+  const auto bound = BindBodyGeometryWithOverrides(model.value(), NodeId{1},
+                                                   inferred.value(), {}, 1e-7);
+  ASSERT_TRUE(bound.ok()) << bound.error().message;
+  // Automatic recovery charges both its preflight and its final certificate,
+  // plus the torus cut-pair check. Explicit intervals still need final proof.
+  options.max_polygon_checks = 2 * used + 1;
+  auto exported = ExportBody(model.value(), NodeId{1}, options);
+  ASSERT_TRUE(exported.ok()) << exported.error().message;
+  --options.max_polygon_checks;
+  exported = ExportBody(model.value(), NodeId{1}, options);
+  ASSERT_FALSE(exported.ok());
+  EXPECT_EQ(exported.error().code, ErrorCode::kResourceLimit);
+  options.max_polygon_checks = used + 1;
+  options.fin_intervals = inferred.value();
+  exported = ExportBody(model.value(), NodeId{1}, options);
+  ASSERT_TRUE(exported.ok()) << exported.error().message;
+  remaining = kBudget;
+  const auto partial = internal::ResolveClosedTolerantRingIntervals(
+      model.value(), NodeId{1}, std::span(inferred.value()).first(1), 1e-7,
+      true, options.binding, remaining);
+  ASSERT_TRUE(partial.ok()) << partial.error().message;
+  EXPECT_EQ(partial.value().size(), 3);
+  for (const auto& interval : partial.value())
+    EXPECT_NE(interval.fin, inferred.value().front().fin);
+  EXPECT_FALSE(BindBodyGeometry(model.value(), NodeId{1}, 1e-7).ok());
+}
+TEST(OpenSwStep, RestrictsPeriodicRingKnotsWithoutChangingSourcePolynomials) {
+  const auto fixture = test::ClosedTolerantToroidalBand();
+  const auto model = ModelBuilder::Build(fixture.report);
+  ASSERT_TRUE(model.ok());
+  const auto options = Options();
+  uint64_t remaining = 100000;
+  const auto inferred = internal::ResolveClosedTolerantRingIntervals(
+      model.value(), NodeId{1}, {}, 1e-7, true, options.binding, remaining);
+  ASSERT_TRUE(inferred.ok()) << inferred.error().message;
+  const auto bound = BindBodyGeometryWithOverrides(model.value(), NodeId{1},
+                                                   inferred.value(), {}, 1e-7);
+  ASSERT_TRUE(bound.ok());
+  const auto recovered = internal::RecoverTolerantCircles(
+      model.value(), bound.value(), 1e-7, true, remaining);
+  ASSERT_TRUE(recovered.ok()) << recovered.error().message;
+  ASSERT_EQ(recovered.value().size(), 2);
+  unsigned checked = 0;
+  for (const auto& edge : recovered.value())
+    for (const auto& use : edge.uses) {
+      if (use.pcurve.axis.degree != 2) continue;
+      const auto spline_id = test::PointerValue(
+          fixture, 10000 + 10 * use.fin.value + 6, "b_curve");
+      const auto* object = model.value().FindNode(NodeId{spline_id});
+      ASSERT_NE(object, nullptr);
+      ASSERT_TRUE(object->geometry.has_value());
+      const auto& original = std::get<NurbsCurveGeometry>(
+          model.value().geometry()[*object->geometry].payload);
+      ASSERT_TRUE(original.axis.periodic);
+      ASSERT_TRUE(original.axis.closed);
+      EXPECT_EQ(original.controls.values, use.pcurve.controls.values);
+      EXPECT_EQ(original.axis.knots.size(), use.pcurve.axis.knots.size() + 2);
+      EXPECT_FALSE(use.pcurve.axis.periodic);
+      EXPECT_TRUE(use.pcurve.axis.closed);
+      for (double parameter : {0., .001, .11, .25, .57, .999, 1.}) {
+        const auto a = EvaluateCurve(GeometryPayload{original}, parameter);
+        const auto b = EvaluateCurve(GeometryPayload{use.pcurve}, parameter);
+        ASSERT_TRUE(a.ok());
+        ASSERT_TRUE(b.ok());
+        EXPECT_NEAR(a.value().position.x, b.value().position.x, 1e-12);
+        EXPECT_NEAR(a.value().position.y, b.value().position.y, 1e-12);
+        EXPECT_NEAR(a.value().first_derivative.x, b.value().first_derivative.x,
+                    1e-10);
+        EXPECT_NEAR(a.value().first_derivative.y, b.value().first_derivative.y,
+                    1e-10);
+      }
+      ++checked;
+    }
+  EXPECT_EQ(checked, 2);
+}
+TEST(OpenSwStep, RejectsClosedTolerantRingTurnsSeamsAndContradictoryOverrides) {
+  auto invalid = test::ClosedTolerantToroidalBand();
+  const auto trim_id = test::PointerValue(invalid, 1000, "curve");
+  for (auto& node : invalid.report.nodes)
+    if (node.index == trim_id)
+      for (auto& field : node.fields)
+        if (invalid.report.schemas[node.schema_index]
+                .definition.fields[field.definition_index]
+                .name == "parm_2")
+          field.values = {.5};
+  auto result = Export(invalid);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(result.error().message.find("Stored closed-ring trim endpoint"),
+            std::string::npos);
+  auto multiple = test::ClosedTolerantToroidalBand();
+  const uint32_t controls_id = 10000 + 10 * 1000 + 3;
+  for (auto& node : multiple.report.nodes)
+    if (node.index == controls_id)
+      node.fields[0].values[3] = 4 * std::numbers::pi;
+  result = Export(multiple);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("resolved arc or ring turn"),
+            std::string::npos);
+  auto options = Options();
+  options.use_source_edge_tolerances = false;
+  result = Export(test::ClosedTolerantToroidalBand(), options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  options = Options();
+  options.fin_intervals = {{NodeId{1000}, 1, 0}};
+  result = Export(test::ClosedTolerantToroidalBand(), options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  options.fin_intervals = {{NodeId{1000}, 0, 1}, {NodeId{1000}, 0, 1}};
+  result = Export(test::ClosedTolerantToroidalBand(), options);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+}
 TEST(OpenSwStep, ExportsCertifiedTolerantCircularEdgesWithSourcePcurves) {
   const auto fixture = test::TolerantToroidalBand();
   const auto result = Export(fixture);

@@ -257,7 +257,7 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
       return Result<Id>::Err(
           Error(edge, ErrorCode::kUnsupportedFormat,
                 "Vertex-free edges require one complete conic turn"));
-    const auto sample = EvaluateCurve(model_, curve, first);
+    const auto sample = EvaluateCurve(basis.value()->payload, first);
     if (!sample.ok()) return Result<Id>::Err(sample.error());
     const auto point = writer_.Point(sample.value().position);
     start_id = end_id =
@@ -1103,8 +1103,8 @@ Id BodyWriter::ParameterCurve(const NurbsCurveGeometry& curve, Id surface) {
   knots += ')';
   const auto spline = writer_.Add(
       "B_SPLINE_CURVE_WITH_KNOTS(''," + std::to_string(curve.axis.degree) +
-      ',' + References(points) + ",.UNSPECIFIED.,.F.,.F.," + multiplicities +
-      ',' + knots + ",.UNSPECIFIED.)");
+      ',' + References(points) + ",.UNSPECIFIED.," + Logical(curve.axis.closed) +
+      ",.F.," + multiplicities + ',' + knots + ",.UNSPECIFIED.)");
   const auto context = writer_.Add(
       "(GEOMETRIC_REPRESENTATION_CONTEXT(2) REPRESENTATION_CONTEXT('','2D'))");
   const auto representation =
