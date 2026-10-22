@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <optional>
 #include <string>
@@ -15,6 +16,67 @@ namespace openparasolid {
 namespace {
 ParseError Error(const char* message, ErrorCode code) {
   return {code, 0, message};
+}
+// Compare endpoints in natural edge direction, never normalized midpoints:
+// different fin curves may use unrelated parameterizations of the same edge.
+std::optional<ParseError> CheckSharedEndpoints(
+    const Model& model, NodeId body, const std::vector<FaceTrimming>& faces,
+    double tolerance) {
+  struct Reference {
+    const BoundFinGeometry* fin;
+    std::optional<std::array<Vector3, 2>> endpoints;
+  };
+  std::unordered_map<uint32_t, Reference> references;
+  auto endpoints =
+      [&](const BoundFinGeometry& fin) -> Result<std::array<Vector3, 2>> {
+    std::array<Vector3, 2> positions;
+    const bool forward = fin.use.sense == TopologySense::kForward;
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+      const double parameter = (i == 0) == forward ? fin.start : fin.end;
+      const auto sample =
+          fin.intersection
+              ? EvaluateCurve(model, fin.curve, parameter, *fin.intersection)
+              : EvaluateCurve(model, fin.curve, parameter);
+      if (!sample.ok())
+        return Result<std::array<Vector3, 2>>::Err(sample.error());
+      positions[i] = sample.value().position;
+    }
+    return Result<std::array<Vector3, 2>>::Ok(positions);
+  };
+  for (const auto& face : faces)
+    for (const auto& loop : face.loops)
+      for (const auto& fin : loop.fins) {
+        // Ring seams need not coincide in the absence of recorded vertices.
+        if (!fin.use.start_vertex.value || !fin.use.end_vertex.value) continue;
+        auto [entry, inserted] = references.try_emplace(
+            fin.use.edge.value, Reference{&fin, std::nullopt});
+        if (inserted) continue;
+        auto& reference = entry->second;
+        if (!reference.endpoints) {
+          const auto sample = endpoints(*reference.fin);
+          if (!sample.ok()) return sample.error();
+          reference.endpoints = sample.value();
+        }
+        const auto sample = endpoints(fin);
+        if (!sample.ok()) return sample.error();
+        for (std::size_t i = 0; i < sample.value().size(); ++i) {
+          const auto& a = (*reference.endpoints)[i];
+          const auto& b = sample.value()[i];
+          if (std::hypot(a.x - b.x, a.y - b.y, a.z - b.z) > tolerance) {
+            auto error = Error("Shared edge fin endpoints exceed tolerance",
+                               ErrorCode::kInvalidRecord);
+            const auto* node = model.FindNode(fin.use.fin);
+            if (node) error.offset = node->source_offset;
+            error.message = "Body " + std::to_string(body.value) + ", edge " +
+                            std::to_string(fin.use.edge.value) + ", fins " +
+                            std::to_string(reference.fin->use.fin.value) + "/" +
+                            std::to_string(fin.use.fin.value) + ": " +
+                            error.message;
+            return error;
+          }
+        }
+      }
+  return std::nullopt;
 }
 Result<BodyFaceBinding> Bind(
     const Model& model, NodeId body,
@@ -113,6 +175,8 @@ Result<BodyFaceBinding> Bind(
     return Result<BodyFaceBinding>::Err(
         Error("Intervals reference fins outside selected body faces",
               ErrorCode::kInvalidOptions));
+  if (auto error = CheckSharedEndpoints(model, body, bindings, tolerance))
+    return Result<BodyFaceBinding>::Err(std::move(*error));
   return Result<BodyFaceBinding>::Ok(
       {std::move(topology).value(), std::move(bindings)});
 }

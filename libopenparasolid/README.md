@@ -1976,6 +1976,35 @@ inclusive tolerance boundary. The private 57-body selection retains its 56
 automatic successes and the remaining success with eight caller-selected fin
 intervals. All private inputs and reports remain outside the repository.
 
+## Shared edge endpoint consistency
+
+All `BindBodyFaces` overloads, and therefore combined body geometry binding,
+compare the 3D endpoints of fins that share an edge and have recorded vertices.
+Endpoint pairs are ordered in natural edge direction using fin sense. Each
+additional fin is compared against the first bound fin for that edge using the
+caller's unchanged binding tolerance. This catches gaps across separately
+closed face loops that individual endpoint-to-vertex checks can miss. A gap
+returns `kInvalidRecord` with body, edge and fin IDs and the offending fin's
+source offset; no partial body result is returned.
+
+Vertex-free ring edges are excluded because their curve parameter seams need
+not coincide. Shared edges with recorded coincident start/end vertices are
+checked. Fins on a single face are included, while a face used on both shell
+sides is still bound only once. No extra settings or dependencies are added.
+
+The check uses at most two additional curve evaluations per fin on shared
+edges, with the binding's owned solver settings. The existing aggregate fin
+limit bounds both work and scratch storage. Different fin parameterizations
+are allowed: normalized midpoints are not compared. This is an endpoint check
+against one reference fin, not an all-pairs comparison of nonmanifold rings,
+a whole-curve coincidence certificate or a manifoldness/volume test.
+
+Tests cover cross-face gaps despite separately valid closed loops, opposite
+fin directions, the inclusive tolerance boundary, partial/combined binding
+failure propagation, and vertex-free rings with different parameter seams.
+The 57-body private regression selection retains all 56 automatic successes
+and the remaining success with eight explicit fin intervals.
+
 ## Inspecting bound body geometry
 
 The inspector exposes automatic combined body binding with a positive source

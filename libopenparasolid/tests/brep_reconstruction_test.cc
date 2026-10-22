@@ -1357,6 +1357,77 @@ TEST(ParasolidBodyFaceBinding, AppliesExplicitIntervalsAndOwnedSolverOptions) {
   EXPECT_NEAR(sample.value().curve.position.x, std::sqrt(.5), 1e-12);
   EXPECT_FALSE(BindBodyFaces(model.value(), NodeId{1}, 1e-12, options).ok());
 }
+TEST(ParasolidBodyFaceBinding, RejectsSharedEndpointGapsAcrossClosedFaces) {
+  auto f = TwoFaceBody();
+  // Both single-fin loops close and each lies within 0.09375 of the
+  // recorded vertex, but corresponding fin endpoints are 0.1875 apart.
+  f.Add(
+      31, 403,
+      {Numbers("center", {2.1875, -3, 0}, FieldType::kVector),
+       Numbers("normal", {0, 0, -1}, FieldType::kVector),
+       Numbers("x_axis", {0, 1, 0}, FieldType::kVector), Numbers("radius", {3}),
+       ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 11, "curve", 403);
+  for (auto& node : f.report.nodes)
+    if (node.index == 200)
+      node.fields[0].values[0] =
+          std::get<double>(node.fields[0].values[0]) + .09375;
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const double start = -.25, end = start + 2 * std::numbers::pi;
+  const FinParameterInterval intervals[]{{NodeId{10}, start, end},
+                                         {NodeId{11}, end, start}};
+  for (uint32_t face : {30u, 31u}) {
+    const auto index = face == 30 ? 0 : 1;
+    const auto bound =
+        BindFaceTrimming(model.value(), NodeId{face},
+                         std::span(intervals).subspan(index, 1), .125);
+    ASSERT_TRUE(bound.ok()) << bound.error().message;
+  }
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, intervals, .125);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_EQ(
+      result.error().message,
+      "Body 1, edge 2, fins 10/11: Shared edge fin endpoints exceed tolerance");
+  EXPECT_TRUE(BindBodyFaces(model.value(), NodeId{1}, intervals, .1875).ok());
+  const auto partial = std::span(intervals).subspan(1);
+  EXPECT_FALSE(
+      BindBodyFacesWithOverrides(model.value(), NodeId{1}, partial, .125).ok());
+  EXPECT_FALSE(
+      BindBodyGeometryWithOverrides(model.value(), NodeId{1}, partial, {}, .125)
+          .ok());
+}
+TEST(ParasolidBodyFaceBinding, MatchesOppositeFinDirectionsOnOpenEdges) {
+  const auto f = Sheet(Face());
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, 0);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& fins = result.value().faces[0].loops[0].fins;
+  ASSERT_EQ(fins.size(), 2);
+  EXPECT_EQ(fins[0].start, fins[1].end);
+  EXPECT_EQ(fins[0].end, fins[1].start);
+}
+TEST(ParasolidBodyFaceBinding, VertexFreeRingsMayUseDifferentParameterSeams) {
+  auto f = TwoFaceBody();
+  Set(f, 1, "vertex", 0);
+  std::erase_if(f.report.nodes,
+                [](const auto& node) { return node.index == 100; });
+  for (uint32_t fin : {10u, 11u}) {
+    Set(f, fin, "vertex", 0);
+    Set(f, fin, "next_at_vx", 0);
+    Set(f, fin, "curve", 401);
+  }
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const FinParameterInterval intervals[]{
+      {NodeId{10}, 0, 2 * std::numbers::pi},
+      {NodeId{11}, 3 * std::numbers::pi, std::numbers::pi}};
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, intervals, 1e-12);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().faces.size(), 2);
+}
 TEST(ParasolidBodyFaceBinding, RejectsMissingDuplicateAndForeignIntervals) {
   const auto f = Sheet(Face());
   const auto model = ModelBuilder::Build(f.report);

@@ -133,6 +133,11 @@ struct BodyFaceBinding {
 // selected faces; duplicate, missing or foreign fin IDs are invalid options.
 // Automatic mode inherits BindFaceTrimming's supported interval inference.
 // Face/solver options and positive aggregate limits are validated up front.
+// Fin endpoint pairs are compared in natural edge direction against the first
+// bound fin of each shared edge, within the same tolerance. Vertex-free rings
+// are excluded because their parameter seams need not coincide. This adds at
+// most two curve samples per fin of shared edges, bounded by max_fins; it does
+// not compare interior points or all pairs of a nonmanifold radial ring.
 // Wire edges/acorns are retained as topology, without binding their geometry.
 // Does not certify manifoldness, volume, hole classification or agreement at
 // every curve parameter. Errors preserve their code and source offset.
