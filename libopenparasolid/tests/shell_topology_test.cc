@@ -540,6 +540,18 @@ TEST(ParasolidShellIncidence, GroupsTransitiveEdgeConnectionsInStableIdOrder) {
     EXPECT_EQ(groups[1].faces, (std::vector<NodeId>{{3}}));
     EXPECT_EQ(groups[2].faces, (std::vector<NodeId>{{10}, {40}, {90}}));
     EXPECT_EQ(groups[3].faces, (std::vector<NodeId>{{80}}));
+    EXPECT_TRUE(groups[0].edges.empty());
+    EXPECT_EQ(groups[0].isolated_loops, 1);
+    EXPECT_EQ(groups[0].face_fins, 0);
+    EXPECT_EQ(groups[1].edges, (std::vector<NodeId>{{7}}));
+    EXPECT_EQ(groups[1].paired_edges, 1);
+    EXPECT_EQ(groups[1].face_fins, 2);
+    EXPECT_EQ(groups[2].edges, (std::vector<NodeId>{{5}, {6}}));
+    EXPECT_EQ(groups[2].paired_edges, 2);
+    EXPECT_EQ(groups[2].face_fins, 4);
+    EXPECT_TRUE(groups[3].edges.empty());
+    EXPECT_EQ(groups[3].isolated_loops, 0);
+
     std::reverse(shell.faces.begin(), shell.faces.end());
   }
 }
@@ -565,10 +577,56 @@ TEST(ParasolidShellIncidence, HigherValenceEdgesConnectAllTheirFaces) {
   ASSERT_EQ(faces.size(), 300);
   EXPECT_EQ(faces.front(), NodeId{1});
   EXPECT_EQ(faces.back(), NodeId{300});
+  EXPECT_EQ(result.value().components[0].edges, (std::vector<NodeId>{{1}}));
+  EXPECT_EQ(result.value().components[0].higher_valence_edges, 1);
+  EXPECT_EQ(result.value().components[0].face_fins, 300);
+
   const auto empty = AnalyzeShellEdgeIncidence(ShellBoundary{});
   ASSERT_TRUE(empty.ok());
   EXPECT_EQ(empty.value().face_components, 0);
   EXPECT_TRUE(empty.value().components.empty());
+}
+TEST(ParasolidShellIncidence, LocalizesDifferentValencesToTheirComponents) {
+  ShellBoundary shell;
+  ComponentFace(shell, 50, {9});
+  ComponentFace(shell, 10, {3, 3});
+  ComponentFace(shell, 30, {7, 7, 7});
+  ComponentFace(shell, 20, {});
+  LoopBoundary isolated;
+  isolated.isolated_vertex = IsolatedLoopVertex{NodeId{90}, NodeId{99}};
+  shell.faces.back().loops.push_back(isolated);
+  const auto result = AnalyzeShellEdgeIncidence(shell);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& groups = result.value().components;
+  ASSERT_EQ(groups.size(), 4);
+  EXPECT_EQ(groups[0].faces, (std::vector<NodeId>{{10}}));
+  EXPECT_EQ(groups[0].edges, (std::vector<NodeId>{{3}}));
+  EXPECT_EQ(groups[0].paired_edges, 1);
+  EXPECT_EQ(groups[1].faces, (std::vector<NodeId>{{20}}));
+  EXPECT_TRUE(groups[1].edges.empty());
+  EXPECT_EQ(groups[1].isolated_loops, 1);
+  EXPECT_EQ(groups[2].faces, (std::vector<NodeId>{{30}}));
+  EXPECT_EQ(groups[2].edges, (std::vector<NodeId>{{7}}));
+  EXPECT_EQ(groups[2].higher_valence_edges, 1);
+  EXPECT_EQ(groups[3].faces, (std::vector<NodeId>{{50}}));
+  EXPECT_EQ(groups[3].edges, (std::vector<NodeId>{{9}}));
+  EXPECT_EQ(groups[3].boundary_edges, 1);
+  uint64_t boundary = 0, paired = 0, higher = 0, fins = 0, isolated_count = 0;
+  std::size_t edges = 0;
+  for (const auto& group : groups) {
+    boundary += group.boundary_edges;
+    paired += group.paired_edges;
+    higher += group.higher_valence_edges;
+    fins += group.face_fins;
+    isolated_count += group.isolated_loops;
+    edges += group.edges.size();
+  }
+  EXPECT_EQ(boundary, result.value().boundary_edges);
+  EXPECT_EQ(paired, result.value().paired_edges);
+  EXPECT_EQ(higher, result.value().higher_valence_edges);
+  EXPECT_EQ(fins, result.value().face_fins);
+  EXPECT_EQ(isolated_count, result.value().isolated_loops);
+  EXPECT_EQ(edges, result.value().edges.size());
 }
 }  // namespace
 }  // namespace openparasolid

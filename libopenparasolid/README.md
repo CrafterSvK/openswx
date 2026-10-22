@@ -2098,6 +2098,53 @@ shells, each with one face component. Earlier incidence counts and geometry
 binding outcomes remain unchanged. Private inputs, scripts and reports remain
 outside the repository.
 
+## Edge diagnostics within face components
+
+Each `ShellFaceComponent` now retains sorted `edges` alongside its sorted
+`faces`, plus `boundary_edges`, `paired_edges`, `higher_valence_edges`,
+`face_fins` and `isolated_loops`. Every face-boundary edge belongs to exactly
+one component. Component counters sum to the existing shell totals; wire
+edges and dummy radial anchors remain excluded. An isolated or untrimmed face
+can have an empty edge list. Isolated loops are attributed to their containing
+face's component.
+
+Full `--body-topology` output extends each component object:
+
+```json
+{
+  "faces": [10, 20],
+  "edges": [30, 40],
+  "counts": {
+    "boundary_edges": 1,
+    "paired_edges": 1,
+    "higher_valence_edges": 0,
+    "face_fins": 3,
+    "isolated_loops": 0
+  }
+}
+```
+
+This localizes different edge valences when a shell has disconnected face
+groups. Counts describe recorded incidence and do not certify closed or valid
+solids. Component membership and diagnostics remain omitted from summaries;
+existing aggregate shell counts and CLI statuses are unchanged.
+
+The analysis attributes cached per-face counts and existing per-edge records
+to the resolved components. It adds no source traversal, curve evaluations,
+limits, settings or dependencies. Existing face/fin/edge budgets also bound
+component edge storage. Public result fields are appended after existing
+members.
+
+Tests cover disconnected groups with different valences, transitive and seam
+connections, isolated/untrimmed faces, higher-valence shared edges, source-order
+changes, component-to-shell sum invariants and full/summary serialization.
+Independent counting from all 57 private reports verifies disjoint component
+edge partitions and every component counter: the 47 face components retain
+30 boundary and 2,666 paired edge occurrences, no higher-valence edges,
+5,362 face fins and two isolated-loop occurrences. All previous topology and
+geometry outcomes remain unchanged. Private inputs and reports remain outside
+the repository.
+
 ## Inspecting validated body topology
 
 ```bash

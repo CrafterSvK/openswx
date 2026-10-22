@@ -36,7 +36,17 @@ inline json ShellIncidenceReport(const ShellEdgeIncidence& incidence,
     for (const auto& component : incidence.components) {
       json faces = json::array();
       for (const auto face : component.faces) faces.push_back(face.value);
-      out["components"].push_back({{"faces", std::move(faces)}});
+      json edges = json::array();
+      for (const auto edge : component.edges) edges.push_back(edge.value);
+      out["components"].push_back(
+          {{"faces", std::move(faces)},
+           {"edges", std::move(edges)},
+           {"counts",
+            {{"boundary_edges", component.boundary_edges},
+             {"paired_edges", component.paired_edges},
+             {"higher_valence_edges", component.higher_valence_edges},
+             {"face_fins", component.face_fins},
+             {"isolated_loops", component.isolated_loops}}}});
     }
     out["edges"] = json::array();
     for (const auto& edge : incidence.edges) {

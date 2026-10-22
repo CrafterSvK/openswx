@@ -237,6 +237,13 @@ struct ShellEdgeUseCount {
 struct ShellFaceComponent {
   // Sorted source face IDs; components are ordered by their smallest face ID.
   std::vector<NodeId> faces;
+  // Sorted source edge IDs, each assigned to exactly one component.
+  std::vector<NodeId> edges;
+  uint64_t boundary_edges = 0;
+  uint64_t paired_edges = 0;
+  uint64_t higher_valence_edges = 0;
+  uint64_t face_fins = 0;
+  uint64_t isolated_loops = 0;
 };
 struct ShellEdgeIncidence {
   NodeId shell;
@@ -264,7 +271,9 @@ struct ShellEdgeIncidenceOptions {
 // Groups faces connected by shared edge IDs, including higher-valence edges.
 // Vertex-only contacts do not connect faces. Faces without edge fins each form
 // a component; wire/acorn shells without faces have none. Null or duplicate
-// face IDs are invalid records. Component work/storage use the same budgets.
+// face IDs are invalid records. Components retain edge IDs and incidence
+// counts; their counts sum to the shell totals. Component work/storage use the
+// same budgets, without another traversal or curve evaluation.
 // Does not revalidate connectivity, orient face sides or compare geometry.
 // Paired edges alone do not certify manifold vertices, geometric connectedness,
 // shell closure, hole orientation or volume. Empty/wire/acorn shells have no

@@ -60,6 +60,11 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
   std::unordered_map<uint32_t, EdgeState> edges;
   std::unordered_set<uint32_t> face_ids;
   FaceComponents components(shell.faces.size());
+  struct FaceCounts {
+    uint64_t fins = 0;
+    uint64_t isolated_loops = 0;
+  };
+  std::vector<FaceCounts> face_counts(shell.faces.size());
   uint64_t remaining_loops = options.max_loops;
   uint64_t remaining_fins = options.max_fins;
   for (std::size_t face_index = 0; face_index < shell.faces.size();
@@ -74,6 +79,7 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
       if (loop.fins.size() > remaining_fins)
         return fail(ErrorCode::kResourceLimit, "Shell incidence fin limit");
       remaining_fins -= loop.fins.size();
+      face_counts[face_index].fins += loop.fins.size();
       if (loop.isolated_vertex) {
         if (!loop.fins.empty())
           return fail(ErrorCode::kInvalidRecord,
@@ -82,6 +88,7 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
           return fail(ErrorCode::kResourceLimit, "Shell incidence fin limit");
         --remaining_fins;
         ++result.isolated_loops;
+        ++face_counts[face_index].isolated_loops;
       }
       for (const auto& fin : loop.fins) {
         if (!fin.edge.value)
@@ -106,20 +113,6 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
       }
     }
   }
-  result.edges.reserve(edges.size());
-  for (const auto& [id, state] : edges) {
-    const auto& count = state.count;
-    const auto uses = count.forward_fins + count.reverse_fins;
-    if (uses == 1)
-      ++result.boundary_edges;
-    else if (uses == 2)
-      ++result.paired_edges;
-    else
-      ++result.higher_valence_edges;
-    result.edges.push_back(count);
-  }
-  std::sort(result.edges.begin(), result.edges.end(),
-            [](const auto& a, const auto& b) { return a.edge < b.edge; });
   const auto face_count = shell.faces.size();
   std::vector<std::size_t> group_indices(face_count, face_count);
   for (std::size_t i = 0; i < face_count; ++i) {
@@ -129,10 +122,36 @@ Result<ShellEdgeIncidence> AnalyzeShellEdgeIncidence(
       group = result.components.size();
       result.components.push_back({});
     }
-    result.components[group].faces.push_back(shell.faces[i].face);
+    auto& component = result.components[group];
+    component.faces.push_back(shell.faces[i].face);
+    component.face_fins += face_counts[i].fins;
+    component.isolated_loops += face_counts[i].isolated_loops;
   }
-  for (auto& component : result.components)
+  result.edges.reserve(edges.size());
+  for (const auto& [id, state] : edges) {
+    const auto& count = state.count;
+    const auto uses = count.forward_fins + count.reverse_fins;
+    auto& component =
+        result.components[group_indices[components.Find(state.first_face)]];
+    component.edges.push_back(NodeId{id});
+    if (uses == 1) {
+      ++result.boundary_edges;
+      ++component.boundary_edges;
+    } else if (uses == 2) {
+      ++result.paired_edges;
+      ++component.paired_edges;
+    } else {
+      ++result.higher_valence_edges;
+      ++component.higher_valence_edges;
+    }
+    result.edges.push_back(count);
+  }
+  std::sort(result.edges.begin(), result.edges.end(),
+            [](const auto& a, const auto& b) { return a.edge < b.edge; });
+  for (auto& component : result.components) {
     std::sort(component.faces.begin(), component.faces.end());
+    std::sort(component.edges.begin(), component.edges.end());
+  }
   std::sort(result.components.begin(), result.components.end(),
             [](const auto& a, const auto& b) {
               return a.faces.front() < b.faces.front();
