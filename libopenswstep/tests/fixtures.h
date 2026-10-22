@@ -772,6 +772,74 @@ inline ModelFixture SphericalBand(double lower = 0, double upper = 3,
        ByteValue("sense", '+', FieldType::kCharacter)});
   return f;
 }
+inline ModelFixture SphericalCap(double level = 3, bool north = true,
+                                 bool named_seams = false, bool solid = true) {
+  ConicLoopSpec circle;
+  circle.center.z = level;
+  circle.major = std::sqrt(25 - level * level);
+  circle.reverse_fin = solid ? north : !north;
+  auto f = ConicSheet({circle}, named_seams);
+  if (!solid) RemoveNode(f, 700);
+  f.Add(
+      53, solid ? 701 : 700,
+      {Numbers("center", {0, 0, 0}, FieldType::kVector),
+       Numbers("axis", {0, 0, 1}, FieldType::kVector),
+       Numbers("x_axis", {1, 0, 0}, FieldType::kVector), Numbers("radius", {5}),
+       ByteValue("sense", '+', FieldType::kCharacter)});
+  if (!solid) return f;
+  Set(f, 1, "body_type", 1);
+  Set(f, 2, "next", 3);
+  Set(f, 4, "face", 0);
+  Set(f, 300, "shell", 5);
+  Set(f, 300, "next", 301);
+  Set(f, 300, "next_front", 301);
+  Set(f, 300, "sense", north ? '-' : '+');
+  for (auto& node : f.report.nodes)
+    if (node.index == 700) node.fields[0].values = {0., 0., level};
+  f.Add(19, 3,
+        {Pointer("body", 1, 12), Pointer("previous", 2, 19),
+         Pointer("next", 0, 19), Pointer("shell", 5, 13),
+         ByteValue("type", 'S', FieldType::kCharacter)});
+  f.Add(13, 5,
+        {Pointer("region", 3, 19), Pointer("next", 0, 13),
+         Pointer("face", 300, 14), Pointer("front_face", 0, 14),
+         Pointer("edge", 0, 16), Pointer("vertex", 0, 18)});
+  f.Add(14, 301,
+        {Pointer("loop", 601, 15), Pointer("surface", 701, 1006),
+         Pointer("shell", 5, 13), Pointer("front_shell", 4, 13),
+         Pointer("previous", 300, 14), Pointer("next", 0, 14),
+         Pointer("previous_front", 300, 14), Pointer("next_front", 0, 14),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  const uint32_t fin = north ? 1000 : 1001;
+  f.Add(15, 601,
+        {Pointer("face", 301, 14), Pointer("halfedge", fin, 17),
+         Pointer("next", 0, 15)});
+  Set(f, fin, "loop", 601);
+  Set(f, fin, "forward", fin);
+  Set(f, fin, "backward", fin);
+  return f;
+}
+inline ModelFixture PartitionedSphere(double level = 0,
+                                      bool named_seams = false) {
+  auto f = SphericalCap(level, true, named_seams);
+  // The former closing disk becomes the complementary outward sphere cap.
+  Set(f, 300, "surface", 701);
+  Set(f, 300, "sense", '+');
+  RemoveNode(f, 700);
+  return f;
+}
+inline ModelFixture ReversedSphericalCap() {
+  auto f = SphericalCap();
+  for (auto& node : f.report.nodes)
+    if (node.index == 701) node.fields[1].values = {0., 0., -1.};
+  return f;
+}
+inline ModelFixture InwardSphericalCap() {
+  auto f = SphericalCap(3, true, false, false);
+  Set(f, 300, "sense", '-');
+  Set(f, 4000, "sense", '-');
+  return f;
+}
 inline ModelFixture ReversedSphericalBand(bool axis = false) {
   auto f = SphericalBand();
   if (axis) {

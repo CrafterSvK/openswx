@@ -19,6 +19,20 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 TOROIDAL_SOLID_VOLUME = math.pi * (9 + 1.5 * math.pi + 2 / 3)
 CASES = {
+    "partitioned-sphere": (3, 5, 2, 1, "volume", 500 * math.pi / 3),
+    "partitioned-sphere-seams": (3, 5, 2, 1, "volume", 500 * math.pi / 3),
+    "spherical-cap-north": (2, 3, 2, 1, "volume", 52 * math.pi / 3),
+    "spherical-cap-south": (2, 3, 2, 1, "volume", 52 * math.pi / 3),
+    "spherical-cap-major": (2, 3, 2, 1, "volume", 448 * math.pi / 3),
+    "spherical-cap-major-south": (2, 3, 2, 1, "volume", 448 * math.pi / 3),
+    "spherical-cap-seams": (2, 3, 2, 1, "volume", 52 * math.pi / 3),
+    "spherical-hemisphere": (2, 3, 2, 1, "volume", 250 * math.pi / 3),
+    "spherical-hemisphere-south": (2, 3, 2, 1, "volume", 250 * math.pi / 3),
+    "spherical-cap-sheet": (2, 3, 1, 0, "area", 20 * math.pi),
+    "spherical-cap-major-sheet": (2, 3, 1, 0, "area", 80 * math.pi),
+    "spherical-cap-inward": (2, 3, 1, 0, "area", 20 * math.pi),
+    "spherical-cap-axis": (2, 3, 2, 1, "volume", 52 * math.pi / 3),
+    "oblique-spherical-cap": (2, 3, 2, 1, "volume", 52 * math.pi / 3),
     "spherical-solid": (2, 3, 3, 1, "volume", 66 * math.pi),
     "spherical-seams": (2, 3, 3, 1, "volume", 66 * math.pi),
     "spherical-symmetric": (2, 3, 3, 1, "volume", 132 * math.pi),

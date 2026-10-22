@@ -6,15 +6,18 @@
 #include "conic_boundary.h"
 
 namespace openswstep::internal {
-// Axial cut levels relative to the sphere center, ordered along its axis.
+// Axial region limits relative to the sphere center, ordered along its axis.
+// A cap includes one sphere pole as an interior point, without a source cut.
 struct SphereBand {
   long double lower;
   long double upper;
 };
-// Validates two distinct full circular latitude cuts with opposite winding.
-// Pole cuts, spherical caps and partial azimuths are unsupported. The entire
-// supporting circles must match the sphere profile within source tolerance.
-// One shared comparison-budget check is consumed for the cut pair.
+// Validates a cap with one latitude circle or a band with two distinct,
+// oppositely wound latitude circles. Winding selects the cap's side, including
+// caps larger than a hemisphere. Pole cuts and partial azimuths are
+// unsupported. The entire supporting circles must match the sphere profile
+// within source tolerance. One shared budget check is consumed per cap or cut
+// pair.
 [[nodiscard]] openparasolid::Result<SphereBand> ValidateSphereLoops(
     std::span<const ConicBoundary> loops,
     const openparasolid::SphereGeometry& sphere, bool natural_sense,

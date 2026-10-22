@@ -21,7 +21,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
-| Complete SPHERE bands between two full coaxial latitude circles | Exact `SPHERICAL_SURFACE`, opposite circular bounds and analytic volume contributions |
+| SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
@@ -140,8 +140,20 @@ orientation are supported. Both loops use `FACE_BOUND`; no seam edges are
 invented by the exporter. Solid volume uses the exact spherical divergence
 integral, including the sphere center's offset from the integration origin.
 Closed supported shells can combine spherical bands, planar caps and cylindrical
-bore walls. Spherical caps, pole cuts, uncut spheres and partial azimuths remain
-unsupported.
+bore walls.
+
+A spherical cap has one complete latitude circle. Its winding relative to the
+effective face normal selects the region above or below the cut; no shortest-cap
+assumption is made. Small caps, hemispheres and caps larger than a hemisphere
+are supported as sheets or with a shared planar closing disk. The selected pole
+is interior to the face, without an invented source loop, edge or vertex. The
+existing spherical divergence integral includes that pole as an integration
+limit. Importers may introduce their own periodic seam and degenerate pole edge;
+export statistics continue to count source boundaries and their shared seam
+vertices. Whole-cut profile checks and pole clearance apply to the boundary
+circle just as for bands. Two complementary source cap faces can also close a
+complete sphere, sharing their original latitude edge. A single unbounded
+sphere face, explicit pole cuts and partial azimuths remain unsupported.
 
 Regular ring torus bands require positive minor radius and a major radius
 larger than the minor radius by more than the source tolerance. Two complete
@@ -164,7 +176,7 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, nonconvex curved face boundaries, holes in multi-edge curved contours,
-elliptical holes, spherical caps/pole cuts/uncut spheres, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
+elliptical holes, spherical pole cuts/unbounded sphere faces, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -227,7 +239,8 @@ Circular containment and hole-pair comparisons consume one check each from the
 same budget. Mixed polygon/circle boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
-conical/spherical/toroidal cut pair consumes one check. Parser, model and body-binding
+conical/spherical/toroidal cut pair consumes one check, as does each spherical
+cap selection. Parser, model and body-binding
 budgets remain independently configurable in `ExportOptions`. The file adapter
 checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -259,7 +272,7 @@ GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
-bands, conical frustums, spherical bands, toroidal intervals, convex circular/elliptic arc
+bands, conical frustums, spherical bands/caps, toroidal intervals, convex circular/elliptic arc
 contours, invalid topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -284,10 +297,11 @@ The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 46 export successfully, including sixteen face-bearing bodies
 with 133 faces; 30 successes contain only wire/point geometry. All 46 generated
 documents pass OCCT import and B-rep validity checks. The other 11 return
-unsupported-format errors. Spherical-band support adds one complete body with
-15 faces and preserves all 45 previous successes. Synthetic cases independently
-check spherical band areas and truncated-sphere/tube volumes, including both
-hemispheres, reordered cuts, reversed axes, inward sheets and translated frames.
+unsupported-format errors. Spherical-cap support preserves all 46 previous
+successes; the current private selections contain no newly enabled complete cap
+body. Synthetic cases independently check small/large cap and hemisphere areas
+and volumes, both pole choices, reversed axes, inward sheets, named seams and
+translated frames, alongside the existing spherical-band and tube checks.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.

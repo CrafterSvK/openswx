@@ -85,15 +85,16 @@ struct StepDocument {
 /// Planar faces also support one-edge full CIRCLE/ELLIPSE disks and circular
 /// faces with disjoint polygonal and/or circular holes. Complete CYLINDER/CONE
 /// bands use two coaxial full-circle loops at distinct axial levels and
-/// positive cut radii. SPHERE bands use two full coaxial latitude circles
-/// with distinct levels away from the poles. Regular ring TORUS bands use two
-/// coaxial full-circle cuts; winding selects the meridian interval, including
-/// its periodic seam and complementary band. Planar faces also support a single
-/// convex LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs
-/// and two-edge segments/lenses. Nonconvex curved contours, holes in multi-edge
-/// curved contours, partial azimuths, spherical caps/pole cuts, apex loops,
-/// explicit seam fins, horn/apple/lemon tori and elliptical holes remain
-/// unsupported. Sheet
+/// positive cut radii. SPHERE faces use one full latitude circle for a cap
+/// or two full coaxial latitude circles for a band, away from the poles.
+/// Winding selects either cap, including caps larger than a hemisphere. Regular
+/// ring TORUS bands use two coaxial full-circle cuts; winding selects the
+/// meridian interval, including its periodic seam and complementary band.
+/// Planar faces also support a single convex LINE/CIRCLE/ELLIPSE contour,
+/// including split conics, elliptic arcs and two-edge segments/lenses.
+/// Nonconvex curved contours, holes in multi-edge curved contours, partial
+/// azimuths, spherical pole cuts, apex loops, explicit seam fins,
+/// horn/apple/lemon tori and elliptical holes remain unsupported. Sheet
 /// orientation is propagated across shared edges. Solid export requires one
 /// material region with one closed, connected shell, consistent face-side uses
 /// and positive signed volume. Foreign geometry, tolerant fin curves, isolated

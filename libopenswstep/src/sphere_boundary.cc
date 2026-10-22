@@ -36,9 +36,9 @@ Result<SphereBand> ValidateSphereLoops(std::span<const ConicBoundary> loops,
                         "Sphere tolerance must be positive and finite"});
   if (!std::isfinite(sphere.radius) || sphere.radius <= tolerance)
     return Return::Err(Invalid("Sphere radius is degenerate"));
-  if (loops.size() != 2)
+  if (loops.empty() || loops.size() > 2)
     return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                        "Spherical band requires two full circular cuts"});
+                        "Sphere requires one or two full circular cuts"});
   constexpr double kFullTurn = 2 * std::numbers::pi;
   constexpr double kTurnTolerance = 1e-12;
   constexpr long double kFrameTolerance = 1e-10L;
@@ -88,6 +88,15 @@ Result<SphereBand> ValidateSphereLoops(std::span<const ConicBoundary> loops,
     return Return::Err(
         {ErrorCode::kResourceLimit, 0, "Sphere cut comparison limit exceeded"});
   --remaining_checks;
+  if (loops.size() == 1) {
+    // A positive lower boundary selects the cap above the cut; a negative
+    // upper boundary selects the cap below it, relative to the face sense.
+    // The pole is interior to the source face, not an invented boundary loop.
+    const long double radius = sphere.radius;
+    return Return::Ok(forward[0] == natural_sense
+                          ? SphereBand{levels[0], radius}
+                          : SphereBand{-radius, levels[0]});
+  }
   const std::size_t lower = levels[0] < levels[1] ? 0 : 1;
   const auto height = levels[1 - lower] - levels[lower];
   if (!std::isfinite(height) ||
