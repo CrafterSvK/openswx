@@ -191,8 +191,8 @@ struct IntersectionChartEvaluation {
 
 /// Reconstructs a directly referenced INTERSECTION's chart from the model.
 /// Both targets must have known senses and support analytic, NURBS, circular
-/// spun ring or analytic-section swept inversion. The previous UV supplies
-/// the next hint;
+/// spun ring, analytic-section swept or supported analytic-offset inversion.
+/// The previous UV supplies the next hint;
 /// local NURBS roots and periodic seam continuity are not certified.
 /// Each stored chart position must invert onto both surfaces within the finite
 /// nonnegative absolute tolerance in source units. Normals are sampled at the
@@ -240,7 +240,8 @@ struct IntersectionEvaluationOptions {
     const IntersectionEvaluationOptions& options);
 
 /// Evaluates a directly referenced INTERSECTION with analytic, NURBS, supported
-/// circular spun ring or analytic-section swept surfaces within its chart.
+/// circular spun ring, analytic-section swept or analytic-offset surfaces
+/// within its chart.
 /// Requires a finite parameter and explicit finite chart/solve tolerances in
 /// source units. Optional endpoint tolerance uses original parameter units.
 /// Prepares the chart, then locally solves coincidence of its
@@ -255,6 +256,9 @@ struct IntersectionEvaluationOptions {
 /// profile parameters interpolate directly without extending their domain.
 /// Swept conic sections use local angular interpolation. Swept line parameters
 /// and sweep displacement retain linear units without angular wrapping.
+/// Analytic offsets inherit their resolved basis's angular/linear coordinates.
+/// Model-based offset checks, senses, cycle detection and the 64-layer limit
+/// apply during chart preparation, interpolation, sampling and normals.
 /// Optional geometric regularity minimums apply at the query and reject
 /// samples below a minimum with kInvalidRecord.
 /// Outside-chart parameters beyond chart_parameter_tolerance are invalid

@@ -300,6 +300,22 @@ NURBS/blend offsets are not approximated. Tests compare offsets to oriented
 basis normals, derivatives to finite differences, and forward/inverse UVs.
 The library remains MIT and STL-only.
 
+The model-based intersection chart and local solver also accept these analytic
+offsets. Angular interpolation follows the resolved basis: cylinder/cone/sphere
+azimuth and both regular ring-torus angles retain their periods, while plane
+parameters remain linear. Resolution for interpolation does not replace model
+sampling; Newton samples and oriented normals still use the referenced offset
+surface. Basis sense controls signed displacement and each offset surface's
+own sense controls its oriented normal. Existing validity, cycle and 64-layer
+limits remain in force; offsets of NURBS, spun or swept bases remain unsupported.
+
+Synthetic intersection tests cover all five basis types, signed basis senses,
+reversed offset senses, azimuth and torus meridian seams, nested plane offsets,
+64/65-layer limits, cycles, missing/unknown/unsupported bases, singular radius
+and torus transitions and explicit point-membership tolerance. The selected
+39-stream corpus retains all 32 chart preparations, 128 chord-midpoint samples
+and 56 of 57 successful body bindings. Private inputs remain outside the repo.
+
 ## Explicit delta state application
 
 `openparasolid/delta.h` adds an atomic state-application engine.
@@ -1411,8 +1427,9 @@ comparison programs remain outside the repository.
 
 `EvaluateIntersectionChart(model, curve_id, tolerance)` prepares a directly
 referenced `INTERSECTION` chart without caller-supplied tangents. Both surface
-targets must support analytic, NURBS, circular spun ring or analytic-section
-swept inversion and have known senses. At each stored chart point it:
+targets must support analytic, NURBS, circular spun ring, analytic-section
+swept or analytic-offset inversion and have known senses. At each stored chart
+point it:
 
 1. Inverts the point onto both surfaces with the caller's explicit absolute
    distance tolerance in source units. The previous recovered UV supplies the
@@ -1485,8 +1502,9 @@ successful, with body binding unchanged at 56 of 57 occurrences.
 ## Local intersection evaluation
 
 `EvaluateIntersectionCurve(model, curve_id, parameter, options)` evaluates a
-direct `INTERSECTION` with analytic, NURBS, supported circular spun ring or
-analytic-section swept surfaces inside its reconstructed chart. It returns
+direct `INTERSECTION` with analytic, NURBS, supported circular spun ring,
+analytic-section swept or analytic-offset surfaces inside its reconstructed
+chart. It returns
 a point and natural first derivative without flipping them for curve sense.
 `IntersectionEvaluationOptions` requires two explicit finite tolerances in
 source units: nonnegative `chart_tolerance` for stored-point membership and
@@ -1515,6 +1533,9 @@ line parameters and signed sweep displacement interpolate in their original
 linear units, even for spans greater than `2*pi`. Sweep support retains the
 inversion restrictions: independent line/sweep directions and a transverse
 sweep for conics. NURBS sections and coplanar conic sweeps remain unsupported.
+Analytic offsets inherit their resolved basis's parameter periods, preserving
+linear plane coordinates and periodic ring-torus meridians. Offset resolution
+uses the existing bounded, sense-aware model resolver.
 All inversion, normals and solver samples use the actual model surface, with
 no canonical-torus substitution. General spun profiles remain unsupported. NURBS
 coordinates interpolate in their original knot units without angular

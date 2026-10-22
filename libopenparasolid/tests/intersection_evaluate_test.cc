@@ -67,6 +67,199 @@ void Sphere(ModelFixture& f) {
          Numbers("radius", {1.}),
          ByteValue("sense", '+', FieldType::kCharacter)});
 }
+void Offset(ModelFixture& f, uint32_t id, uint32_t basis, double distance,
+            uint8_t sense = '+') {
+  f.Add(60, id,
+        {Pointer("surface", basis, 1006), Numbers("offset", {distance}),
+         ByteValue("sense", sense, FieldType::kCharacter)});
+}
+void OffsetBasis(ModelFixture& f, int kind, uint8_t sense = '+') {
+  std::vector<ModelField> fields{
+      Numbers(kind == 1 || kind == 3 ? "center" : "origin", {0, 0, 0},
+              FieldType::kVector),
+      Numbers("axis", {0, 0, 1}, FieldType::kVector),
+      Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+      ByteValue("sense", sense, FieldType::kCharacter)};
+  if (kind == 3) {
+    fields.push_back(Numbers("major_radius", {3}));
+    fields.push_back(Numbers("minor_radius", {1}));
+  } else
+    fields.push_back(Numbers("radius", {1}));
+  if (kind == 2) {
+    fields.push_back(Numbers("sin_half_angle", {std::sqrt(.5)}));
+    fields.push_back(Numbers("cos_half_angle", {std::sqrt(.5)}));
+  }
+  f.Add(kind == 0   ? 51
+        : kind == 1 ? 53
+        : kind == 2 ? 52
+                    : 54,
+        70, std::move(fields));
+}
+TEST(ParasolidIntersectionEvaluate,
+     OffsetAnalyticsRetainSignedOffsetsAndAngularSeams) {
+  for (int kind = 0; kind < 4; ++kind) {
+    for (bool negative_basis : {false, true}) {
+      for (bool reverse : {false, true}) {
+        const double d = negative_basis ? -.25 : .25, height = .3;
+        const double radius =
+            kind == 0   ? 1 + d
+            : kind == 1 ? std::sqrt((1 + d) * (1 + d) - height * height)
+            : kind == 2 ? 1 + height + std::sqrt(2.) * d
+                        : 3 + std::sqrt((1 + d) * (1 + d) - height * height);
+        ModelFixture f;
+        Definition(f, CirclePoints({reverse ? 3.3 : 3., reverse ? 3. : 3.3},
+                                   radius, height));
+        Plane(f, height);
+        Offset(f, 51, 70, .25, reverse ? '-' : '+');
+        OffsetBasis(f, kind, negative_basis ? '-' : '+');
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto chart =
+            EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+        ASSERT_TRUE(chart.ok()) << chart.error().message;
+        const auto& times = chart.value().parameterization.parameters;
+        for (double fraction : {.2, .5, .8}) {
+          const double t = std::lerp(times.front(), times.back(), fraction);
+          const auto result = EvaluateIntersectionCurve(
+              model.value(), NodeId{1}, t, {1e-12, 1e-12});
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          const double direction = reverse ? -1 : 1;
+          const double delta = std::asin((2 * fraction - 1) * std::sin(.15));
+          const double angle = 3.15 + direction * delta;
+          EXPECT_NEAR(result.value().position.x, radius * std::cos(angle),
+                      1e-11);
+          EXPECT_NEAR(result.value().position.y, radius * std::sin(angle),
+                      1e-11);
+          EXPECT_NEAR(result.value().position.z, height, 1e-12);
+          const double scale = direction / (3 * std::cos(delta));
+          EXPECT_NEAR(result.value().first_derivative.x,
+                      -scale * std::sin(angle), 1e-11);
+          EXPECT_NEAR(result.value().first_derivative.y,
+                      scale * std::cos(angle), 1e-11);
+        }
+      }
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     OffsetTorusRetainsPeriodicMeridianCoordinates) {
+  ModelFixture f;
+  std::vector<Vector3> points;
+  for (double v : {3., 3.3})
+    points.push_back({3 + 1.25 * std::cos(v), 0, 1.25 * std::sin(v)});
+  Definition(f, points);
+  f.Add(50, 50,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, -1, 0}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Offset(f, 51, 70, .25);
+  OffsetBasis(f, 3);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+  ASSERT_TRUE(chart.ok()) << chart.error().message;
+  const auto& times = chart.value().parameterization.parameters;
+  const auto result = EvaluateIntersectionCurve(
+      model.value(), NodeId{1}, std::midpoint(times.front(), times.back()),
+      {1e-12, 1e-12});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_NEAR(result.value().position.x, 3 + 1.25 * std::cos(3.15), 1e-12);
+  EXPECT_NEAR(result.value().position.z, 1.25 * std::sin(3.15), 1e-12);
+  EXPECT_NEAR(result.value().first_derivative.x, -std::sin(3.15) / 3, 1e-12);
+  EXPECT_NEAR(result.value().first_derivative.z, std::cos(3.15) / 3, 1e-12);
+}
+TEST(ParasolidIntersectionEvaluate, NestedOffsetPlanesKeepOriginalLinearUnits) {
+  ModelFixture f;
+  Definition(f, {{0, 0, 1}, {10, 0, 1}});
+  f.Add(50, 70,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '-', FieldType::kCharacter)});
+  Offset(f, 71, 70, 2, '-');  // First shift is -2 along Z.
+  Offset(f, 50, 71, -3);      // Negative basis sense makes this shift +3.
+  f.Add(50, 51,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, -1, 0}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result =
+      EvaluateIntersectionCurve(model.value(), NodeId{1}, 13, {0, 1e-12});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_NEAR(result.value().position.x, 5, 1e-12);
+  EXPECT_NEAR(result.value().position.z, 1, 1e-12);
+  EXPECT_NEAR(result.value().first_derivative.x, 1. / 3, 1e-12);
+}
+TEST(ParasolidIntersectionEvaluate, OffsetDependencyLimitsRemainContextual) {
+  for (int depth : {64, 65}) {
+    ModelFixture f;
+    Definition(f, CirclePoints({0, .3}));
+    Plane(f);
+    OffsetBasis(f, 1);
+    Offset(f, 51, 100, 0);
+    for (int i = 1; i < depth; ++i)
+      Offset(f, 99 + i, i == depth - 1 ? 70 : 100 + i, 0);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto chart =
+        EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+    EXPECT_EQ(chart.ok(), depth == 64);
+    if (!chart.ok()) {
+      EXPECT_EQ(chart.error().code, ErrorCode::kResourceLimit);
+      EXPECT_NE(chart.error().message.find("point 0, surface 1"),
+                std::string::npos);
+    } else {
+      const auto& times = chart.value().parameterization.parameters;
+      EXPECT_TRUE(
+          EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                    std::midpoint(times.front(), times.back()),
+                                    {1e-12, 1e-12})
+              .ok());
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     OffsetChartsRejectInvalidAndUnsupportedBases) {
+  for (int bad = 0; bad < 7; ++bad) {
+    ModelFixture f;
+    Definition(f, CirclePoints({0, .3}));
+    Plane(f);
+    Offset(f, 51,
+           bad == 0   ? 51
+           : bad == 1 ? 99
+                      : 70,
+           bad == 3   ? -2
+           : bad == 5 ? 3
+           : bad == 6 ? .25
+                      : 0);
+    if (bad >= 2 && bad != 4)
+      OffsetBasis(f, bad == 5 ? 3 : 1, bad == 2 ? '?' : '+');
+    if (bad == 4) {
+      f.Add(67, 70,
+            {Pointer("section", 80, 1008),
+             Numbers("sweep", {0, 0, 1}, FieldType::kVector),
+             {{"scale", FieldType::kDouble}, {std::monostate{}}},
+             ByteValue("sense", '+', FieldType::kCharacter)});
+      f.Add(30, 80,
+            {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+             Numbers("direction", {1, 0, 0}, FieldType::kVector),
+             ByteValue("sense", '+', FieldType::kCharacter)});
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto chart =
+        EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+    ASSERT_FALSE(chart.ok());
+    EXPECT_EQ(chart.error().code, bad == 2 || bad == 4 || bad == 5
+                                      ? ErrorCode::kUnsupportedFormat
+                                      : ErrorCode::kInvalidRecord);
+    EXPECT_NE(chart.error().message.find("point 0, surface 1"),
+              std::string::npos);
+  }
+}
 void Sweep(ModelFixture& f, Vector3 direction = {0, 0, 1},
            uint32_t section = 60) {
   f.Add(67, 51,

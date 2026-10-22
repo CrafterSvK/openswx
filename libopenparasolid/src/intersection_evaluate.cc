@@ -299,9 +299,20 @@ Result<IntersectionCurveEvaluation> EvaluateIntersectionCurveWithDiagnostics(
   Parameters uv{};
   for (std::size_t side = 0; side < 2; ++side) {
     const auto* node = model.FindNode(intersection.surfaces[side]);
-    const auto& surface = model.geometry()[*node->geometry].payload;
+    const auto& stored_surface = model.geometry()[*node->geometry].payload;
     const auto& a = prepared.value().surface_parameters[index][side];
     const auto& b = prepared.value().surface_parameters[index + 1][side];
+    std::optional<GeometryPayload> resolved_offset;
+    if (std::holds_alternative<OffsetSurfaceGeometry>(stored_surface)) {
+      auto resolved = internal::ResolveOffsetSurface(
+          model, node->id, SurfaceParameterSeed{a.u, a.v});
+      if (!resolved.ok())
+        return Result<IntersectionCurveEvaluation>::Err(resolved.error());
+      resolved_offset = std::move(resolved).value();
+    }
+    // Offsets inherit the analytic basis's parameter units. Resolve only for
+    // interpolation; Newton samples and normals still use the source model.
+    const auto& surface = resolved_offset ? *resolved_offset : stored_surface;
     const auto* spun = std::get_if<SpunSurfaceGeometry>(&surface);
     bool periodic_section = false;
     if (const auto* swept = std::get_if<SweptSurfaceGeometry>(&surface)) {
@@ -315,7 +326,10 @@ Result<IntersectionCurveEvaluation> EvaluateIntersectionCurveWithDiagnostics(
     // Preferred chart seeds retain their source period; only an unbounded
     // circular profile may use the shortest angular interpolation.
     const bool periodic_u =
-        periodic_section || (node->node_type >= 51 && node->node_type <= 54) ||
+        periodic_section || std::holds_alternative<CylinderGeometry>(surface) ||
+        std::holds_alternative<ConeGeometry>(surface) ||
+        std::holds_alternative<SphereGeometry>(surface) ||
+        std::holds_alternative<TorusGeometry>(surface) ||
         (spun && !spun->start_parameter && !spun->end_parameter);
     uv[2 * side] = Interpolate(a.u, b.u, fraction, periodic_u);
     const auto* torus = std::get_if<TorusGeometry>(&surface);
