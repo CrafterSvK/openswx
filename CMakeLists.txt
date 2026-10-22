@@ -28,6 +28,9 @@ add_subdirectory(libopenparasolid)
 # ── libopenswx — platform-independent SolidWorks file parser ─────────────────
 add_subdirectory(libopenswx)
 
+# ── libopenswstep — exact STEP export from SolidWorks/Parasolid ──────────────
+add_subdirectory(libopenswstep)
+
 # ── libopenbom — configurable BOM transformer built on libopenswx ─────────────
 add_subdirectory(libopenbom)
 

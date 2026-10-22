@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 openswx contributors
+/**
+ * @file
+ * @brief Library release version, independent of the STEP application protocol.
+ */
+#ifndef OPENSWSTEP_VERSION_H_
+#define OPENSWSTEP_VERSION_H_
+
+/// Build-time library release string.
+#define OPENSWSTEP_VERSION_STRING "@PROJECT_VERSION@"
+#endif  // OPENSWSTEP_VERSION_H_

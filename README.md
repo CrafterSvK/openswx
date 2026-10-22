@@ -6,12 +6,13 @@ A cross-platform toolkit for reading SolidWorks® files (`.SLDPRT`, `.SLDASM`, `
 
 ## Overview
 
-The repository contains four components:
+The repository contains five components:
 
 ```
 openswx/
 ├── libopenparasolid/  C++20 library + binary Parasolid inspector
 ├── libopenswx/   Pure C++20 library — parses SolidWorks files
+├── libopenswstep/ C++20 library — exact STEP export using libopenswx/libopenparasolid
 ├── libopenbom/   Pure C++20 library — builds hierarchical BOMs (built on libopenswx)
 └── asmbox/       HTTP server + CLI tool — built on top of both libraries
 ```
@@ -26,7 +27,8 @@ records using embedded schema edits and a reviewed administration, attribute, to
 and analytic, spline and procedural geometry subset or an explicit matching
 catalog. Candidate
 scanning remains an inspection aid;
-complete topology, delta application and B-Rep construction are future steps.
+bounded topology traversal, explicit-plan delta application and exact boundary
+binding are available through the library API.
 `--geometry` builds an owned reference graph and typed analytic/NURBS objects
 for complete partition/transmit streams, with explicit unresolved-reference and
 unsupported-geometry diagnostics. See the
@@ -50,6 +52,16 @@ Extracted data per document:
 - **Document preview** PNG thumbnail
 - Per **configuration**: name, custom properties, mass properties (CoG, volume, surface area, mass, inertia tensor), preview PNG, cut-list items (weldments), assembly component references
 - Per **drawing sheet**: name, preview PNG, view references
+
+### libopenswstep
+
+An MIT-licensed C++20 static library that writes STEP AP214 files using
+`libopenswx` extraction and `libopenparasolid` decoding, topology and geometry
+binding. The first supported subset covers analytic wire bodies, point-only
+acorns, planar polygon sheets and closed planar solids. Source units, payload
+selection and body identity are explicit. Unsupported geometry returns a typed
+error; it is never silently omitted or tessellated. See the
+[API, supported scope and validation](libopenswstep/README.md).
 
 ### libopenbom
 
