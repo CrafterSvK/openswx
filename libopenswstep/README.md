@@ -21,6 +21,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Complete CYLINDER bands between two full coaxial circles | Exact `CYLINDRICAL_SURFACE` with two circular `FACE_BOUND` loops |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
+| Complete SPHERE bands between two full coaxial latitude circles | Exact `SPHERICAL_SURFACE`, opposite circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
@@ -128,6 +129,20 @@ Narrowing source cones use a positive STEP semi-angle and reversed exported
 axis. The reference origin may be at the apex, provided both boundary circles
 are away from it. Apex boundary loops and partial conical sectors are unsupported.
 
+Spherical bands use two complete coaxial latitude circles on a positive-radius
+sphere. The exporter checks circle radius, center displacement and whole-circle
+tilt against `hypot(cut_radius, axial_level) = sphere_radius`. The displacement
+bound includes twice the axial variation for small allowed tilts. Cut levels
+must differ by more than two source tolerances and stay more than one tolerance
+from either pole. The lower/upper circles must wind oppositely relative to the
+effective face normal. Reversed axes, source loop order and inward sheet
+orientation are supported. Both loops use `FACE_BOUND`; no seam edges are
+invented by the exporter. Solid volume uses the exact spherical divergence
+integral, including the sphere center's offset from the integration origin.
+Closed supported shells can combine spherical bands, planar caps and cylindrical
+bore walls. Spherical caps, pole cuts, uncut spheres and partial azimuths remain
+unsupported.
+
 Regular ring torus bands require positive minor radius and a major radius
 larger than the minor radius by more than the source tolerance. Two complete
 coaxial circular cuts are checked against the meridian profile, including
@@ -149,7 +164,7 @@ separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
 NURBS, nonconvex curved face boundaries, holes in multi-edge curved contours,
-elliptical holes, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
+elliptical holes, spherical caps/pole cuts/uncut spheres, partial cylindrical/conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
@@ -212,7 +227,7 @@ Circular containment and hole-pair comparisons consume one check each from the
 same budget. Mixed polygon/circle boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
-conical/toroidal cut pair consumes one check. Parser, model and body-binding
+conical/spherical/toroidal cut pair consumes one check. Parser, model and body-binding
 budgets remain independently configurable in `ExportOptions`. The file adapter
 checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -244,7 +259,7 @@ GoogleTest is required only with tests enabled. No additional runtime dependency
 is introduced. The tests construct synthetic topology and a compressed modern
 SolidWorks container, exercise the full extraction/decoding/export/file path,
 and check sharing, ring seams, senses, polygon/circular holes, through bores, cylindrical
-bands, conical frustums, toroidal intervals, convex circular/elliptic arc
+bands, conical frustums, spherical bands, toroidal intervals, convex circular/elliptic arc
 contours, invalid topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
@@ -259,23 +274,23 @@ ctest --test-dir build -R openswstep_occt_roundtrip --output-on-failure
 
 It imports generated synthetic STEP documents, runs `BRepCheck_Analyzer`, checks
 unique vertex/edge/face/solid counts and compares volumes, areas and curve
-lengths, including hole areas and analytic cylinder/frustum/tube/toroidal
+lengths, including hole areas and analytic cylinder/frustum/tube/sphere/torus
 volumes. Different seam phases exercise importer-created periodic seams and ring
 splits. OCCT is exclusively a test dependency and is never linked into the export library.
 Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 45 export successfully, including fifteen face-bearing bodies
-with 118 faces; 30 successes contain only wire/point geometry. All 45 generated
-documents pass OCCT import and B-rep validity checks. The other 12 return
-unsupported-format errors. Circular-outer polygon-hole support adds one complete
-body with 15 faces and preserves all 44 previous successes. Synthetic cases
-independently check mixed hole areas, concave polygon holes, source loop ordering,
-named seams, reversed orientations and translated frames. The remaining private
-bodies require additional geometry features before their complete export can
-succeed. These are raw body selections, including archival partition snapshots,
-rather than automatic active-configuration conversions.
+extracted streams: 46 export successfully, including sixteen face-bearing bodies
+with 133 faces; 30 successes contain only wire/point geometry. All 46 generated
+documents pass OCCT import and B-rep validity checks. The other 11 return
+unsupported-format errors. Spherical-band support adds one complete body with
+15 faces and preserves all 45 previous successes. Synthetic cases independently
+check spherical band areas and truncated-sphere/tube volumes, including both
+hemispheres, reordered cuts, reversed axes, inward sheets and translated frames.
+The remaining private bodies require additional geometry features before their
+complete export can succeed. These are raw body selections, including archival
+partition snapshots, rather than automatic active-configuration conversions.
 
 Run `doxygen Doxyfile` from this directory to generate public API HTML at
 `../build/openswstep-docs/html/index.html`; documentation warnings fail generation.

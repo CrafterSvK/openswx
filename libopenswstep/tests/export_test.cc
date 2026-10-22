@@ -794,6 +794,117 @@ TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
     ASSERT_TRUE(sheet.ok()) << sheet.error().message;
   }
 }
+TEST(OpenSwStep, ExportsExactSphericalBandsAndClosedTruncatedSpheres) {
+  for (const auto& fixture :
+       {test::SphericalBand(), test::SphericalBand(0, 3, false, true),
+        test::SphericalBand(-3, 3), test::SphericalBand(-3, 0),
+        test::SphericalBand(0, 3, true), test::SphericalBand(0, 3, true, true),
+        test::ReversedSphericalBand(), test::ReversedSphericalBand(true),
+        test::RotateAndTranslate(test::SphericalBand())}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.solids, 1);
+    EXPECT_NE(result.value().text.find("=SPHERICAL_SURFACE("),
+              std::string::npos);
+    CheckReferences(result.value());
+  }
+  for (const auto& fixture :
+       {test::InwardSphericalBand(),
+        test::SphericalBand(0, 3, false, false, false, true)}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_EQ(result.value().statistics.faces, 1);
+    EXPECT_EQ(result.value().statistics.edges, 2);
+  }
+}
+TEST(OpenSwStep, RejectsInvalidSphereCutsAndBoundsPairChecks) {
+  auto options = Options();
+  options.max_polygon_checks = 1;
+  const auto result = Export(test::SphericalBand(), options);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  auto two_bands = test::SphericalBand(0, 3, true);
+  const auto limited = Export(two_bands, options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  for (const auto& fixture :
+       {test::SphericalBand(0, 0, false, false, false, true),
+        test::SphericalBand(0, 1e-7, false, false, false, true)}) {
+    const auto invalid = Export(fixture);
+    ASSERT_FALSE(invalid.ok());
+    EXPECT_EQ(invalid.error().code, ErrorCode::kInvalidRecord);
+  }
+  auto wrong = test::SphericalBand(0, 3, false, false, false, true);
+  test::Set(wrong, 4001, "sense", '-');
+  EXPECT_FALSE(Export(wrong).ok());
+  auto outside = test::SphericalBand(0, 3, false, false, false, true);
+  for (auto& node : outside.report.nodes)
+    if (node.index == 4001) node.fields[3].values = {4.01};
+  EXPECT_FALSE(Export(outside).ok());
+}
+TEST(OpenSwStep, ChecksEntireSphereLatitudeCutsAndRejectsCaps) {
+  // A tilted great circle still lies on the sphere; sampled surface membership
+  // cannot establish that its whole supporting circle is a latitude cut.
+  auto tilted = test::SphericalBand(0, 3, false, false, false, true);
+  constexpr double angle = 1e-6;
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4000)
+      node.fields[1].values = {0., std::sin(angle), std::cos(angle)};
+  const auto invalid = Export(tilted);
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_NE(invalid.error().message.find("coaxial profile"), std::string::npos);
+  const auto pole =
+      Export(test::SphericalBand(0, 5 - 1e-8, false, false, false, true));
+  ASSERT_FALSE(pole.ok());
+  EXPECT_EQ(pole.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(pole.error().message.find("pole"), std::string::npos);
+  auto ellipse = test::SphericalBand(0, 3, false, false, false, true);
+  test::RemoveNode(ellipse, 4000);
+  ellipse.Add(
+      32, 4000,
+      {test::Numbers("center", {0, 0, 0}, FieldType::kVector),
+       test::Numbers("normal", {0, 0, 1}, FieldType::kVector),
+       test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+       test::Numbers("major_radius", {5}), test::Numbers("minor_radius", {5}),
+       test::ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto unsupported_ellipse = Export(ellipse);
+  ASSERT_FALSE(unsupported_ellipse.ok());
+  EXPECT_EQ(unsupported_ellipse.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(unsupported_ellipse.error().message.find("CIRCLE"),
+            std::string::npos);
+  auto cap = test::ConicSheet({{{0, 0, 0}, 5}});
+  test::RemoveNode(cap, 700);
+  cap.Add(53, 700,
+          {test::Numbers("center", {0, 0, 0}, FieldType::kVector),
+           test::Numbers("axis", {0, 0, 1}, FieldType::kVector),
+           test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           test::Numbers("radius", {5}),
+           test::ByteValue("sense", '+', FieldType::kCharacter)});
+  const auto unsupported = Export(cap);
+  ASSERT_FALSE(unsupported.ok());
+  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, RejectsInvertedSphericalSolidsUsingAnalyticVolume) {
+  auto inverted = test::SphericalBand();
+  for (uint32_t i = 0; i < 3; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto result = Export(inverted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("signed volume"), std::string::npos);
+}
+TEST(OpenSwStep, ParsesSphericalBandsThroughBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::SphericalBand());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.faces, 3);
+  EXPECT_EQ(result.value().statistics.solids, 1);
+}
 TEST(OpenSwStep, ExportsCircularFacesWithPolygonalAndCircularHoles) {
   for (const bool two : {false, true})
     for (const bool circle : {false, true})

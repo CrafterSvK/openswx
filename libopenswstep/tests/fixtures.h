@@ -353,7 +353,7 @@ inline ModelFixture RotateAndTranslate(ModelFixture f) {
   for (auto& node : f.report.nodes) {
     if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
         node.node_type != 32 && node.node_type != 50 && node.node_type != 51 &&
-        node.node_type != 52 && node.node_type != 54)
+        node.node_type != 52 && node.node_type != 53 && node.node_type != 54)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
@@ -741,6 +741,54 @@ inline ModelFixture Cylinder(bool tube = false, bool named_seams = false,
       Set(f, fin, "backward", 0);
     }
   }
+  return f;
+}
+inline ModelFixture SphericalBand(double lower = 0, double upper = 3,
+                                  bool tube = false, bool named_seams = false,
+                                  bool solid = true, bool mantle_only = false) {
+  auto f = Cylinder(tube, named_seams, solid, mantle_only);
+  const double radii[]{std::sqrt(25 - lower * lower),
+                       std::sqrt(25 - upper * upper)};
+  for (auto& node : f.report.nodes) {
+    if (node.index >= 4000 && node.index <= 4003) {
+      const auto i = node.index - 4000;
+      node.fields[0].values = {0., 0., i % 2 ? upper : lower};
+      if (i < 2) node.fields[3].values = {radii[i]};
+    }
+    if (node.index == 700 || node.index == 701)
+      node.fields[0].values = {0., 0., node.index == 700 ? lower : upper};
+    if (node.index >= 500 && node.index <= 503) {
+      const auto i = node.index - 500;
+      node.fields[0].values = {i < 2 ? radii[i] : 1., 0.,
+                               i % 2 ? upper : lower};
+    }
+  }
+  RemoveNode(f, 702);
+  f.Add(
+      53, 702,
+      {Numbers("center", {0, 0, 0}, FieldType::kVector),
+       Numbers("axis", {0, 0, 1}, FieldType::kVector),
+       Numbers("x_axis", {1, 0, 0}, FieldType::kVector), Numbers("radius", {5}),
+       ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture ReversedSphericalBand(bool axis = false) {
+  auto f = SphericalBand();
+  if (axis) {
+    for (auto& node : f.report.nodes)
+      if (node.index == 702) node.fields[1].values = {0., 0., -1.};
+  } else {
+    Set(f, 302, "loop", 605);
+    Set(f, 605, "next", 604);
+    Set(f, 604, "next", 0);
+  }
+  return f;
+}
+inline ModelFixture InwardSphericalBand() {
+  auto f = SphericalBand(0, 3, false, false, false, true);
+  Set(f, 302, "sense", '-');
+  Set(f, 4000, "sense", '-');
+  Set(f, 4001, "sense", '-');
   return f;
 }
 inline ModelFixture ReversedCylinder(bool axis = false) {
