@@ -42,9 +42,10 @@ struct ExportOptions {
   uint64_t max_entities = 1000000;
   /// Cap on the complete owned Part 21 output, including its header.
   uint64_t max_output_bytes = 128u * 1024u * 1024u;
-  /// Aggregate cap on polygon segment comparisons/containment edge tests and
-  /// circular containment/hole-pair and cylinder/cone/torus cut-pair
-  /// comparisons across the selected body.
+  /// Shared boundary-check budget across the selected body: segment,
+  /// containment, separation and convex-corner tests, analytic cut pairs and
+  /// spherical cap selections. Each cylindrical patch or annular sector
+  /// consumes five checks.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -94,16 +95,17 @@ struct StepDocument {
 /// two coaxial full-circle cuts; winding selects the meridian interval,
 /// including its periodic seam and complementary band. Planar faces also
 /// support a single convex LINE/CIRCLE/ELLIPSE contour, including split conics,
-/// elliptic arcs and two-edge segments/lenses. Nonconvex curved contours, holes
-/// in multi-edge curved contours, partial azimuths, spherical pole cuts, apex
-/// loops, explicit seam fins, horn/apple/lemon tori and elliptical holes remain
-/// unsupported. Sheet orientation is propagated across shared edges. Solid
-/// export requires one material region with one closed, connected shell,
-/// consistent face-side uses and positive signed volume. Foreign geometry,
-/// tolerant fin curves, isolated face loops, compound bodies, general bodies
-/// and other curve/surface types return explicit errors. Existing finite
-/// membership checks are retained; no global intersection or full CAD-kernel
-/// validity certificate is implied.
+/// elliptic arcs and two-edge segments/lenses. Planar annular sectors support
+/// two concentric circular arcs joined by two radial lines, including major
+/// sectors. Other nonconvex planar curved contours, holes in multi-edge curved
+/// contours, partial azimuths, spherical pole cuts, apex loops, explicit seam
+/// fins, horn/apple/lemon tori and elliptical holes remain unsupported. Sheet
+/// orientation is propagated across shared edges. Solid export requires one
+/// material region with one closed, connected shell, consistent face-side uses
+/// and positive signed volume. Foreign geometry, tolerant fin curves, isolated
+/// face loops, compound bodies, general bodies and other curve/surface types
+/// return explicit errors. Existing finite membership checks are retained; no
+/// global intersection or full CAD-kernel validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
 /// 5.2.1.1-5.2.1.3 (line/circle/ellipse), 5.2.2.1-5.2.2.3
 /// (plane/cylinder/cone), 5.2.2.4 (sphere), 5.2.2.5 (torus), 5.2.8 (senses)

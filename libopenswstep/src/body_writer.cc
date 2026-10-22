@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include "annular_boundary.h"
 #include "conic_boundary.h"
 #include "convex_boundary.h"
 #include "cylinder_patch.h"
@@ -72,7 +73,7 @@ class BodyWriter {
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
   Result<bool> PrepareConicFace(FaceData& face);
-  Result<bool> PrepareConvexFace(FaceData& face);
+  Result<bool> PrepareCurvedPlanarFace(FaceData& face);
   Result<bool> PrepareCylinderPatchFace(FaceData& face);
   Result<ConicBoundary> ReadConicLoop(NodeId face, const FaceTrimLoop& loop);
   Result<std::vector<ConicBoundary>> ConicLoops(const FaceData& face);
@@ -333,12 +334,12 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
               "Conic face area is nonpositive or unrepresentable"));
   return Result<bool>::Ok(true);
 }
-Result<bool> BodyWriter::PrepareConvexFace(FaceData& face) {
+Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   if (face.source->loops.size() != 1 ||
       face.source->loops.front().isolated_vertex)
     return Result<bool>::Err(
         Error(face.source->face, ErrorCode::kUnsupportedFormat,
-              "Curved convex planar faces require one non-isolated loop"));
+              "Curved planar faces require one non-isolated loop"));
   std::set<uint32_t> vertices;
   std::vector<PlanarCurve> curves;
   for (const auto& fin : face.source->loops.front().fins) {
@@ -356,6 +357,29 @@ Result<bool> BodyWriter::PrepareConvexFace(FaceData& face) {
     curves.push_back({&basis.value()->payload, fin.start, fin.end});
     uses_[fin.use.edge.value].push_back(
         {faces_.size(), fin.use.sense == TopologySense::kForward});
+  }
+  bool reverse_circle = false;
+  for (const auto& curve : curves) {
+    const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
+    if (!circle) continue;
+    const auto& a = circle->normal;
+    const auto& b = face.plane->normal;
+    const auto alignment = a.x * b.x + a.y * b.y + a.z * b.z;
+    reverse_circle = reverse_circle || (curve.end - curve.start) * alignment *
+                                               (face.natural_sense ? 1 : -1) <
+                                           0;
+  }
+  if (curves.size() == 4 && reverse_circle) {
+    const auto boundary =
+        ValidateAnnularSector(curves, *face.plane, face.natural_sense,
+                              options_.tolerance, polygon_checks_remaining_);
+    if (!boundary.ok())
+      return Result<bool>::Err(Error(face.source->face, boundary.error().code,
+                                     boundary.error().message.c_str()));
+    face.planar_area = boundary.value().area;
+    face.reference_point = boundary.value().reference_point;
+    face.outer_loop = 0;
+    return Result<bool>::Ok(true);
   }
   const auto boundary =
       ValidateConvexPlanarLoop(curves, *face.plane, face.natural_sense,
@@ -459,7 +483,7 @@ Result<bool> BodyWriter::PrepareFaces() {
                  !std::holds_alternative<LineGeometry>(basis.value()->payload);
       }
       if (curved) {
-        const auto boundary = PrepareConvexFace(face);
+        const auto boundary = PrepareCurvedPlanarFace(face);
         if (!boundary.ok()) return boundary;
         faces_.push_back(std::move(face));
         continue;

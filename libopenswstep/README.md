@@ -16,6 +16,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
+| Planar annular sectors with two concentric circular arcs and two radial lines | Exact single-loop `ADVANCED_FACE`, including nonconvex major sectors and analytic source-curve area |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
@@ -71,6 +72,21 @@ clearance use the same checks as the polygon-outer subset. The outward-wound
 source circle determines the outer loop regardless of list order; the original
 curves, vertices and loops remain unchanged. Net area is the outer disk area
 minus all polygon and circular hole areas.
+
+Planar annular sectors support one four-edge loop alternating between two
+concentric `CIRCLE` arcs and two radial `LINE` edges. The outer arc winds with
+the effective face normal and the inner arc against it; both select the same
+azimuth span, strictly shorter than one turn. Circle support planes, center
+agreement, resolved radial width, radial edge direction and separation of the
+two radial boundaries are checked analytically. Straight edges must leave the
+inner circle outward. Area is integrated over the original lines and arcs,
+including negative inner-arc contributions; no polygonal replacement is made.
+Small and major sectors, inward sheets and parameter-seam crossings are
+supported. Together with partial cylinders this also permits closed annular
+sector solids. Each sector consumes five shared checks. Nonconcentric or
+nonradial variants and additional hole loops remain unsupported. Existing
+convex profiles, including nonconcentric stadium arcs, retain their separate
+validation and corner budget.
 
 The mixed line/conic-arc subset supports one convex outer contour with at
 least two edges and distinct non-null source vertices. It checks nonnegative
@@ -191,7 +207,7 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS, nonconvex curved face boundaries, holes in multi-edge curved contours,
+NURBS, other nonconvex planar curved boundaries, holes in multi-edge curved contours,
 elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder trims and partial conical bands, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
 non-planar surfaces, tolerant fin-specific curves/pcurves, isolated face loops,
@@ -256,7 +272,7 @@ same budget. Mixed polygon/circle boundaries also consume one check per
 circle-to-segment distance and per containment edge. Circular outer boundaries
 consume one radial containment check per polygon vertex. Each cylindrical/
 conical/spherical/toroidal cut pair consumes one check, as does each spherical
-cap selection. Each partial cylinder patch consumes five checks. Parser, model and body-binding
+cap selection. Each partial cylinder patch and planar annular sector consumes five checks. Parser, model and body-binding
 budgets remain independently configurable in `ExportOptions`. The file adapter
 checks source file size before container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
@@ -310,15 +326,14 @@ Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 46 export successfully, including sixteen face-bearing bodies
-with 133 faces; 30 successes contain only wire/point geometry. All 46 generated
-documents pass OCCT import and B-rep validity checks. The other 11 return
-unsupported-format errors. Partial-cylinder support preserves all 46 previous
-successes. One private body now advances past its cylinder patches and stops at
-an unsupported nonconvex planar arc contour; no additional complete private body
-is enabled by this subset alone. Synthetic cases independently check patch
-areas, sector volumes, major arcs, reversed orientations and parameter-seam
-crossings. Analytic flux tests also check transverse translation terms.
+extracted streams: 47 export successfully, including seventeen face-bearing bodies
+with 166 faces; 30 successes contain only wire/point geometry. All 47 generated
+documents pass OCCT import and B-rep validity checks. The other 10 return
+unsupported-format errors. Annular-sector support adds one complete body with
+33 faces and preserves all 46 previous successes. Synthetic cases independently
+check sector areas and closed ring-sector volumes, including major arcs,
+reversed orientations, translated frames and parameter-seam crossings. Existing
+convex stadium profiles also retain their original behavior and budget.
 The remaining private bodies require additional geometry features before their
 complete export can succeed. These are raw body selections, including archival
 partition snapshots, rather than automatic active-configuration conversions.

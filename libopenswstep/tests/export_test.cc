@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "../../libopenswx/tests/test_helpers.h"
+#include "../src/annular_boundary.h"
 #include "../src/cylinder_patch.h"
 #include "fixtures.h"
 
@@ -796,6 +797,103 @@ TEST(OpenSwStep, RejectsInvertedToroidalSolidsUsingAnalyticVolume) {
     const auto sheet = Export(f);
     ASSERT_TRUE(sheet.ok()) << sheet.error().message;
   }
+}
+TEST(OpenSwStep, ExportsExactAnnularSectorsAndClosedRingSectors) {
+  for (const double span :
+       {std::numbers::pi / 2, std::numbers::pi, 1.5 * std::numbers::pi})
+    for (const bool inward : {false, true}) {
+      const auto result = Export(test::AnnularSector(span, inward));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, 1);
+      EXPECT_EQ(result.value().statistics.edges, 4);
+      CheckReferences(result.value());
+    }
+  for (const auto& fixture :
+       {test::Stadium(), test::AnnularSectorSolid(),
+        test::AnnularSectorSolid(1.5 * std::numbers::pi),
+        test::PhaseShiftedAnnularSector(),
+        test::RotateAndTranslate(test::AnnularSector()),
+        test::RotateAndTranslate(test::AnnularSectorSolid())}) {
+    const auto result = Export(fixture);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+  }
+}
+TEST(OpenSwStep, BoundsAnnularChecksAndRejectsUnimplementedContours) {
+  auto options = Options();
+  options.max_polygon_checks = 5;
+  ASSERT_TRUE(Export(test::AnnularSector(), options).ok());
+  options.max_polygon_checks = 4;
+  // Two nonconcentric, positively curved stadium arcs retain convex support.
+  ASSERT_TRUE(Export(test::Stadium(), options).ok());
+  const auto limited = Export(test::AnnularSector(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  const auto offset =
+      Export(test::AnnularSector(std::numbers::pi / 2, false, 0, .2));
+  ASSERT_FALSE(offset.ok());
+  EXPECT_EQ(offset.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(offset.error().message.find("concentric"), std::string::npos);
+  const auto twisted =
+      Export(test::AnnularSector(std::numbers::pi / 2, false, .1));
+  ASSERT_FALSE(twisted.ok());
+  EXPECT_EQ(twisted.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(twisted.error().message.find("radial"), std::string::npos);
+  EXPECT_FALSE(Export(test::ConcaveArcFace()).ok());
+  EXPECT_FALSE(Export(test::AnnularSector(1.5e-7)).ok());
+  EXPECT_FALSE(
+      Export(test::AnnularSector(std::numbers::pi / 2, false, 0, 0, 3 - 1e-7))
+          .ok());
+}
+TEST(OpenSwStep, PreservesAnnularSourceSenseAndRejectsInvertedSolids) {
+  auto negative = test::AnnularSector();
+  test::Set(negative, 300, "sense", '-');
+  for (auto& node : negative.report.nodes)
+    if (node.index == 700) node.fields[1].values = {0., 0., -1.};
+  ASSERT_TRUE(Export(negative).ok());
+  auto inverted = test::AnnularSectorSolid();
+  for (uint32_t i = 0; i < 6; ++i) {
+    test::Set(inverted, 300 + i, "shell", 4);
+    test::Set(inverted, 300 + i, "front_shell", 5);
+  }
+  test::Set(inverted, 4, "face", 300);
+  test::Set(inverted, 4, "front_face", 0);
+  test::Set(inverted, 5, "face", 0);
+  test::Set(inverted, 5, "front_face", 300);
+  const auto result = Export(inverted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_NE(result.error().message.find("signed volume"), std::string::npos);
+}
+TEST(OpenSwStep, IntegratesAnnularSourceCurveAreasInTranslatedFrames) {
+  for (const double span : {std::numbers::pi / 2, 1.5 * std::numbers::pi})
+    for (const Vector3 shift : {Vector3{}, Vector3{1e6, -2e6, 3e6}}) {
+      const auto c = std::cos(span), s = std::sin(span);
+      const std::array<GeometryPayload, 4> geometry{
+          CircleGeometry{shift, {0, 0, 1}, {1, 0, 0}, 3},
+          LineGeometry{{shift.x + 3 * c, shift.y + 3 * s, shift.z},
+                       {-c, -s, 0}},
+          CircleGeometry{shift, {0, 0, 1}, {1, 0, 0}, 1},
+          LineGeometry{{shift.x + 1, shift.y, shift.z}, {1, 0, 0}}};
+      const std::array<internal::PlanarCurve, 4> curves{
+          {{&geometry[0], 0, span},
+           {&geometry[1], 0, 2},
+           {&geometry[2], span, 0},
+           {&geometry[3], 0, 2}}};
+      uint64_t remaining = 5;
+      const auto result = internal::ValidateAnnularSector(
+          curves, {shift, {0, 0, -1}, {1, 0, 0}}, false, 1e-7, remaining);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      // Independent sector formula: (outer_radius^2-inner_radius^2)*span/2.
+      EXPECT_NEAR(result.value().area, 4 * span, 1e-9);
+      EXPECT_EQ(remaining, 0);
+    }
+}
+TEST(OpenSwStep, ParsesAnnularSectorsThroughBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::AnnularSectorSolid());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.solids, 1);
+  EXPECT_EQ(result.value().statistics.faces, 6);
 }
 TEST(OpenSwStep, ExportsExactCylinderPatchesAndClosedSectors) {
   for (const auto& fixture :

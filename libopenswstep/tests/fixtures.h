@@ -1046,9 +1046,7 @@ inline ModelFixture CylinderPatchFixture(double span = std::acos(-1.) / 2,
     CircleBasis(f, arc.curve, arc.center, 1, arc.sense);
   return f;
 }
-inline ModelFixture PhaseShiftedCylinderPatch() {
-  auto f = CylinderPatchFixture();
-  const auto angle = 7 * std::acos(-1.) / 4;
+inline ModelFixture RotateLineProfile(ModelFixture f, double angle) {
   const auto c = std::cos(angle), s = std::sin(angle);
   for (auto& node : f.report.nodes) {
     if (node.node_type != 29 && node.node_type != 30) continue;
@@ -1061,6 +1059,9 @@ inline ModelFixture PhaseShiftedCylinderPatch() {
     }
   }
   return f;
+}
+inline ModelFixture PhaseShiftedCylinderPatch() {
+  return RotateLineProfile(CylinderPatchFixture(), 7 * std::acos(-1.) / 4);
 }
 inline ModelFixture CylinderSector() {
   auto f = Polyhedron(
@@ -1088,6 +1089,109 @@ inline ModelFixture CylinderSector() {
          Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {1}),
          Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
          ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture Stadium() {
+  auto f = Polyhedron({{-1, -1, 0}, {1, -1, 0}, {1, 1, 0}, {-1, 1, 0}},
+                      {{0, 1, 2, 3}});
+  CircleBasis(f, 4001, {1, 0, 0});
+  CircleBasis(f, 4003, {-1, 0, 0}, 1, '-');
+  return f;
+}
+inline ModelFixture AnnularSector(double span = std::acos(-1.) / 2,
+                                  bool inward = false, double inner_phase = 0,
+                                  double inner_offset = 0,
+                                  double inner_radius = 1) {
+  auto f =
+      Polyhedron({{3, 0, 0},
+                  {3 * std::cos(span), 3 * std::sin(span), 0},
+                  {inner_offset + inner_radius * std::cos(span + inner_phase),
+                   inner_radius * std::sin(span + inner_phase), 0},
+                  {inner_offset + inner_radius * std::cos(inner_phase),
+                   inner_radius * std::sin(inner_phase), 0}},
+                 {inward ? std::vector<unsigned>{3, 2, 1, 0}
+                         : std::vector<unsigned>{0, 1, 2, 3}});
+  Set(f, 300, "sense", inward ? '-' : '+');
+  for (auto& node : f.report.nodes)
+    if (node.index == 700) {
+      node.fields[0].values = {0., 0., 0.};
+      node.fields[1].values = {0., 0., 1.};
+      node.fields[2].values = {1., 0., 0.};
+    }
+  struct Arc {
+    uint32_t curve;
+    bool outer;
+  };
+  std::vector<Arc> arcs;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    if ((a == 200 && b == 201) || (a == 202 && b == 203))
+      arcs.push_back({PointerValue(f, node.index, "curve"), a == 200});
+  }
+  for (const auto& arc : arcs)
+    CircleBasis(f, arc.curve, {arc.outer ? 0 : inner_offset, 0, 0},
+                arc.outer ? 3 : inner_radius, arc.outer ? '+' : '-');
+  return f;
+}
+inline ModelFixture PhaseShiftedAnnularSector() {
+  return RotateLineProfile(AnnularSector(), 7 * std::acos(-1.) / 4);
+}
+inline ModelFixture AnnularSectorSolid(double span = std::acos(-1.) / 2) {
+  const auto c = std::cos(span), s = std::sin(span);
+  auto f = Polyhedron({{3, 0, 0},
+                       {3 * c, 3 * s, 0},
+                       {c, s, 0},
+                       {1, 0, 0},
+                       {3, 0, 2},
+                       {3 * c, 3 * s, 2},
+                       {c, s, 2},
+                       {1, 0, 2}},
+                      {{0, 3, 2, 1},
+                       {4, 5, 6, 7},
+                       {0, 1, 5, 4},
+                       {2, 3, 7, 6},
+                       {0, 4, 7, 3},
+                       {1, 2, 6, 5}},
+                      true);
+  struct Arc {
+    uint32_t curve;
+    double radius, height;
+    char sense;
+  };
+  std::vector<Arc> arcs;
+  for (const auto& node : f.report.nodes) {
+    if (node.node_type != 16) continue;
+    const auto fin = PointerValue(f, node.index, "halfedge");
+    const auto other = PointerValue(f, fin, "other");
+    const auto a = PointerValue(f, other, "vertex"),
+               b = PointerValue(f, fin, "vertex");
+    if (b == a + 1 && (a == 200 || a == 202 || a == 204 || a == 206))
+      arcs.push_back({PointerValue(f, node.index, "curve"),
+                      a % 4 == 0 ? 3. : 1., a < 204 ? 0. : 2.,
+                      a % 4 == 0 ? '+' : '-'});
+  }
+  for (const auto& arc : arcs)
+    CircleBasis(f, arc.curve, {0, 0, arc.height}, arc.radius, arc.sense);
+  for (auto& node : f.report.nodes)
+    if (node.index == 700 || node.index == 701) {
+      node.fields[0].values = {0., 0., node.index == 700 ? 0. : 2.};
+      node.fields[1].values = {0., 0., node.index == 700 ? -1. : 1.};
+      node.fields[2].values = {1., 0., 0.};
+    }
+  for (uint32_t i = 0; i < 2; ++i) {
+    RemoveNode(f, 702 + i);
+    f.Add(51, 702 + i,
+          {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+           Numbers("axis", {0, 0, 1}, FieldType::kVector),
+           Numbers("radius", {i ? 1. : 3.}),
+           Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+  }
+  Set(f, 303, "sense", '-');
   return f;
 }
 inline ModelFixture QuarterDisk() {
