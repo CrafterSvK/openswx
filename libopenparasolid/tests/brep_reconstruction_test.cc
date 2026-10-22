@@ -306,6 +306,124 @@ TEST(ParasolidFaceBinding, AutomaticallyBindsLinesAndSourceTrimmedIntervals) {
     EXPECT_EQ(result.value().loops[0].fins[1].end, 0);
   }
 }
+ModelFixture ClosedTrimFace(bool vertex_free, bool negative_basis,
+                            bool fin_curve = false) {
+  auto f = ConicFace(false, negative_basis ? '-' : '+');
+  Set(f, 10, "vertex", vertex_free ? 0 : 100);
+  Set(f, 11, "vertex", vertex_free ? 0 : 100);
+  Set(f, 10, "forward", 10);
+  Set(f, 10, "backward", 10);
+  Set(f, 11, "forward", 11);
+  Set(f, 11, "backward", 11);
+  Set(f, 11, "loop", 21);
+  Set(f, 20, "next", 21);
+  f.Add(15, 21,
+        {Pointer("face", 30, 14), Pointer("halfedge", 11, 17),
+         Pointer("next", 0, 15)});
+  const double first = -.25;
+  const double second = first + (negative_basis ? -2 : 2) * std::numbers::pi;
+  const double x = 2 + 3 * std::sin(first), y = -3 + 3 * std::cos(first);
+  f.Add(133, 402,
+        {Pointer("basis_curve", 401, 1008),
+         Numbers("point_1", {x, y, 0}, FieldType::kVector),
+         Numbers("point_2", {x, y, 0}, FieldType::kVector),
+         Numbers("parm_1", {first}), Numbers("parm_2", {second}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  if (fin_curve) {
+    Set(f, 10, "curve", 402);
+    Set(f, 11, "curve", 402);
+  } else {
+    Set(f, 2, "curve", 402);
+  }
+  return f;
+}
+TEST(ParasolidFaceBinding, SourceTrimsPreserveClosedBranchesAndFinDirection) {
+  for (bool vertex_free : {false, true}) {
+    for (bool negative_basis : {false, true}) {
+      auto f = ClosedTrimFace(vertex_free, negative_basis);
+      const auto model = ModelBuilder::Build(f.report);
+      ASSERT_TRUE(model.ok());
+      const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      ASSERT_EQ(result.value().loops.size(), 2);
+      const auto& a_fin = result.value().loops[0].fins[0];
+      const auto& b_fin = result.value().loops[1].fins[0];
+      const BoundFinGeometry fins[]{a_fin, b_fin};
+      const double span = (negative_basis ? -2 : 2) * std::numbers::pi;
+      EXPECT_DOUBLE_EQ(fins[0].start, -.25);
+      EXPECT_DOUBLE_EQ(fins[0].end, -.25 + span);
+      EXPECT_DOUBLE_EQ(fins[1].start, fins[0].end);
+      EXPECT_DOUBLE_EQ(fins[1].end, fins[0].start);
+      const auto a = EvaluateBoundFin(model.value(), fins[0], .25, 1e-12);
+      const auto b = EvaluateBoundFin(model.value(), fins[1], .75, 1e-12);
+      ASSERT_TRUE(a.ok());
+      ASSERT_TRUE(b.ok());
+      EXPECT_NEAR(a.value().curve.position.x, b.value().curve.position.x,
+                  1e-12);
+      EXPECT_NEAR(a.value().curve.first_derivative.x,
+                  -b.value().curve.first_derivative.x, 1e-12);
+    }
+  }
+}
+TEST(ParasolidFaceBinding, SourceTrimsRejectBadPointsAndUnorientedFinBranches) {
+  for (int bad = 0; bad < 5; ++bad) {
+    auto f = ClosedTrimFace(bad == 1 || bad == 4, false, bad == 3 || bad == 4);
+    if (bad == 0 || bad == 1) {
+      for (auto& n : f.report.nodes)
+        if (n.index == 402) n.fields[2].values = {0., 0., 0.};
+    }
+    if (bad == 2) Set(f, 401, "sense", '-');
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+    ASSERT_FALSE(result.ok()) << bad;
+    EXPECT_EQ(result.error().code, bad >= 3 ? ErrorCode::kUnsupportedFormat
+                                            : ErrorCode::kInvalidRecord)
+        << bad;
+  }
+}
+TEST(ParasolidFaceBinding, FinTrimsRetainUnambiguousEndpointCorrespondence) {
+  auto f = Face();
+  f.Add(133, 402,
+        {Pointer("basis_curve", 400, 1008),
+         Numbers("point_1", {0, 0, 0}, FieldType::kVector),
+         Numbers("point_2", {1, 0, 0}, FieldType::kVector),
+         Numbers("parm_1", {0}), Numbers("parm_2", {1}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 10, "curve", 402);
+  Set(f, 11, "curve", 402);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  const auto& fins = result.value().loops[0].fins;
+  EXPECT_EQ(fins[0].start, 0);
+  EXPECT_EQ(fins[0].end, 1);
+  EXPECT_EQ(fins[1].start, 1);
+  EXPECT_EQ(fins[1].end, 0);
+}
+TEST(ParasolidFaceBinding, VertexFreeTrimMustCloseWithinCallerTolerance) {
+  auto f = Face();
+  Set(f, 10, "forward", 10);
+  Set(f, 10, "backward", 10);
+  Set(f, 11, "loop", 0);
+  Set(f, 11, "forward", 0);
+  Set(f, 11, "backward", 0);
+  Set(f, 10, "vertex", 0);
+  Set(f, 11, "vertex", 0);
+  f.Add(133, 402,
+        {Pointer("basis_curve", 400, 1008),
+         Numbers("point_1", {0, 0, 0}, FieldType::kVector),
+         Numbers("point_2", {1, 0, 0}, FieldType::kVector),
+         Numbers("parm_1", {0}), Numbers("parm_2", {1}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 2, "curve", 402);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+}
 TEST(ParasolidFaceBinding,
      RejectsMissingDuplicateWrongDirectionAndSurfaceIntervals) {
   const auto f = Face();

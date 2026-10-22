@@ -40,9 +40,17 @@ Geometry/construction lists and external or omitted states remain outside it.
 loop hierarchy to exact curve IDs and directed parameter intervals, without
 tessellation. Supply one `FinParameterInterval` per non-isolated fin, including
 explicit unwrapped periodic branches. The automatic overload omits `intervals`
-and resolves lines and source trim intervals whose endpoint correspondence is
-unambiguous within tolerance. Accurate circle/ellipse edges use curve and fin
-senses (XT section 5.2.8) to select the directed arc across periodic seams.
+and resolves lines and accurate edge trim intervals. Edge trims retain their
+transmitted parameters ordered by fin sense, including closed/vertex-free
+edges and decreasing basis parameters (XT section 5.2.1.6). Vertex-free edge
+trims must close within the caller's tolerance. Automatic trim binding checks
+both stored trim points against curve evaluations, then uses the usual vertex
+and surface checks. Fin trims still require unambiguous vertex correspondence;
+closed/vertex-free fin trims need explicit intervals because their edge/curve
+orientation is not established here. No source interval is replaced by an
+inferred shortest or full-period arc. Accurate circle/ellipse edges use curve
+and fin senses (XT section 5.2.8) to select the directed arc across periodic
+seams.
 Closed edges with the same endpoint vertex, and vertex-free edges, use one
 full turn; the latter start at parameter zero. Distinct vertices with coincident
 angular parameters, conics stored on fins, unknown senses and other curve types
@@ -66,13 +74,23 @@ Synthetic regressions cover missing owner lists and incidence, both face
 sides, source loops, directed/reversed intervals, UV curves, mismatched
 surfaces, oriented conic arcs and closed/vertex-free periodic edges. All 163
 bodies in the existing 130-stream selection pass the integrated topology
-validation. At tolerance 1e-7, automatic binding succeeds for 4,505 of 4,540
-selected faces whose curves are lines, conics or trims of those curves and whose
+validation. Before source-trim interval binding, automatic binding succeeded
+at tolerance 1e-7 for 4,505 of 4,540 selected faces whose curves are lines,
+conics or trims of those curves and whose
 surfaces are supported analytics. These contain 21,227 fin uses, including
-6,118 direct conic uses (1,197 closed/vertex-free). The remaining 35 faces report
-21 curves requiring explicit endpoints and 14 ambiguous/nonmatching source
+6,118 direct conic uses (1,197 closed/vertex-free). The remaining 35 faces
+reported 21 curves requiring explicit endpoints and 14 ambiguous/nonmatching source
 trims. This is selected coverage, not evidence that all procedural surfaces
-or arbitrary parameter branches are supported. Private inputs and comparison tools stay outside the repo.
+or arbitrary parameter branches are supported. Private inputs and comparison
+tools stay outside the repo.
+
+The source-trim extension has a separate before/after comparison using 39
+freshly extracted streams from 20 private SolidWorks files at tolerance 1e-7:
+all 542 selected analytic faces bind, versus 541 previously. The previously
+unsupported face uses a vertex-free edge trim. All previous successes are
+preserved. Synthetic tests cover both fin directions and basis senses, closed
+trim branches, invalid stored points, open vertex-free trims and ambiguous
+fin trims. This comparison is independent of the earlier 130-stream selection.
 
 ## Analytic offset surfaces
 

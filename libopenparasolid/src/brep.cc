@@ -173,6 +173,48 @@ Result<FinParameterInterval> ConicInterval(const Model& model,
   return Result<FinParameterInterval>::Ok(
       {use.fin, start.value(), start.value() + span});
 }
+Result<FinParameterInterval> TrimInterval(const Model& model, NodeId curve_id,
+                                          const TrimmedCurveGeometry& trim,
+                                          const FinUse& use, double tolerance) {
+  const auto first = EvaluateCurve(model, curve_id, trim.parameter_1);
+  const auto second = EvaluateCurve(model, curve_id, trim.parameter_2);
+  if (!first.ok()) return Result<FinParameterInterval>::Err(first.error());
+  if (!second.ok()) return Result<FinParameterInterval>::Err(second.error());
+  if (Distance(first.value().position, trim.point_1) > tolerance ||
+      Distance(second.value().position, trim.point_2) > tolerance)
+    return Result<FinParameterInterval>::Err(
+        Error("Stored trim points disagree with curve parameters"));
+  bool forward = use.sense == TopologySense::kForward;
+  if (use.fin_curve.value) {
+    // A tolerant fin's curve has no documented edge/curve orientation here.
+    // Retain endpoint correspondence and reject ambiguous closed branches.
+    if (!use.start_vertex.value || !use.end_vertex.value)
+      return Result<FinParameterInterval>::Err(
+          Error("Fin trim requires explicit endpoints or interval", 0,
+                ErrorCode::kUnsupportedFormat));
+    const auto start = Point(model, use.start_vertex);
+    const auto end = Point(model, use.end_vertex);
+    if (!start.ok()) return Result<FinParameterInterval>::Err(start.error());
+    if (!end.ok()) return Result<FinParameterInterval>::Err(end.error());
+    forward = Distance(first.value().position, start.value()) <= tolerance &&
+              Distance(second.value().position, end.value()) <= tolerance;
+    const bool backward =
+        Distance(second.value().position, start.value()) <= tolerance &&
+        Distance(first.value().position, end.value()) <= tolerance;
+    if (forward == backward)
+      return Result<FinParameterInterval>::Err(Error(
+          "Ambiguous or nonmatching fin trim endpoints", 0,
+          forward ? ErrorCode::kUnsupportedFormat : ErrorCode::kInvalidRecord));
+  } else if (!use.start_vertex.value && !use.end_vertex.value &&
+             Distance(first.value().position, second.value().position) >
+                 tolerance) {
+    return Result<FinParameterInterval>::Err(
+        Error("Vertex-free edge trim is not closed within tolerance"));
+  }
+  return Result<FinParameterInterval>::Ok(
+      {use.fin, forward ? trim.parameter_1 : trim.parameter_2,
+       forward ? trim.parameter_2 : trim.parameter_1});
+}
 }  // namespace
 Result<ValidatedBodyTopology> ValidateBodyTopology(
     const Model& model, NodeId body, const BodyValidationOptions& options) {
@@ -532,6 +574,13 @@ Result<FaceTrimming> BindFaceTrimming(const Model& model, NodeId face,
         intervals.push_back(interval.value());
         continue;
       }
+      if (const auto* trim =
+              std::get_if<TrimmedCurveGeometry>(&curve->payload)) {
+        auto interval = TrimInterval(model, curve_id, *trim, use, tolerance);
+        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
+        intervals.push_back(interval.value());
+        continue;
+      }
       if (!use.start_vertex.value || !use.end_vertex.value)
         return Result<FaceTrimming>::Err(
             Error("Curve interval needs explicit endpoints", 0,
@@ -560,25 +609,6 @@ Result<FaceTrimming> BindFaceTrimming(const Model& model, NodeId face,
         };
         interval.start = parameter(start.value());
         interval.end = parameter(end.value());
-      } else if (const auto* trim =
-                     std::get_if<TrimmedCurveGeometry>(&curve->payload)) {
-        const auto first = EvaluateCurve(model, curve_id, trim->parameter_1);
-        const auto second = EvaluateCurve(model, curve_id, trim->parameter_2);
-        if (!first.ok()) return Result<FaceTrimming>::Err(first.error());
-        if (!second.ok()) return Result<FaceTrimming>::Err(second.error());
-        const bool forward =
-            Distance(first.value().position, start.value()) <= tolerance &&
-            Distance(second.value().position, end.value()) <= tolerance;
-        const bool backward =
-            Distance(second.value().position, start.value()) <= tolerance &&
-            Distance(first.value().position, end.value()) <= tolerance;
-        if (forward == backward)
-          return Result<FaceTrimming>::Err(
-              Error("Ambiguous or nonmatching trim endpoints", 0,
-                    forward ? ErrorCode::kUnsupportedFormat
-                            : ErrorCode::kInvalidRecord));
-        interval.start = forward ? trim->parameter_1 : trim->parameter_2;
-        interval.end = forward ? trim->parameter_2 : trim->parameter_1;
       } else
         return Result<FaceTrimming>::Err(
             Error("Curve type needs explicit directed interval", 0,
