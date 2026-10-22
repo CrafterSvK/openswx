@@ -16,7 +16,7 @@ endif()
 set(OPENSWSTEP_GENERATED_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_include)
 configure_file(include/openswstep/version.h.in
   ${OPENSWSTEP_GENERATED_INCLUDE_DIR}/openswstep/version.h @ONLY)
-add_library(openswstep STATIC src/export.cc src/step_writer.cc src/planar_boundary.cc src/body_writer.cc src/source.cc)
+add_library(openswstep STATIC src/export.cc src/step_writer.cc src/planar_boundary.cc src/conic_boundary.cc src/body_writer.cc src/source.cc)
 target_compile_features(openswstep PUBLIC cxx_std_20)
 target_include_directories(openswstep PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

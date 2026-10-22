@@ -59,8 +59,9 @@ An MIT-licensed C++20 static library that writes STEP AP214 files using
 `libopenswx` extraction and `libopenparasolid` decoding, topology and geometry
 binding. The supported subset covers analytic wire bodies, point-only
 acorns, planar polygon sheets with holes and closed planar solids with through
-holes. Source units, payload
-selection and body identity are explicit. Unsupported geometry returns a typed
+holes. Planar sheets also support exact circle/ellipse disks and circular faces
+with round holes. Source units, payload selection and body identity are
+explicit. Unsupported geometry returns a typed
 error; it is never silently omitted or tessellated. See the
 [API, supported scope and validation](libopenswstep/README.md).
 

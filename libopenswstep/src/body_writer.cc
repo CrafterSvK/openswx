@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "conic_boundary.h"
 #include "planar_boundary.h"
 #include "step_writer.h"
 
@@ -54,6 +55,7 @@ class BodyWriter {
                   double first, double last);
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
+  Result<bool> PrepareConicFace(FaceData& face);
   Result<bool> CheckVertexLinks();
   Result<bool> OrientFaces();
   Result<bool> CheckSolid();
@@ -193,6 +195,55 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
   ++statistics_.edges;
   return Result<Id>::Ok(result);
 }
+Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
+  if (solid_)
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kUnsupportedFormat,
+              "Conic face export currently requires a sheet body"));
+  std::vector<ConicBoundary> loops;
+  for (const auto& loop : face.source->loops) {
+    if (loop.isolated_vertex || loop.fins.size() != 1)
+      return Result<bool>::Err(Error(
+          face.source->face, ErrorCode::kUnsupportedFormat,
+          "Conic face loops require one complete CIRCLE or ELLIPSE edge each"));
+    const auto& fin = loop.fins.front();
+    if (fin.use.fin_curve.value)
+      return Result<bool>::Err(
+          Error(fin.use.fin, ErrorCode::kUnsupportedFormat,
+                "Tolerant fin curves need an explicit STEP pcurve mapping"));
+    if (fin.use.start_vertex != fin.use.end_vertex)
+      return Result<bool>::Err(Error(
+          fin.use.fin, ErrorCode::kInvalidRecord,
+          "Complete conic loop must use one seam vertex or be vertex-free"));
+    const auto curve = Basis(fin.curve);
+    if (!curve.ok()) return Result<bool>::Err(curve.error());
+    if (const auto* circle =
+            std::get_if<CircleGeometry>(&curve.value()->payload)) {
+      loops.push_back({circle->center, circle->normal, circle->x_axis,
+                       circle->radius, circle->radius, fin.start, fin.end,
+                       true});
+    } else if (const auto* ellipse =
+                   std::get_if<EllipseGeometry>(&curve.value()->payload)) {
+      loops.push_back({ellipse->center, ellipse->normal, ellipse->x_axis,
+                       ellipse->major_radius, ellipse->minor_radius, fin.start,
+                       fin.end, false});
+    } else {
+      return Result<bool>::Err(
+          Error(fin.curve, ErrorCode::kUnsupportedFormat,
+                "Single-edge planar loops require CIRCLE or ELLIPSE bases"));
+    }
+    uses_[fin.use.edge.value].push_back(
+        {faces_.size(), fin.use.sense == TopologySense::kForward});
+  }
+  const auto boundary =
+      ValidatePlanarConics(loops, *face.plane, face.natural_sense,
+                           options_.tolerance, polygon_checks_remaining_);
+  if (!boundary.ok())
+    return Result<bool>::Err(Error(face.source->face, boundary.error().code,
+                                   boundary.error().message.c_str()));
+  face.outer_loop = boundary.value();
+  return Result<bool>::Ok(true);
+}
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
     if (source.loops.empty())
@@ -213,6 +264,12 @@ Result<bool> BodyWriter::PrepareFaces() {
                                      "Face and surface senses must be known"));
     FaceData face{
         &source, plane, source.face_sense == surface.value()->sense, {}};
+    if (source.loops.front().fins.size() == 1) {
+      const auto conic = PrepareConicFace(face);
+      if (!conic.ok()) return conic;
+      faces_.push_back(std::move(face));
+      continue;
+    }
     for (const auto& loop : source.loops) {
       if (loop.isolated_vertex || loop.fins.size() < 3)
         return Result<bool>::Err(
@@ -267,6 +324,9 @@ Result<bool> BodyWriter::CheckVertexLinks() {
     for (const auto& loop : face.source->loops) {
       const auto& fins = loop.fins;
       for (std::size_t i = 0; i < fins.size(); ++i) {
+        // Vertex-free conic rings have no source vertex link; serialization
+        // creates their seam locally on the shared STEP edge.
+        if (!fins[i].use.start_vertex.value) continue;
         const auto incoming =
             fins[(i + fins.size() - 1) % fins.size()].use.edge.value;
         const auto outgoing = fins[i].use.edge.value;

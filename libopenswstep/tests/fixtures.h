@@ -349,24 +349,28 @@ inline ModelFixture NegativePerforatedSheet() {
     if (node.index == 700) node.fields[1].values = {0., 0., -1.};
   return f;
 }
-inline ModelFixture ObliquePerforatedSheet() {
-  auto f = PerforatedSheet(true);
+inline ModelFixture RotateAndTranslate(ModelFixture f) {
   for (auto& node : f.report.nodes) {
-    if (node.node_type != 29 && node.node_type != 30 && node.node_type != 50)
+    if (node.node_type != 29 && node.node_type != 30 && node.node_type != 31 &&
+        node.node_type != 32 && node.node_type != 50)
       continue;
     const auto& definitions =
         f.report.schemas[node.schema_index].definition.fields;
     for (std::size_t i = 0; i < definitions.size(); ++i) {
       if (definitions[i].type != FieldType::kVector) continue;
       const auto old = node.fields[i].values;
-      const bool point =
-          definitions[i].name == "position" || definitions[i].name == "origin";
+      const bool point = definitions[i].name == "position" ||
+                         definitions[i].name == "origin" ||
+                         definitions[i].name == "center";
       node.fields[i].values = {std::get<double>(old[1]) + (point ? 1e6 : 0),
                                std::get<double>(old[2]) + (point ? -2e6 : 0),
                                std::get<double>(old[0]) + (point ? 3e6 : 0)};
     }
   }
   return f;
+}
+inline ModelFixture ObliquePerforatedSheet() {
+  return RotateAndTranslate(PerforatedSheet(true));
 }
 inline ModelFixture Conic(bool ellipse = false, bool ring = false,
                           bool reverse = false) {
@@ -394,6 +398,124 @@ inline ModelFixture Conic(bool ellipse = false, bool ring = false,
     RemoveNode(f, 201);
   }
   return f;
+}
+struct ConicLoopSpec {
+  Vector3 center{0, 0, 0};
+  double major = 1;
+  double minor = 1;
+  bool ellipse = false;
+  bool reverse_curve = false;
+  bool reverse_fin = false;
+  bool reverse_normal = false;
+};
+inline ModelFixture ConicSheet(
+    const std::vector<ConicLoopSpec>& loops = {ConicLoopSpec{}},
+    bool named_seams = false) {
+  ModelFixture f;
+  f.Add(12, 1,
+        {Pointer("owner", 0, 1040), Pointer("region", 2, 19),
+         Pointer("child", 0, 12), Pointer("edge", 100, 16),
+         Pointer("vertex", named_seams ? 200 : 0, 18),
+         ByteValue("body_type", 3)});
+  f.Add(19, 2,
+        {Pointer("body", 1, 12), Pointer("previous", 0, 19),
+         Pointer("next", 0, 19), Pointer("shell", 4, 13),
+         ByteValue("type", 'V', FieldType::kCharacter)});
+  f.Add(13, 4,
+        {Pointer("region", 2, 19), Pointer("next", 0, 13),
+         Pointer("face", 300, 14), Pointer("front_face", 300, 14),
+         Pointer("edge", 0, 16), Pointer("vertex", 0, 18)});
+  f.Add(14, 300,
+        {Pointer("loop", 600, 15), Pointer("surface", 700, 1006),
+         Pointer("shell", 4, 13), Pointer("front_shell", 4, 13),
+         Pointer("previous", 0, 14), Pointer("next", 0, 14),
+         Pointer("previous_front", 0, 14), Pointer("next_front", 0, 14),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  f.Add(50, 700,
+        {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+         Numbers("normal", {0, 0, 1}, FieldType::kVector),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  for (uint32_t i = 0; i < loops.size(); ++i) {
+    const auto& spec = loops[i];
+    const uint32_t positive = 1000 + 2 * i, negative = positive + 1;
+    const uint32_t used = spec.reverse_fin ? negative : positive;
+    f.Add(15, 600 + i,
+          {Pointer("face", 300, 14), Pointer("halfedge", used, 17),
+           Pointer("next", i + 1 < loops.size() ? 601 + i : 0, 15)});
+    f.Add(
+        16, 100 + i,
+        {Pointer("owner", 1, 1029), Pointer("previous", i ? 99 + i : 0, 16),
+         Pointer("next", i + 1 < loops.size() ? 101 + i : 0, 16),
+         Pointer("halfedge", positive, 17), Pointer("curve", 4000 + i, 1008)});
+    for (const uint32_t id : {positive, negative}) {
+      const bool in_loop = id == used;
+      f.Add(
+          17, id,
+          {Pointer("edge", 100 + i, 16),
+           Pointer("vertex", named_seams ? 200 + i : 0, 18),
+           Pointer("other", id == positive ? negative : positive, 17),
+           Pointer("loop", in_loop ? 600 + i : 0, 15),
+           Pointer("forward", in_loop ? id : 0, 17),
+           Pointer("backward", in_loop ? id : 0, 17), Pointer("curve", 0, 1008),
+           Pointer("next_at_vx", named_seams && id == positive ? negative : 0,
+                   17),
+           ByteValue("sense", id == positive ? '+' : '-',
+                     FieldType::kCharacter)});
+    }
+    if (named_seams) {
+      f.Add(18, 200 + i,
+            {Pointer("owner", 1, 1029), Pointer("halfedge", positive, 17),
+             Pointer("previous", i ? 199 + i : 0, 18),
+             Pointer("next", i + 1 < loops.size() ? 201 + i : 0, 18),
+             Pointer("point", 500 + i, 29)});
+      f.Add(29, 500 + i,
+            {Numbers("position",
+                     {spec.center.x + spec.major, spec.center.y, spec.center.z},
+                     FieldType::kVector)});
+    }
+    const auto normal = spec.reverse_normal ? -1. : 1.;
+    if (spec.ellipse)
+      f.Add(32, 4000 + i,
+            {Numbers("center", {spec.center.x, spec.center.y, spec.center.z},
+                     FieldType::kVector),
+             Numbers("normal", {0, 0, normal}, FieldType::kVector),
+             Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+             Numbers("major_radius", {spec.major}),
+             Numbers("minor_radius", {spec.minor}),
+             ByteValue("sense", spec.reverse_curve ? '-' : '+',
+                       FieldType::kCharacter)});
+    else
+      f.Add(31, 4000 + i,
+            {Numbers("center", {spec.center.x, spec.center.y, spec.center.z},
+                     FieldType::kVector),
+             Numbers("normal", {0, 0, normal}, FieldType::kVector),
+             Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+             Numbers("radius", {spec.major}),
+             ByteValue("sense", spec.reverse_curve ? '-' : '+',
+                       FieldType::kCharacter)});
+  }
+  return f;
+}
+inline ModelFixture CircularAnnulus(bool hole_first = false,
+                                    bool named_seams = false) {
+  ConicLoopSpec outer;
+  outer.major = 3;
+  ConicLoopSpec inner;
+  inner.reverse_curve = true;
+  return ConicSheet(
+      hole_first ? std::vector{inner, outer} : std::vector{outer, inner},
+      named_seams);
+}
+inline ModelFixture CircularHoles() {
+  ConicLoopSpec outer;
+  outer.major = 4;
+  ConicLoopSpec inner;
+  inner.center = {-2, 0, 0};
+  inner.reverse_curve = true;
+  auto second = inner;
+  second.center = {2, 0, 0};
+  return ConicSheet({inner, second, outer});
 }
 inline ModelFixture Acorn() {
   auto f = Polyhedron({{0, 0, 0}, {1, 0, 0}}, {});

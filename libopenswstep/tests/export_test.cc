@@ -381,6 +381,138 @@ TEST(OpenSwStep, ParsesHoleLoopsThroughTheBinaryExportEntryPoint) {
   EXPECT_EQ(result.value().statistics.faces, 10);
   CheckReferences(result.value());
 }
+TEST(OpenSwStep, ExportsExactConicDisksWithSyntheticOrSourceSeams) {
+  for (const bool ellipse : {false, true}) {
+    for (const bool named_seam : {false, true}) {
+      test::ConicLoopSpec loop;
+      loop.ellipse = ellipse;
+      loop.major = ellipse ? 2 : 1;
+      const auto result = Export(test::ConicSheet({loop}, named_seam));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.vertices, 1);
+      EXPECT_EQ(result.value().statistics.edges, 1);
+      EXPECT_EQ(result.value().statistics.faces, 1);
+      EXPECT_NE(result.value().text.find(ellipse ? "=ELLIPSE(" : "=CIRCLE("),
+                std::string::npos);
+      CheckReferences(result.value());
+    }
+  }
+}
+TEST(OpenSwStep, PreservesCircularHolesAndSourceLoopOrder) {
+  for (const bool hole_first : {false, true}) {
+    for (const bool named_seams : {false, true}) {
+      const auto result =
+          Export(test::CircularAnnulus(hole_first, named_seams));
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.vertices, 2);
+      EXPECT_EQ(result.value().statistics.edges, 2);
+      EXPECT_EQ(result.value().statistics.faces, 1);
+      const auto& text = result.value().text;
+      EXPECT_EQ(text.find("=FACE_BOUND(") < text.find("=FACE_OUTER_BOUND("),
+                hole_first);
+      CheckReferences(result.value());
+    }
+  }
+  const auto result = Export(test::CircularHoles());
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.edges, 3);
+  CheckReferences(result.value());
+}
+TEST(OpenSwStep, ChecksConicLoopDirectionAgainstTheFaceNormal) {
+  for (const bool reverse_curve : {false, true})
+    for (const bool reverse_fin : {false, true})
+      for (const bool reverse_normal : {false, true}) {
+        test::ConicLoopSpec loop;
+        loop.reverse_curve = reverse_curve;
+        loop.reverse_fin = reverse_fin;
+        loop.reverse_normal = reverse_normal;
+        const auto result = Export(test::ConicSheet({loop}));
+        const bool positive = (reverse_curve == reverse_fin) != reverse_normal;
+        EXPECT_EQ(result.ok(), positive);
+        if (!result.ok())
+          EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+      }
+  auto negative = test::ConicSheet();
+  test::Set(negative, 300, "sense", '-');
+  test::Set(negative, 700, "sense", '-');
+  const auto result = Export(negative);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+}
+TEST(OpenSwStep, RejectsInvalidCircularHolesAndUnimplementedEllipseHoles) {
+  test::ConicLoopSpec outer;
+  outer.major = 3;
+  test::ConicLoopSpec inner;
+  inner.reverse_curve = true;
+  for (const double x : {2., 2.5, 4., 2. - 1e-9}) {
+    inner.center.x = x;
+    const auto result = Export(test::ConicSheet({outer, inner}));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+    EXPECT_NE(result.error().offset, 0);
+  }
+  inner.center = {0, 0, 0};
+  for (const double x : {0., 0.5, 2.}) {
+    auto second = inner;
+    second.center.x = x;
+    const auto result = Export(test::ConicSheet({outer, inner, second}));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  }
+  inner.ellipse = true;
+  const auto ellipse = Export(test::ConicSheet({outer, inner}));
+  ASSERT_FALSE(ellipse.ok());
+  EXPECT_EQ(ellipse.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, BoundsCircularHoleComparisonsAcrossAllLoops) {
+  auto options = Options();
+  options.max_polygon_checks = 3;
+  const auto exact = Export(test::CircularHoles(), options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  options.max_polygon_checks = 2;
+  const auto limited = Export(test::CircularHoles(), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, RejectsPartialMultipleTurnAndNonplanarConicFaces) {
+  for (const double span : {std::numbers::pi, 4 * std::numbers::pi}) {
+    auto options = Options();
+    options.fin_intervals = {{NodeId{1000}, 0, span}};
+    const auto result = Export(test::ConicSheet(), options);
+    EXPECT_FALSE(result.ok());
+  }
+  test::ConicLoopSpec offset;
+  offset.center.z = 1e-5;
+  EXPECT_FALSE(Export(test::ConicSheet({offset})).ok());
+  test::ConicLoopSpec small;
+  small.major = 1e-8;
+  EXPECT_FALSE(Export(test::ConicSheet({small})).ok());
+}
+TEST(OpenSwStep, ChecksTheWholeConicAgainstItsPlaneBeyondBindingSamples) {
+  auto tilted = test::ConicSheet();
+  constexpr double angle = 1e-6;
+  for (auto& node : tilted.report.nodes)
+    if (node.index == 4000)
+      node.fields[1].values = {0., std::sin(angle), std::cos(angle)};
+  // The three binding samples at 0, pi and 2*pi lie on the X axis in the
+  // plane. The extrema between them exceed the plane tolerance.
+  const auto result = Export(tilted);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(result.error().message.find("Complete conic boundary"),
+            std::string::npos);
+  const auto oblique = Export(test::RotateAndTranslate(test::CircularHoles()));
+  ASSERT_TRUE(oblique.ok()) << oblique.error().message;
+  EXPECT_EQ(oblique.value().statistics.edges, 3);
+}
+TEST(OpenSwStep, ParsesCircularFaceLoopsThroughTheBinaryEntryPoint) {
+  const auto fixture = test::Serialize(test::CircularHoles());
+  const auto result =
+      ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_EQ(result.value().statistics.faces, 1);
+  EXPECT_EQ(result.value().statistics.edges, 3);
+  CheckReferences(result.value());
+}
 class StepFileTest : public testing::Test {
  protected:
   std::filesystem::path root;

@@ -42,8 +42,8 @@ struct ExportOptions {
   uint64_t max_entities = 1000000;
   /// Cap on the complete owned Part 21 output, including its header.
   uint64_t max_output_bytes = 128u * 1024u * 1024u;
-  /// Aggregate cap on intra/inter-loop segment comparisons and containment
-  /// edge tests across the selected body.
+  /// Aggregate cap on polygon segment comparisons/containment edge tests and
+  /// circular containment/hole-pair comparisons across the selected body.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -79,15 +79,18 @@ struct StepDocument {
 /// tessellation. Supports LINE/CIRCLE/ELLIPSE wire bodies, point-only acorns,
 /// and planar polygon faces with LINE edges, one outer loop and disjoint,
 /// nonnested hole loops. Source loop order does not determine the outer loop.
-/// Sheet orientation is
-/// propagated across shared edges. Solid export requires one material region
+/// Sheets also support one-edge full CIRCLE/ELLIPSE disks and circular faces
+/// with disjoint circular holes. Mixed line/conic loops, elliptical holes and
+/// conic faces in solids remain unsupported. Sheet orientation is propagated
+/// across shared edges. Solid export requires one material region
 /// with one closed, connected shell, consistent face-side uses and positive
 /// signed volume. Foreign geometry, tolerant fin curves, isolated face
 /// loops, compound bodies, general bodies and other curve/surface types return
 /// explicit errors. Existing finite membership checks are retained; no global
 /// intersection or full CAD-kernel validity certificate is implied.
-/// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10, 5.2.8
-/// and 5.3.4.1.
+/// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),
+/// 5.2.1.2-5.2.1.3 (circle/ellipse), 5.2.2.1 (plane), 5.2.8 (senses) and
+/// 5.3.4.1 (geometry attachment).
 /// @param model Borrowed model with stream-local node identities.
 /// @param body Explicit BODY identity in this model.
 /// @param options Units, tolerances and bounded work/storage settings.

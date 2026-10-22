@@ -18,6 +18,15 @@ from OCP.TopTools import TopTools_IndexedMapOfShape
 
 # Counts are unique topology instances. Volumes/areas/lengths use millimetres.
 CASES = {
+    "disk": (1, 1, 1, 0, "area", math.pi),
+    "disk-seam": (1, 1, 1, 0, "area", math.pi),
+    "ellipse-disk": (1, 1, 1, 0, "area", 2 * math.pi),
+    "circular-annulus": (2, 2, 1, 0, "area", 8 * math.pi),
+    "circular-annulus-hole-first": (2, 2, 1, 0, "area", 8 * math.pi),
+    "circular-holes": (3, 3, 1, 0, "area", 14 * math.pi),
+    "oblique-circular-holes": (3, 3, 1, 0, "area", 14 * math.pi),
+    "disk-reversed": (1, 1, 1, 0, "area", math.pi),
+    "disk-negative-normal": (1, 1, 1, 0, "area", math.pi),
     "tetra": (4, 6, 4, 1, "volume", 1 / 6),
     "cube": (8, 12, 6, 1, "volume", 1),
     "perforated-sheet": (8, 8, 1, 0, "area", 12),

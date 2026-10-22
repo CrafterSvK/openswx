@@ -15,6 +15,8 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, including holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
+| Single-edge full CIRCLE/ELLIPSE planar sheet disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
+| Circular sheet faces with disjoint circular holes | Exact circular outer/inner bounds, including annuli and nonconcentric holes |
 | Sheet bodies | `SHELL_BASED_SURFACE_MODEL` with one open/closed shell per shared-edge-connected component |
 | Solid bodies with one material region and one connected closed planar shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
@@ -42,11 +44,20 @@ come first. Crossings, touching or tolerance-ambiguous edges, nested holes and
 disconnected islands are rejected. Through holes in closed planar solids retain
 their interior walls and subtract from enclosed volume.
 
+Conic sheet loops must each contain one complete circle or ellipse edge. The
+exporter checks the maximum plane residual over the entire analytic curve, not
+just the binding samples, and validates winding against the effective face
+normal. Circular outer/inner loops may appear in any source order. Every hole
+must lie inside the outer circle, and holes must be mutually disjoint; each
+separation must exceed two source tolerances. Ellipses currently support a
+single disk boundary only.
+
 These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS, curved face boundaries, non-planar surfaces, tolerant fin-specific
+NURBS, mixed line/conic face boundaries, multi-edge conic loops, elliptical
+holes, conic faces in solids, non-planar surfaces, tolerant fin-specific
 curves/pcurves, isolated face loops, compounds/assemblies, general
 mixed-dimensional bodies, multiple material regions and solid void shells are
 not supported. Unsupported selected geometry fails the entire
@@ -100,8 +111,9 @@ do not enable unsupported output geometry or bypass validation.
 Positive entity, output byte and polygon comparison budgets bound serialization
 and polygon checks. The shared polygon budget counts nonadjacent segments within
 each loop, all segment pairs between loops, and containment edge tests across
-the entire selected body. Parser, model and body-binding budgets remain independently
-configurable in `ExportOptions`. The file adapter checks source file size before
+the entire selected body. Circular containment and hole-pair comparisons consume
+one check each from the same budget. Parser, model and body-binding budgets
+remain independently configurable in `ExportOptions`. The file adapter checks source file size before
 container inspection; libopenswx's per-stream decompression/extraction bounds
 also apply. Any extraction issue is reported as an error.
 
@@ -152,13 +164,14 @@ export library. Synthetic files live in a temporary directory and are removed.
 Private CAD files and generated private exports must stay outside the repository.
 
 The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 35 export successfully, including five face-bearing bodies
-with 44 faces; 30 successes contain only wire/point geometry. All 35 generated
-documents pass OCCT import and B-rep validity checks. The other 22 return
-unsupported-format errors. Polygon-hole support preserves all 35 previous
-successes; the remaining private samples still require other geometry features.
-These are raw body selections, including archival
-partition snapshots, rather than automatic active-configuration conversions.
+extracted streams: 39 export successfully, including nine face-bearing bodies
+with 48 faces; 30 successes contain only wire/point geometry. All 39 generated
+documents pass OCCT import and B-rep validity checks. The other 18 return
+unsupported-format errors. Conic-sheet support adds four successful exports
+and preserves all 35 previous successes; the remaining private samples still
+require other geometry features. These are raw body selections, including
+archival partition snapshots, rather than automatic active-configuration
+conversions.
 
 Run `doxygen Doxyfile` from this directory to generate public API HTML at
 `../build/openswstep-docs/html/index.html`; documentation warnings fail generation.
