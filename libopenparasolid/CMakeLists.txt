@@ -20,7 +20,7 @@ file(MAKE_DIRECTORY "${OPENPARASOLID_GENERATED_INCLUDE_DIR}/openparasolid")
 configure_file(include/openparasolid/version.h.in
   "${OPENPARASOLID_GENERATED_INCLUDE_DIR}/openparasolid/version.h" @ONLY)
 
-add_library(openparasolid STATIC src/header.cc src/inspector.cc src/types.cc src/schema.cc src/delta_packets.cc src/delta_apply.cc src/base_catalog.cc src/geometry_catalog.cc src/spline_catalog.cc src/procedural_catalog.cc src/model.cc src/topology.cc src/brep.cc src/body_binding.cc src/offset_evaluate.cc src/evaluate.cc src/model_evaluate.cc src/nurbs_evaluate.cc src/surface_evaluate.cc src/spun_evaluate.cc src/spun_invert.cc src/swept_evaluate.cc src/normal_evaluate.cc src/chart_parameterize.cc src/surface_invert.cc src/nurbs_invert.cc src/intersection_chart.cc src/intersection_evaluate.cc src/intersection_model.cc src/analytic_model.cc src/spline_model.cc)
+add_library(openparasolid STATIC src/header.cc src/inspector.cc src/types.cc src/schema.cc src/delta_packets.cc src/delta_apply.cc src/base_catalog.cc src/geometry_catalog.cc src/spline_catalog.cc src/procedural_catalog.cc src/model.cc src/topology.cc src/brep.cc src/body_binding.cc src/offset_evaluate.cc src/evaluate.cc src/model_evaluate.cc src/nurbs_evaluate.cc src/surface_evaluate.cc src/spun_evaluate.cc src/spun_invert.cc src/swept_evaluate.cc src/swept_invert.cc src/normal_evaluate.cc src/chart_parameterize.cc src/surface_invert.cc src/nurbs_invert.cc src/intersection_chart.cc src/intersection_evaluate.cc src/intersection_model.cc src/analytic_model.cc src/spline_model.cc)
 target_include_directories(openparasolid
   PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

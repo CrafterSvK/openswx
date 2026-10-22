@@ -746,6 +746,29 @@ ModelFixture TwoFaceBody() {
   Set(f, 11, "next_at_vx", 10);
   return f;
 }
+TEST(ParasolidBodyFaceBinding, MapsExactFinGeometryOntoAnalyticSweptFaces) {
+  auto f = Sheet(Face());
+  f.Add(67, 301,
+        {Pointer("section", 400, 1008),
+         Numbers("sweep", {0, 1, 0}, FieldType::kVector),
+         {{"scale", FieldType::kDouble}, {std::monostate{}}},
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 30, "surface", 301);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyFaces(model.value(), NodeId{1}, 0);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().faces.size(), 1);
+  for (const auto& fin : result.value().faces[0].loops[0].fins) {
+    for (double fraction : {0., .25, .5, .75, 1.}) {
+      const auto sample = EvaluateBoundFin(model.value(), fin, fraction, 0);
+      ASSERT_TRUE(sample.ok()) << sample.error().message;
+      EXPECT_DOUBLE_EQ(sample.value().uv.u, sample.value().curve.position.x);
+      EXPECT_EQ(sample.value().uv.v, 0);
+      EXPECT_EQ(sample.value().uv.residual, 0);
+    }
+  }
+}
 TEST(ParasolidBodyFaceBinding, BindsUniqueFacesAndPreservesBothSourceSides) {
   const auto result = [] {
     const auto f = TwoFaceBody();

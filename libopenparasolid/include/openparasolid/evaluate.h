@@ -136,6 +136,12 @@ struct SurfaceParameterSeed {
 /// at most 128 evaluations shared by the preferred and analytic starts, with
 /// 24 updates and eight damping trials per update. Exhaustion returns
 /// kResourceLimit. Other spun profiles remain unsupported.
+/// SWEPT_SURF with a line, circle or ellipse section uses direct inversion
+/// of the stored basis. Lines require independent section/sweep directions;
+/// conics require a sweep transverse to the section plane. Conic u uses atan2's
+/// principal branch, and v is signed source sweep displacement. At most two
+/// model surface evaluations validate (0,0) and the recovered point, with no
+/// implicit tolerance. Other swept profiles remain unsupported.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const Model& model, NodeId surface, Vector3 point, double tolerance);
 
@@ -143,7 +149,8 @@ struct SurfaceParameterSeed {
 /// circular spun inversion. Spun seeds are clamped to stored profile bounds. Both
 /// coordinates must be finite and, for NURBS, inside the defined knot domain.
 /// Other deterministic starts are tried if local iteration fails. Analytic
-/// surfaces validate the finite seed and use their direct inversion formulas.
+/// surfaces and analytic sweeps validate the finite seed and use their direct
+/// inversion formulas.
 /// No closest-point, unique-root or periodic-continuation guarantee is made.
 [[nodiscard]] Result<SurfaceParameters> InvertSurface(
     const GeometryPayload& geometry, Vector3 point, double tolerance,

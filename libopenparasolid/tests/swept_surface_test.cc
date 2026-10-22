@@ -34,6 +34,168 @@ void ExpectVector(Vector3 actual, Vector3 expected, double tolerance = 1e-12) {
   EXPECT_NEAR(actual.y, expected.y, tolerance);
   EXPECT_NEAR(actual.z, expected.z, tolerance);
 }
+void Conic(ModelFixture& f, bool ellipse, double radius = 2) {
+  std::vector<ModelField> fields{
+      Numbers("center", {1, -2, 3}, FieldType::kVector),
+      Numbers("normal", {0, 0, 1}, FieldType::kVector),
+      Numbers("x_axis", {.6, .8, 0}, FieldType::kVector),
+      ByteValue("sense", '-', FieldType::kCharacter)};
+  if (ellipse) {
+    fields.push_back(Numbers("major_radius", {radius}));
+    fields.push_back(Numbers("minor_radius", {radius / 2}));
+  } else {
+    fields.push_back(Numbers("radius", {radius}));
+  }
+  f.Add(ellipse ? 32 : 31, 1, std::move(fields));
+}
+TEST(ParasolidSweptSurface, InvertsAnalyticSectionsInOriginalCoordinates) {
+  for (int kind = 0; kind < 3; ++kind) {
+    ModelFixture f;
+    Swept(f, 1, {.36, .48, .8}, true);
+    if (kind == 0)
+      Line(f, {1, -2, 3});
+    else
+      Conic(f, kind == 2);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    for (double u : {-2.9, -.5, 0., .8, 2.9}) {
+      for (double v : {-10., 0., 3.}) {
+        const auto sample = EvaluateSurface(model.value(), NodeId{20}, u, v);
+        ASSERT_TRUE(sample.ok());
+        const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                           sample.value().position, 1e-12);
+        ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+        EXPECT_NEAR(inverse.value().u, u, 1e-12);
+        EXPECT_NEAR(inverse.value().v, v, 1e-12);
+        EXPECT_LE(inverse.value().residual, 1e-12);
+      }
+    }
+  }
+}
+TEST(ParasolidSweptSurface,
+     InversionUsesAcceptedSourceFramesAndPrincipalAngles) {
+  ModelFixture f;
+  Swept(f, 1, {.36, .48, .8 * (1 + 1e-11)});
+  Conic(f, true);
+  for (auto& node : f.report.nodes) {
+    const auto& fields = f.report.schemas[node.schema_index].definition.fields;
+    for (auto& field : node.fields) {
+      const auto& name = fields[field.definition_index].name;
+      if (node.index == 1 && name == "normal")
+        field.values = {0., 0., 1 + 1e-11};
+      if (node.index == 1 && name == "x_axis")
+        field.values = {.6 * (1 + 1e-11), .8, 0.};
+    }
+  }
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto sample = EvaluateSurface(model.value(), NodeId{20}, 8, -3);
+  ASSERT_TRUE(sample.ok());
+  const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                     sample.value().position, 1e-14, {8, -3});
+  ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+  EXPECT_NEAR(inverse.value().u, std::remainder(8., 2 * std::acos(-1.)), 1e-14);
+  EXPECT_NEAR(inverse.value().v, -3, 1e-14);
+  EXPECT_LE(inverse.value().residual, 1e-14);
+}
+TEST(ParasolidSweptSurface,
+     InversionPreservesExactAndExplicitMembershipTolerance) {
+  ModelFixture f;
+  Swept(f);
+  Line(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto exact = InvertSurface(model.value(), NodeId{20}, {2, 0, -3}, 0);
+  ASSERT_TRUE(exact.ok());
+  EXPECT_EQ(exact.value().u, 2);
+  EXPECT_EQ(exact.value().v, -3);
+  EXPECT_EQ(exact.value().residual, 0);
+  const auto outside =
+      InvertSurface(model.value(), NodeId{20}, {2, 1e-4, -3}, 1e-5);
+  ASSERT_FALSE(outside.ok());
+  EXPECT_EQ(outside.error().code, ErrorCode::kInvalidRecord);
+  const auto within =
+      InvertSurface(model.value(), NodeId{20}, {2, 1e-4, -3}, 1e-3);
+  ASSERT_TRUE(within.ok());
+  EXPECT_EQ(within.value().residual, 1e-4);
+  ModelFixture conic;
+  Swept(conic);
+  Conic(conic, false);
+  const auto cylinder = ModelBuilder::Build(conic.report);
+  ASSERT_TRUE(cylinder.ok());
+  EXPECT_FALSE(
+      InvertSurface(cylinder.value(), NodeId{20}, {1, -2, 3}, 1e-6).ok());
+}
+TEST(ParasolidSweptSurface, InversionHandlesSmallAndLargeSourceUnits) {
+  for (double radius : {1e-150, 1e150}) {
+    ModelFixture f;
+    Swept(f, 1, {.36, .48, .8});
+    Conic(f, true, radius);
+    for (auto& node : f.report.nodes) {
+      if (node.index != 1) continue;
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (auto& field : node.fields)
+        if (fields[field.definition_index].name == "center")
+          field.values = {0., 0., 0.};
+    }
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto point =
+        EvaluateSurface(model.value(), NodeId{20}, .8, -.3 * radius);
+    ASSERT_TRUE(point.ok());
+    const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                       point.value().position, radius * 1e-12);
+    ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+    EXPECT_NEAR(inverse.value().u, .8, 1e-12);
+    EXPECT_NEAR(inverse.value().v / radius, -.3, 1e-12);
+    EXPECT_LE(inverse.value().residual, radius * 1e-12);
+  }
+}
+TEST(ParasolidSweptSurface,
+     InversionRejectsSingularUnsupportedAndInvalidSections) {
+  for (int bad = 0; bad < 5; ++bad) {
+    ModelFixture f;
+    Swept(f, bad == 3 ? 99 : 1, bad == 4 ? Vector3{0, 0, 2} : Vector3{1, 0, 0});
+    if (bad == 0 || bad == 3 || bad == 4) Line(f);
+    if (bad == 1) Conic(f, false);
+    if (bad == 2) f.Spline();
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto inverse =
+        InvertSurface(model.value(), NodeId{20}, {0, 0, 0}, 1e-6);
+    ASSERT_FALSE(inverse.ok());
+    EXPECT_EQ(inverse.error().code, bad == 1 || bad == 2
+                                        ? ErrorCode::kUnsupportedFormat
+                                        : ErrorCode::kInvalidRecord);
+  }
+}
+TEST(ParasolidSweptSurface, InversionRejectsNonfiniteRequestsAndParameters) {
+  ModelFixture f;
+  Swept(f);
+  Line(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const double nan = std::numeric_limits<double>::quiet_NaN();
+  for (auto result :
+       {InvertSurface(model.value(), NodeId{20}, {nan, 0, 0}, 1e-6),
+        InvertSurface(model.value(), NodeId{20}, {}, -1),
+        InvertSurface(model.value(), NodeId{20}, {}, nan),
+        InvertSurface(model.value(), NodeId{20}, {}, 1e-6, {0, nan})}) {
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
+  }
+  EXPECT_FALSE(InvertSurface(model.value(), NodeId{99}, {}, 1e-6).ok());
+  ModelFixture overflow;
+  Swept(overflow, 1, {1, 0, 1e-300});
+  Line(overflow);
+  const auto thin = ModelBuilder::Build(overflow.report);
+  ASSERT_TRUE(thin.ok());
+  const auto unrepresentable =
+      InvertSurface(thin.value(), NodeId{20}, {0, 0, 1e100}, 0);
+  ASSERT_FALSE(unrepresentable.ok());
+  EXPECT_EQ(unrepresentable.error().code, ErrorCode::kInvalidRecord);
+}
 TEST(ParasolidSweptSurface,
      ResolvesForwardSectionWithOriginalParametersAndNaturalPartials) {
   ModelFixture f;

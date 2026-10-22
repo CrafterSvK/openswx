@@ -289,6 +289,8 @@ Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
   }
   if (std::holds_alternative<SpunSurfaceGeometry>(geometry.value()->payload))
     return internal::InvertSpunSurface(model, surface, point, tolerance);
+  if (std::holds_alternative<SweptSurfaceGeometry>(geometry.value()->payload))
+    return internal::InvertSweptSurface(model, surface, point, tolerance);
   return InvertSurface(geometry.value()->payload, point, tolerance);
 }
 Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
@@ -303,6 +305,8 @@ Result<SurfaceParameters> InvertSurface(const Model& model, NodeId surface,
   }
   if (std::holds_alternative<SpunSurfaceGeometry>(geometry.value()->payload))
     return internal::InvertSpunSurface(model, surface, point, tolerance, seed);
+  if (std::holds_alternative<SweptSurfaceGeometry>(geometry.value()->payload))
+    return internal::InvertSweptSurface(model, surface, point, tolerance, seed);
   return InvertSurface(geometry.value()->payload, point, tolerance, seed);
 }
 }  // namespace openparasolid

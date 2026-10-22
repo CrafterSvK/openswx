@@ -1186,6 +1186,30 @@ samples, 120 unavailable-payload errors and 80 explicit NURBS domain errors;
 evaluated endpoints agree within `1.5e-10` in source units. Private inputs
 and comparison tools remain outside the repository.
 
+Model-based inversion also supports line, circle and ellipse sweep sections.
+It solves the actual stored section/sweep basis, preserving accepted frame
+residuals, original line parameters and signed displacement along the sweep.
+Circle and ellipse angles use the principal `atan2` branch. The sweep need not
+be perpendicular to the section plane, but it must be transverse to a conic
+plane; coplanar conic sweeps remain unsupported. Parallel line/sweep directions
+return `kInvalidRecord`. No canonical plane/cylinder replacement is made.
+
+The direct solve uses bounded stack storage and at most two model surface
+samples: validation at `(0,0)` and final membership at the recovered parameters.
+Both must be representable. Returned parameters must be finite doubles and
+the final 3D residual must meet the unchanged caller tolerance, including zero.
+Finite seeds are validated and retain the direct principal-branch formulas.
+NURBS sweep inversion, general closest-point projection and swept intersection
+supports remain unsupported. The payload-only overload still requires model
+context for sweeps.
+
+Synthetic tests cover all three sections, oblique extrusion, accepted source
+frame residuals, principal angles, radii from `1e-150` to `1e150`, exact and
+finite-tolerance membership, invalid/singular dependencies and body/fin binding
+on an extruded line. The separate 39-stream corpus contains no swept surfaces;
+it serves as regression coverage, retaining 56 of 57 successful body bindings.
+Private inputs and comparison programs remain outside the repository.
+
 ## Surface inversion
 
 `InvertSurface(geometry, point, tolerance)` and its model/ID overload recover
@@ -1226,7 +1250,7 @@ including its geometry/frame validity, domain and representability rules.
 Invalid request values return `kInvalidOptions`; nonmatching points, candidate
 parameters outside the natural domain and invalid definitions/results return
 `kInvalidRecord`. Missing or untyped model targets retain explicit lookup
-errors. Swept and unsupported spun or other geometry kinds return
+errors. Unsupported swept, spun or other geometry kinds return
 `kUnsupportedFormat`. Surface/face senses, placement and units are not applied.
 The analytic inversion uses bounded stack storage. Both paths add no CLI
 settings or dependencies and remain MIT and STL-only.
