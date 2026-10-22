@@ -19,6 +19,9 @@ settings, with command-line precedence. Integrated body incidence validation,
 face parameter binding and explicit-plan delta application are described below. Automatic delta-history resolution and
 full geometric BRep certification remain separate work.
 
+For remaining format, state reconstruction, geometry and export work, see
+[open issues and coverage boundaries](OPEN_ISSUES.md).
+
 ## Public API documentation
 
 Public headers contain Doxygen contracts for parameters, ownership, errors,

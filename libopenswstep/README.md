@@ -97,6 +97,9 @@ An explicitly materialized ordinary logical snapshot can be supplied through
 `ExportBody`. Assembly component placement and active configuration/payload
 selection are not inferred.
 
+The cross-library [open issues and work list](../libopenparasolid/OPEN_ISSUES.md)
+distinguishes reader coverage from the narrower STEP export subset.
+
 ## API
 
 Link the CMake target `openswstep`; both source libraries are public dependencies.
