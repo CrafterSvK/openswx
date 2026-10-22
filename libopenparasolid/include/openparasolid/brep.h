@@ -146,5 +146,46 @@ struct BodyFaceBinding {
     const Model& model, NodeId body,
     std::span<const FinParameterInterval> overrides, double tolerance,
     const BodyFaceBindingOptions& options = {});
+struct WireParameterInterval {
+  NodeId edge;
+  // Parameters run in the natural edge direction, with explicit branch/turns.
+  double start = 0;
+  double end = 0;
+};
+struct BoundWireGeometry {
+  WireEdgeUse use;
+  double start = 0;
+  double end = 0;
+  std::optional<IntersectionEvaluationOptions> intersection = std::nullopt;
+};
+struct BodyWireBindingOptions {
+  BodyValidationOptions topology;
+  std::optional<IntersectionEvaluationOptions> intersection;
+  uint64_t max_edges = 100000;
+};
+struct BodyWireBinding {
+  ValidatedBodyTopology topology;
+  // One binding per distinct shell wire edge, sorted by edge ID.
+  std::vector<BoundWireGeometry> wires;
+};
+// Validates complete body topology and binds shell wire edges atomically.
+// Requires exactly one finite nonzero directed interval per selected wire edge.
+// Duplicate, missing and foreign edge IDs are invalid options. Curve sense
+// must be known and agree with edge direction; source trims define that sense
+// through their ordered parameters. Endpoints must match vertex points within
+// the explicit nonnegative tolerance. Vertex-free rings must close within it.
+// Endpoints and midpoint must evaluate, including their oriented tangents.
+// These finite checks do not certify whole-curve validity or unique branches.
+// Faces/acorns are retained as topology, without binding their geometry.
+// Solver settings are validated even for empty wire sets and owned by bindings.
+[[nodiscard]] Result<BodyWireBinding> BindBodyWires(
+    const Model& model, NodeId body,
+    std::span<const WireParameterInterval> intervals, double tolerance,
+    const BodyWireBindingOptions& options = {});
+// Fraction is in [0,1]; tangent is dP/d(fraction), including interval reversal.
+// Uses the owned solver settings. Inherits curve domain/resource checks;
+// does not revalidate topology, endpoints or closure after binding.
+[[nodiscard]] Result<CurveEvaluation> EvaluateBoundWire(
+    const Model& model, const BoundWireGeometry& wire, double fraction);
 }  // namespace openparasolid
 #endif  // OPENPARASOLID_BREP_H_

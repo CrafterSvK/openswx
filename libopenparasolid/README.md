@@ -155,8 +155,8 @@ options.intersection = IntersectionEvaluationOptions{1e-7, 1e-9};
 auto body_faces = BindBodyFaces(model, body, intervals, 1e-7, options);
 ```
 
-Wire edges and acorns are retained as validated topology, without binding
-their geometry. A body without faces can therefore succeed with an empty
+This face-binding API retains wire edges and acorns as validated topology,
+without binding their geometry. `BindBodyWires` binds wire geometry separately. A body without faces can therefore succeed with an empty
 `faces` vector. This API does not certify manifoldness, inside/outside,
 positive volume or curve membership at every parameter.
 
@@ -168,6 +168,62 @@ explicit endpoints/intervals, and one needs unsupported surface inversion.
 Synthetic tests cover shared front/back uses, multi-face aggregate budgets,
 isolated loops, explicit intervals, stored intersection settings, topology
 failure, late geometry failure and bodies without faces.
+
+## Binding body wire geometry
+
+`BindBodyWires(model, body, intervals, tolerance, options)` validates the body's
+complete recorded topology and binds its shell wire edges. Supply one
+`WireParameterInterval{edge, start, end}` for each distinct selected wire edge,
+in natural edge direction and original curve parameter units. Parameters are
+explicit: periodic branches, turn counts and partial spline domains are not
+inferred. Face-owned edges cannot be supplied as wire intervals.
+
+`BodyWireBinding` owns the validated topology and a `wires` vector sorted by
+edge ID. Each `BoundWireGeometry` retains the source `WireEdgeUse`, directed
+parameters and optional owned intersection settings. Faces and acorns remain
+in the topology; this query does not bind their geometry or replace
+`BindBodyFaces`. A body without wire edges succeeds with an empty vector only
+when no wire intervals are supplied.
+
+```cpp
+auto bound = BindBodyWires(model, body, intervals, tolerance, options);
+if (bound.ok() && !bound.value().wires.empty()) {
+  auto sample = EvaluateBoundWire(model, bound.value().wires.front(), 0.25);
+  // Check sample.ok() before reading its position and dP/d(fraction).
+}
+```
+
+Intervals must be finite and nonzero, with known curve direction agreeing with
+the natural edge direction. Source trims obtain that direction from their
+ordered parameters and retain their evaluation domains. Binding samples the
+endpoints and midpoint, including directed tangents; endpoints with vertices
+must match their point geometry within the explicit finite nonnegative
+`tolerance`. Vertex-free ring intervals must close within that same tolerance.
+There is no implicit tolerance or closest-point projection. These finite
+checks do not certify all-parameter membership, connectedness or unique branch
+choices. `EvaluateBoundWire` accepts fractions in `[0,1]` and returns the exact
+curve evaluator's position and derivative scaled by the directed interval.
+It does not revalidate topology/endpoints after binding.
+
+`BodyWireBindingOptions` contains complete topology options, optional
+`IntersectionEvaluationOptions` and a positive aggregate `max_edges` (default
+100,000). Solver settings are validated even for empty selections. Duplicate,
+missing, foreign, null-ID or invalid intervals are invalid options; resource
+limits and unsupported dependencies retain explicit errors. Every binding is
+atomic, including late geometry failures; errors identify the body and wire
+edge when applicable. No tessellation, dependencies or CLI settings are added;
+the implementation remains MIT and STL-only.
+
+Synthetic tests cover sorted multiple wires, reversed curves, explicit full
+and multiple turns, closure tolerances, trims, vertex tolerances, invalid
+intervals/options, resource limits, topology and late geometry failures,
+owned intersection settings and tangent overflow. The separate 39-stream
+private selection contains one shell wire edge, a vertex-free circle. With an
+explicit one-turn interval, it binds and evaluates at five fractions. The
+other 56 body occurrences have empty wire selections. Face-binding results
+remain at 56 of 57 successful occurrences; wire binding does not resolve the
+remaining ambiguous fin trim. Private CAD and comparison programs remain
+outside the repository.
 
 ## Partial fin intervals
 
