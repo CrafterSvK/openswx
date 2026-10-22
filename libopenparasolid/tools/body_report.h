@@ -10,6 +10,21 @@
 #include "openparasolid/brep.h"
 
 namespace openparasolid::cli {
+inline json BodyOverridesReport(std::span<const FinParameterInterval> fins,
+                                std::span<const WireParameterInterval> wires,
+                                bool summary) {
+  json out{{"fin_count", fins.size()}, {"wire_count", wires.size()}};
+  if (summary) return out;
+  out["fins"] = json::array();
+  out["wires"] = json::array();
+  for (const auto& fin : fins)
+    out["fins"].push_back(
+        {{"fin", fin.fin.value}, {"start", fin.start}, {"end", fin.end}});
+  for (const auto& wire : wires)
+    out["wires"].push_back(
+        {{"edge", wire.edge.value}, {"start", wire.start}, {"end", wire.end}});
+  return out;
+}
 inline json SurfaceParametersJson(const SurfaceParameters& uv) {
   return {{"u", uv.u}, {"v", uv.v}, {"residual", uv.residual}};
 }

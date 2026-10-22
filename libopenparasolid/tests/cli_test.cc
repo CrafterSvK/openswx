@@ -200,6 +200,22 @@ TEST_F(ParasolidInspectCliTest,
   ASSERT_EQ(Run(arguments + " --body-geometry=99"), 2);
   EXPECT_TRUE(Report()["body_geometry"].is_null());
   EXPECT_EQ(Report()["body_geometry_error"]["body"], 99);
+  // Valid syntax does not bypass body membership checks. Requests remain
+  // inspectable when binding fails, with summary output retaining counts only.
+  const auto overrides =
+      arguments +
+      " --body-geometry=1 --fin-intervals=7:1:0 --wire-intervals=8:-2:3";
+  ASSERT_EQ(Run(overrides), 2);
+  EXPECT_TRUE(Report()["body_geometry"].is_null());
+  EXPECT_TRUE(Report().contains("body_geometry_error"));
+  const auto request = Report()["body_geometry_overrides"];
+  EXPECT_EQ(request["fins"][0], (json{{"fin", 7}, {"start", 1}, {"end", 0}}));
+  EXPECT_EQ(request["wires"][0],
+            (json{{"edge", 8}, {"start", -2}, {"end", 3}}));
+  ASSERT_EQ(Run(overrides + " --summary"), 2);
+  EXPECT_EQ(Report()["body_geometry_overrides"],
+            (json{{"fin_count", 1}, {"wire_count", 1}}));
+  EXPECT_EQ(Run(arguments + " --body-geometry=1 --fin-intervals=7:0:0"), 1);
   // An unrelated untyped curve keeps the model's diagnostic exit status,
   // while the selected empty body still binds successfully.
   bytes.resize(bytes.size() - 4);

@@ -1973,14 +1973,27 @@ limits remain active; the report includes the primary binding limits.
 | CLI option | Environment variable |
 |---|---|
 | `--body-geometry ID` | `OPENPARASOLID_BODY_GEOMETRY` |
+| `--fin-intervals ID:START:END,...` | `OPENPARASOLID_FIN_INTERVALS` |
+| `--wire-intervals ID:START:END,...` | `OPENPARASOLID_WIRE_INTERVALS` |
 | `--binding-tolerance X` | `OPENPARASOLID_BINDING_TOLERANCE` |
 | `--intersection-chart-tolerance X` | `OPENPARASOLID_INTERSECTION_CHART_TOLERANCE` |
 | `--intersection-solve-tolerance X` | `OPENPARASOLID_INTERSECTION_SOLVE_TOLERANCE` |
 
 CLI values override environment values. Binding tolerances without a body
 selection, incomplete solver pairs, nonfinite values and invalid IDs are
-option errors (exit 1). The CLI uses automatic interval inference; selected
-interval overrides are available through the C++ API.
+option errors (exit 1). Optional fin and wire interval lists replace inference
+only for the named elements, using positive source FIN and EDGE IDs respectively.
+For example, `--fin-intervals 7:1:0,8:0:1` requests two directed intervals.
+Endpoints must be finite and distinct; duplicate IDs within either list are
+rejected. Each list is limited to 100,000 entries and 16 MiB of text. Lists use
+commas and colons without whitespace. A CLI list replaces its environment value;
+an empty list clears inherited overrides. Unspecified elements retain automatic
+inference. Overrides require body selection and binding tolerance, and retain
+all curve domain, direction, endpoint, membership and closure checks.
+
+`body_geometry_overrides` records the requested counts even when binding fails.
+Full output also records `fins` with `fin`, `start`, `end`, and `wires` with
+`edge`, `start`, `end`. These are caller requests, not a validation result.
 
 Successful JSON adds `body_geometry` with the selected body ID, tolerance,
 solver settings, limits and counts. Full output also includes the region/shell
@@ -1996,7 +2009,11 @@ Existing model diagnostics also retain exit 2, even when the selected body
 binds successfully; inspect the body result separately from the global model
 findings. The 57 body queries in the 39-stream private selection reproduce all
 56 API successes and the known unsupported fin trim, including the same
-588 faces, 2,664 fin uses, one wire and 788 vertex points. Synthetic CLI tests
+588 faces, 2,664 fin uses, one wire and 788 vertex points. Providing eight
+explicit fin intervals for the remaining body additionally binds its 16 faces
+and 32 fin uses. This does not resolve automatic direction inference: interval
+directions remain caller choices, and successful sampled binding does not
+certify a unique orientation or globally valid solid. Synthetic CLI tests
 cover valid/empty and missing bodies, incomplete streams, summaries, invalid
 options, report fields and environment precedence. Private inputs and reports
 remain outside the repository.

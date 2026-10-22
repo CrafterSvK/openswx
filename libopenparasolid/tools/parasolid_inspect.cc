@@ -129,6 +129,7 @@ void Usage(std::ostream &output) {
          "[--nodes] [--geometry] [--schema-catalog FILE.json] [--max-fields N] "
          "[--max-values N] [--max-delta-entries N] "
          "[--body-geometry ID --binding-tolerance X] "
+         "[--fin-intervals ID:START:END,...] [--wire-intervals ID:START:END,...] "
          "[--intersection-chart-tolerance X --intersection-solve-tolerance X] "
          "<file.x_b|file.bin>\n"
          "Body binding requires a complete transmit/partition stream. "
@@ -197,6 +198,10 @@ int main(int argc, char *argv[]) {
       int status = parsed.value().complete ? 0 : 2;
       if (settings.geometry) {
         report["interpretation"] = "geometry_model";
+        if (settings.body_geometry)
+          report["body_geometry_overrides"] =
+              openparasolid::cli::BodyOverridesReport(
+                  settings.fin_intervals, settings.wire_intervals, summary);
         openparasolid::ModelOptions model_options;
         model_options.max_nodes = limits.max_nodes;
         model_options.max_fields = limits.max_total_fields;
@@ -238,8 +243,9 @@ int main(int argc, char *argv[]) {
                         {openparasolid::ErrorCode::kUnsupportedFormat, 0,
                          "Body binding requires a complete transmit or "
                          "partition stream"});
-              return openparasolid::BindBodyGeometry(
+              return openparasolid::BindBodyGeometryWithOverrides(
                   model.value(), openparasolid::NodeId{*settings.body_geometry},
+                  settings.fin_intervals, settings.wire_intervals,
                   *settings.binding_tolerance, binding_options);
             }();
             if (!bound.ok()) {

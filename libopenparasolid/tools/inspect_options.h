@@ -12,13 +12,71 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
-#include "openparasolid/evaluate.h"
+#include "openparasolid/brep.h"
 #include "openparasolid/parser.h"
 #include "openparasolid/schema.h"
 
 namespace openparasolid::cli {
+// Limits mirror the default binding budgets and bound text processing before
+// allocating interval output, independently of the input model's schema limits.
+template <typename Interval>
+Result<std::vector<Interval>> ParseIntervalSetting(std::string_view text) {
+  constexpr std::size_t kMaxIntervals = 100000;
+  constexpr std::size_t kMaxTextBytes = 16 * 1024 * 1024;
+  auto invalid = [](const char* message) {
+    return Result<std::vector<Interval>>::Err(
+        {ErrorCode::kInvalidOptions, 0, message});
+  };
+  if (text.size() > kMaxTextBytes)
+    return Result<std::vector<Interval>>::Err(
+        {ErrorCode::kResourceLimit, 0, "Interval setting text limit"});
+  std::vector<Interval> intervals;
+  std::unordered_set<uint32_t> seen;
+  while (!text.empty()) {
+    if (intervals.size() == kMaxIntervals)
+      return Result<std::vector<Interval>>::Err(
+          {ErrorCode::kResourceLimit, 0, "Interval setting count limit"});
+    const auto comma = text.find(',');
+    const auto entry = text.substr(0, comma);
+    const auto first = entry.find(':');
+    const auto second =
+        first == std::string_view::npos ? first : entry.find(':', first + 1);
+    if (first == std::string_view::npos || second == std::string_view::npos ||
+        entry.find(':', second + 1) != std::string_view::npos)
+      return invalid(
+          "Intervals require ID:START:END entries separated by commas");
+    uint32_t id = 0;
+    const auto identifier = entry.substr(0, first);
+    const auto parsed_id = std::from_chars(
+        identifier.data(), identifier.data() + identifier.size(), id);
+    if (identifier.empty() || parsed_id.ec != std::errc{} ||
+        parsed_id.ptr != identifier.data() + identifier.size() || !id ||
+        !seen.insert(id).second)
+      return invalid("Duplicate or invalid interval ID");
+    auto number = [](std::string_view token) -> std::optional<double> {
+      double value = 0;
+      const auto parsed =
+          std::from_chars(token.data(), token.data() + token.size(), value);
+      if (token.empty() || parsed.ec != std::errc{} ||
+          parsed.ptr != token.data() + token.size() || !std::isfinite(value))
+        return std::nullopt;
+      return value;
+    };
+    const auto start = number(entry.substr(first + 1, second - first - 1));
+    const auto end = number(entry.substr(second + 1));
+    if (!start || !end || *start == *end)
+      return invalid("Intervals require finite distinct parameters");
+    intervals.push_back({NodeId{id}, *start, *end});
+    if (comma == std::string_view::npos) break;
+    text.remove_prefix(comma + 1);
+    if (text.empty()) return invalid("Empty interval after comma");
+  }
+  return Result<std::vector<Interval>>::Ok(std::move(intervals));
+}
 enum class InspectAction { kRun, kHelp, kVersion };
 struct InspectSettings {
   InspectOptions inspect;
@@ -28,6 +86,8 @@ struct InspectSettings {
   std::optional<uint32_t> body_geometry;
   std::optional<double> binding_tolerance;
   std::optional<IntersectionEvaluationOptions> intersection;
+  std::vector<FinParameterInterval> fin_intervals;
+  std::vector<WireParameterInterval> wire_intervals;
   bool summary = false;
   bool nodes = false;
   bool geometry = false;
@@ -47,6 +107,8 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"nodes", "0"},
       {"geometry", "0"},
       {"body-geometry", ""},
+      {"fin-intervals", ""},
+      {"wire-intervals", ""},
       {"binding-tolerance", ""},
       {"intersection-chart-tolerance", ""},
       {"intersection-solve-tolerance", ""},
@@ -60,6 +122,8 @@ inline Result<InspectSettings> ParseInspectSettings(
       {"nodes", "OPENPARASOLID_NODES"},
       {"geometry", "OPENPARASOLID_GEOMETRY"},
       {"body-geometry", "OPENPARASOLID_BODY_GEOMETRY"},
+      {"fin-intervals", "OPENPARASOLID_FIN_INTERVALS"},
+      {"wire-intervals", "OPENPARASOLID_WIRE_INTERVALS"},
       {"binding-tolerance", "OPENPARASOLID_BINDING_TOLERANCE"},
       {"intersection-chart-tolerance",
        "OPENPARASOLID_INTERSECTION_CHART_TOLERANCE"},
@@ -150,10 +214,11 @@ inline Result<InspectSettings> ParseInspectSettings(
     settings.geometry = true;
     if (raw["binding-tolerance"].empty())
       return invalid("Body geometry requires --binding-tolerance");
-  } else if (!raw["binding-tolerance"].empty() ||
+  } else if (!raw["fin-intervals"].empty() || !raw["wire-intervals"].empty() ||
+             !raw["binding-tolerance"].empty() ||
              !raw["intersection-chart-tolerance"].empty() ||
              !raw["intersection-solve-tolerance"].empty()) {
-    return invalid("Binding tolerances require --body-geometry");
+    return invalid("Binding settings require --body-geometry");
   }
   auto number = [&](const char* name, bool positive) -> Result<double> {
     double value = 0;
@@ -172,6 +237,14 @@ inline Result<InspectSettings> ParseInspectSettings(
     const auto tolerance = number("binding-tolerance", false);
     if (!tolerance.ok()) return invalid(tolerance.error().message);
     settings.binding_tolerance = tolerance.value();
+    auto fins =
+        ParseIntervalSetting<FinParameterInterval>(raw["fin-intervals"]);
+    if (!fins.ok()) return Result<InspectSettings>::Err(fins.error());
+    auto wires =
+        ParseIntervalSetting<WireParameterInterval>(raw["wire-intervals"]);
+    if (!wires.ok()) return Result<InspectSettings>::Err(wires.error());
+    settings.fin_intervals = std::move(fins).value();
+    settings.wire_intervals = std::move(wires).value();
     const bool chart = !raw["intersection-chart-tolerance"].empty();
     const bool solve = !raw["intersection-solve-tolerance"].empty();
     if (chart != solve)

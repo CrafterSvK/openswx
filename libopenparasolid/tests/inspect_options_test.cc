@@ -67,10 +67,12 @@ TEST(ParasolidInspectOptions, DefaultsAndExplicitBooleanOverridesAreStable) {
   EXPECT_EQ(result.value().limits.max_values, 1000000);
   EXPECT_EQ(result.value().limits.max_total_fields, 65536);
 }
-TEST(ParasolidInspectOptions, BodyBindingEnablesModelAndRetainsExplicitTolerances) {
-  const auto result = Parse({"--body-geometry=7", "--binding-tolerance", "0",
-                             "--intersection-chart-tolerance=1e-7",
-                             "--intersection-solve-tolerance=1e-9", "part.x_b"});
+TEST(ParasolidInspectOptions,
+     BodyBindingEnablesModelAndRetainsExplicitTolerances) {
+  const auto result =
+      Parse({"--body-geometry=7", "--binding-tolerance", "0",
+             "--intersection-chart-tolerance=1e-7",
+             "--intersection-solve-tolerance=1e-9", "part.x_b"});
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_TRUE(result.value().nodes);
   EXPECT_TRUE(result.value().geometry);
@@ -115,6 +117,64 @@ TEST(ParasolidInspectOptions,
                       "--intersection-chart-tolerance=0",
                       "--intersection-solve-tolerance=0", "part.x_b"})
                    .ok());
+}
+TEST(ParasolidInspectOptions, DirectedIntervalsAndEnvironmentReplacement) {
+  auto result = Parse({"--body-geometry=1", "--binding-tolerance=0",
+                       "--fin-intervals=7:1:-2,8:0:1e-3",
+                       "--wire-intervals=7:-1:2", "part.x_b"},
+                      {{"OPENPARASOLID_FIN_INTERVALS", "invalid"}});
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  ASSERT_EQ(result.value().fin_intervals.size(), 2);
+  EXPECT_EQ(result.value().fin_intervals[0].fin.value, 7);
+  EXPECT_EQ(result.value().fin_intervals[0].start, 1);
+  EXPECT_EQ(result.value().fin_intervals[0].end, -2);
+  EXPECT_EQ(result.value().fin_intervals[1].end, 1e-3);
+  ASSERT_EQ(result.value().wire_intervals.size(), 1);
+  EXPECT_EQ(result.value().wire_intervals[0].edge.value, 7);
+  result = Parse({"--body-geometry=1", "--binding-tolerance=0",
+                  "--fin-intervals=", "part.x_b"},
+                 {{"OPENPARASOLID_FIN_INTERVALS", "7:0:1"},
+                  {"OPENPARASOLID_WIRE_INTERVALS", "9:2:1"}});
+  ASSERT_TRUE(result.ok());
+  EXPECT_TRUE(result.value().fin_intervals.empty());
+  ASSERT_EQ(result.value().wire_intervals.size(), 1);
+  EXPECT_EQ(result.value().wire_intervals[0].start, 2);
+}
+TEST(ParasolidInspectOptions, RejectsMalformedOrUnscopedIntervals) {
+  for (const char* text : {"1",       "1:0",     "1:0:1:2",
+                           "0:0:1",   "-1:0:1",  "4294967296:0:1",
+                           "1x:0:1",  "1::1",    "1:0:",
+                           "1:nan:1", "1:0:inf", "1:0:1e999",
+                           "1:0:0",   "1:0:-0",  "1:0:1,1:1:2",
+                           ",1:0:1",  "1:0:1,",  "1:0:1,,2:0:1",
+                           "1: 0:1",  "1:0:1x"}) {
+    SCOPED_TRACE(text);
+    EXPECT_FALSE(ParseIntervalSetting<FinParameterInterval>(text).ok());
+    const std::string flag = "--wire-intervals=" + std::string(text);
+    EXPECT_FALSE(
+        Parse({"--body-geometry=1", "--binding-tolerance=0", flag, "part.x_b"})
+            .ok());
+  }
+  EXPECT_FALSE(Parse({"--fin-intervals=1:0:1", "part.x_b"}).ok());
+  EXPECT_FALSE(Parse({"--wire-intervals=1:0:1", "part.x_b"}).ok());
+}
+TEST(ParasolidInspectOptions, BoundsIntervalTextAndEntryCount) {
+  std::string text(16 * 1024 * 1024 + 1, 'x');
+  auto result = ParseIntervalSetting<FinParameterInterval>(text);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
+  text.clear();
+  for (int i = 1; i <= 100000; ++i) {
+    if (i != 1) text += ',';
+    text += std::to_string(i) + ":0:1";
+  }
+  result = ParseIntervalSetting<FinParameterInterval>(text);
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().size(), 100000);
+  text += ",100001:0:1";
+  result = ParseIntervalSetting<FinParameterInterval>(text);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
 }
 }  // namespace
 }  // namespace openparasolid::cli
