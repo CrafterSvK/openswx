@@ -23,13 +23,13 @@ Result<const GeometryObject*> InvertibleSurface(const Model& model, NodeId id) {
     case 52:
     case 53:
     case 54:
+    case 67:
     case 68:
     case 124:
       break;
     case 56:
     case 59:
     case 60:
-    case 67:
     case 120:
     case 201:
       return Result<const GeometryObject*>::Err(

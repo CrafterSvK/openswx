@@ -67,6 +67,155 @@ void Sphere(ModelFixture& f) {
          Numbers("radius", {1.}),
          ByteValue("sense", '+', FieldType::kCharacter)});
 }
+void Sweep(ModelFixture& f, Vector3 direction = {0, 0, 1},
+           uint32_t section = 60) {
+  f.Add(67, 51,
+        {Pointer("section", section, 1008),
+         Numbers("sweep", {direction.x, direction.y, direction.z},
+                 FieldType::kVector),
+         {{"scale", FieldType::kDouble}, {std::monostate{}}},
+         ByteValue("sense", '+', FieldType::kCharacter)});
+}
+TEST(ParasolidIntersectionEvaluate, SweptLinesKeepBothLinearParameterUnits) {
+  for (bool along_sweep : {false, true}) {
+    ModelFixture f;
+    Definition(
+        f, {{0, 0, 0}, along_sweep ? Vector3{0, 0, 10} : Vector3{10, 0, 0}});
+    f.Add(50, 50,
+          {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+           Numbers("normal", {along_sweep ? -1. : 0., 0, along_sweep ? 0. : 1.},
+                   FieldType::kVector),
+           Numbers("x_axis", {along_sweep ? 0. : 1., along_sweep ? 1. : 0., 0},
+                   FieldType::kVector),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    Sweep(f);
+    f.Add(30, 60,
+          {Numbers("origin", {0, 0, 0}, FieldType::kVector),
+           Numbers("direction", {1, 0, 0}, FieldType::kVector),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto chart = EvaluateIntersectionChart(model.value(), NodeId{1}, 0);
+    ASSERT_TRUE(chart.ok()) << chart.error().message;
+    EXPECT_EQ(chart.value().surface_parameters.back()[1].u,
+              along_sweep ? 0 : 10);
+    EXPECT_EQ(chart.value().surface_parameters.back()[1].v,
+              along_sweep ? 10 : 0);
+    for (double fraction : {0., .2, .5, .8, 1.}) {
+      const double parameter = -2 + 30 * fraction;
+      const auto result = EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                                    parameter, {0, 1e-12});
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_NEAR(result.value().position.x, along_sweep ? 0 : 10 * fraction,
+                  1e-12);
+      EXPECT_EQ(result.value().position.y, 0);
+      EXPECT_NEAR(result.value().position.z, along_sweep ? 10 * fraction : 0,
+                  1e-12);
+      EXPECT_NEAR(result.value().first_derivative.x, along_sweep ? 0 : 1. / 3,
+                  1e-12);
+      EXPECT_NEAR(result.value().first_derivative.z, along_sweep ? 1. / 3 : 0,
+                  1e-12);
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     SweptConicsCrossSeamsWithObliqueDisplacement) {
+  for (bool ellipse : {false, true}) {
+    for (bool reverse : {false, true}) {
+      ModelFixture f;
+      const double minor = ellipse ? 1 : 2;
+      std::vector<Vector3> points;
+      for (double angle : {reverse ? 3.3 : 3., reverse ? 3. : 3.3})
+        points.push_back(
+            {.75 + 2 * std::cos(angle), minor * std::sin(angle), 1});
+      Definition(f, points);
+      f.Add(50, 50,
+            {Numbers("origin", {0, 0, 1}, FieldType::kVector),
+             Numbers("normal", {0, 0, 1}, FieldType::kVector),
+             Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+             ByteValue("sense", reverse ? '-' : '+', FieldType::kCharacter)});
+      Sweep(f, {.6, 0, .8});
+      std::vector<ModelField> section{
+          Numbers("center", {0, 0, 0}, FieldType::kVector),
+          Numbers("normal", {0, 0, 1}, FieldType::kVector),
+          Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+          ByteValue("sense", '+', FieldType::kCharacter)};
+      if (ellipse) {
+        section.push_back(Numbers("major_radius", {2}));
+        section.push_back(Numbers("minor_radius", {minor}));
+      } else
+        section.push_back(Numbers("radius", {2}));
+      f.Add(ellipse ? 32 : 31, 60, std::move(section));
+      const auto model = ModelBuilder::Build(f.report);
+      ASSERT_TRUE(model.ok());
+      const auto chart =
+          EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+      ASSERT_TRUE(chart.ok()) << chart.error().message;
+      for (const auto& uv : chart.value().surface_parameters)
+        EXPECT_NEAR(uv[1].v, 1.25, 1e-12);
+      const auto& times = chart.value().parameterization.parameters;
+      for (double fraction : {.2, .5, .8}) {
+        const double t = std::lerp(times.front(), times.back(), fraction);
+        const auto result = EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                                      t, {1e-12, 1e-12});
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        const auto& p = result.value().position;
+        EXPECT_NEAR(p.z, 1, 1e-12);
+        EXPECT_NEAR(std::pow((p.x - .75) / 2, 2) + std::pow(p.y / minor, 2), 1,
+                    1e-12);
+        EXPECT_LT(p.x, -1.);
+        const double dx = points[1].x - points[0].x;
+        const double dy = points[1].y - points[0].y;
+        const double px = std::lerp(points[0].x, points[1].x, fraction);
+        const double py = std::lerp(points[0].y, points[1].y, fraction);
+        EXPECT_NEAR(((p.x - px) * dx + (p.y - py) * dy) / std::hypot(dx, dy), 0,
+                    1e-12);
+        const double h = (times.back() - times.front()) * 1e-5;
+        const auto before = EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                                      t - h, {1e-12, 1e-12});
+        const auto after = EvaluateIntersectionCurve(model.value(), NodeId{1},
+                                                     t + h, {1e-12, 1e-12});
+        ASSERT_TRUE(before.ok());
+        ASSERT_TRUE(after.ok());
+        EXPECT_NEAR(
+            result.value().first_derivative.x,
+            (after.value().position.x - before.value().position.x) / (2 * h),
+            1e-8);
+        EXPECT_NEAR(
+            result.value().first_derivative.y,
+            (after.value().position.y - before.value().position.y) / (2 * h),
+            1e-8);
+      }
+    }
+  }
+}
+TEST(ParasolidIntersectionEvaluate,
+     SweptChartsReportUnsupportedAndInvalidSections) {
+  for (int bad = 0; bad < 4; ++bad) {
+    ModelFixture f;
+    Definition(f, {{1, 0, 0}, {0, 1, 0}});
+    Plane(f);
+    Sweep(f, bad == 3 ? Vector3{1, 0, 0} : Vector3{0, 0, 1}, bad == 0 ? 99 : bad == 1 ? 50 : 60);
+    if (bad == 2)
+      f.Add(134, 60, {ByteValue("sense", '+', FieldType::kCharacter)});
+    if (bad == 3)
+      f.Add(31, 60,
+            {Numbers("center", {0, 0, 0}, FieldType::kVector),
+             Numbers("normal", {0, 0, 1}, FieldType::kVector),
+             Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+             Numbers("radius", {1}),
+             ByteValue("sense", '+', FieldType::kCharacter)});
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto chart =
+        EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+    ASSERT_FALSE(chart.ok());
+    EXPECT_EQ(chart.error().code, bad >= 2 ? ErrorCode::kUnsupportedFormat
+                                           : ErrorCode::kInvalidRecord);
+    EXPECT_NE(chart.error().message.find("point 0, surface 1"),
+              std::string::npos);
+  }
+}
 void SpunRing(ModelFixture& f, bool meridian, bool bounded = false,
               bool reverse = false, double major_radius = 3) {
   const double first = reverse ? 3.3 : 3., last = reverse ? 3. : 3.3;

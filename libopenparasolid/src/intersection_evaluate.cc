@@ -303,11 +303,19 @@ Result<IntersectionCurveEvaluation> EvaluateIntersectionCurveWithDiagnostics(
     const auto& a = prepared.value().surface_parameters[index][side];
     const auto& b = prepared.value().surface_parameters[index + 1][side];
     const auto* spun = std::get_if<SpunSurfaceGeometry>(&surface);
+    bool periodic_section = false;
+    if (const auto* swept = std::get_if<SweptSurfaceGeometry>(&surface)) {
+      // Chart preparation has already resolved and validated the section.
+      // Only conic profile parameters are angular; sweep displacement and
+      // line parameters retain their original linear units.
+      const auto* section = model.FindNode(swept->section);
+      periodic_section = section->node_type == 31 || section->node_type == 32;
+    }
     // Bounded profile coordinates must stay in the transmitted interval.
     // Preferred chart seeds retain their source period; only an unbounded
     // circular profile may use the shortest angular interpolation.
     const bool periodic_u =
-        (node->node_type >= 51 && node->node_type <= 54) ||
+        periodic_section || (node->node_type >= 51 && node->node_type <= 54) ||
         (spun && !spun->start_parameter && !spun->end_parameter);
     uv[2 * side] = Interpolate(a.u, b.u, fraction, periodic_u);
     const auto* torus = std::get_if<TorusGeometry>(&surface);

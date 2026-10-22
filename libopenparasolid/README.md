@@ -1199,8 +1199,8 @@ samples: validation at `(0,0)` and final membership at the recovered parameters.
 Both must be representable. Returned parameters must be finite doubles and
 the final 3D residual must meet the unchanged caller tolerance, including zero.
 Finite seeds are validated and retain the direct principal-branch formulas.
-NURBS sweep inversion, general closest-point projection and swept intersection
-supports remain unsupported. The payload-only overload still requires model
+NURBS sweep inversion and general closest-point projection remain unsupported.
+The local intersection solver accepts the supported analytic-section sweeps. The payload-only overload still requires model
 context for sweeps.
 
 Synthetic tests cover all three sections, oblique extrusion, accepted source
@@ -1411,8 +1411,8 @@ comparison programs remain outside the repository.
 
 `EvaluateIntersectionChart(model, curve_id, tolerance)` prepares a directly
 referenced `INTERSECTION` chart without caller-supplied tangents. Both surface
-targets must support analytic, NURBS or circular spun ring inversion and have
-known senses. At each stored chart point it:
+targets must support analytic, NURBS, circular spun ring or analytic-section
+swept inversion and have known senses. At each stored chart point it:
 
 1. Inverts the point onto both surfaces with the caller's explicit absolute
    distance tolerance in source units. The previous recovered UV supplies the
@@ -1474,11 +1474,19 @@ explicit directed interval. These finite comparisons do not certify global
 intersection branches. Private CAD inputs and comparison programs remain
 outside the repository.
 
+Analytic-section swept intersection tests cover linear parameter spans above
+`2*pi`, circle/ellipse angular seams, oblique displacement, both directions,
+implicit conic membership, chord-plane residuals and finite-difference
+verification of the natural derivative. Unsupported and invalid section errors
+retain chart-point/surface context. The 39-stream regression corpus has no
+swept surfaces; all 32 charts and 128 chord-midpoint evaluations remain
+successful, with body binding unchanged at 56 of 57 occurrences.
+
 ## Local intersection evaluation
 
 `EvaluateIntersectionCurve(model, curve_id, parameter, options)` evaluates a
-direct `INTERSECTION` with analytic, NURBS or supported circular spun ring
-surfaces inside its reconstructed chart. It returns
+direct `INTERSECTION` with analytic, NURBS, supported circular spun ring or
+analytic-section swept surfaces inside its reconstructed chart. It returns
 a point and natural first derivative without flipping them for curve sense.
 `IntersectionEvaluationOptions` requires two explicit finite tolerances in
 source units: nonnegative `chart_tolerance` for stored-point membership and
@@ -1502,6 +1510,11 @@ The initial UV pairs interpolate recovered chart parameters, using local
 periodic branches for analytic azimuth, ring-torus meridians and spun angles.
 Bounded spun profile parameters interpolate directly, retaining source bounds;
 unbounded circular profile parameters may use the shortest angular branch.
+For sweeps, circle and ellipse profile angles use local periodic branches;
+line parameters and signed sweep displacement interpolate in their original
+linear units, even for spans greater than `2*pi`. Sweep support retains the
+inversion restrictions: independent line/sweep directions and a transverse
+sweep for conics. NURBS sections and coplanar conic sweeps remain unsupported.
 All inversion, normals and solver samples use the actual model surface, with
 no canonical-torus substitution. General spun profiles remain unsupported. NURBS
 coordinates interpolate in their original knot units without angular
