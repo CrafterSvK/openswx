@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "brep_internal.h"
 #include "evaluate_internal.h"
 #include "openparasolid/brep.h"
 
@@ -123,10 +124,11 @@ Result<CurveEvaluation> EvaluateBoundWire(const Model& model,
                                 static_cast<double>(scaled[2])};
   return Result<CurveEvaluation>::Ok(evaluated);
 }
-Result<BodyWireBinding> BindBodyWires(
+namespace {
+Result<BodyWireBinding> Bind(
     const Model& model, NodeId body,
-    std::span<const WireParameterInterval> intervals, double tolerance,
-    const BodyWireBindingOptions& options) {
+    std::optional<std::span<const WireParameterInterval>> intervals,
+    double tolerance, const BodyWireBindingOptions& options) {
   if (!std::isfinite(tolerance) || tolerance < 0 || !options.max_edges)
     return Result<BodyWireBinding>::Err(
         Error("Invalid body wire options", ErrorCode::kInvalidOptions));
@@ -134,15 +136,16 @@ Result<BodyWireBinding> BindBodyWires(
     if (auto error =
             internal::ValidateIntersectionOptions(*options.intersection))
       return Result<BodyWireBinding>::Err(*error);
-  if (intervals.size() > options.max_edges)
+  if (intervals && intervals->size() > options.max_edges)
     return Result<BodyWireBinding>::Err(
         Error("Body wire interval limit", ErrorCode::kResourceLimit));
   std::unordered_map<uint32_t, WireParameterInterval> parameters;
-  for (const auto& p : intervals)
-    if (!p.edge.value || !std::isfinite(p.start) || !std::isfinite(p.end) ||
-        p.start == p.end || !parameters.emplace(p.edge.value, p).second)
-      return Result<BodyWireBinding>::Err(Error(
-          "Duplicate or invalid wire interval", ErrorCode::kInvalidOptions));
+  if (intervals)
+    for (const auto& p : *intervals)
+      if (!p.edge.value || !std::isfinite(p.start) || !std::isfinite(p.end) ||
+          p.start == p.end || !parameters.emplace(p.edge.value, p).second)
+        return Result<BodyWireBinding>::Err(Error(
+            "Duplicate or invalid wire interval", ErrorCode::kInvalidOptions));
   auto topology = ValidateBodyTopology(model, body, options.topology);
   if (!topology.ok()) return Result<BodyWireBinding>::Err(topology.error());
   std::unordered_set<uint32_t> seen;
@@ -156,21 +159,39 @@ Result<BodyWireBinding> BindBodyWires(
               Error("Body wire binding limit", ErrorCode::kResourceLimit));
         wires.push_back(&wire);
       }
-  if (wires.size() != parameters.size())
+  if (intervals && wires.size() != parameters.size())
     return Result<BodyWireBinding>::Err(
         Error("Wire intervals must cover exactly the selected wires",
               ErrorCode::kInvalidOptions));
-  for (const auto* wire : wires)
-    if (!parameters.contains(wire->edge.value))
-      return Result<BodyWireBinding>::Err(Error(
-          "Missing or foreign wire interval", ErrorCode::kInvalidOptions));
+  if (intervals)
+    for (const auto* wire : wires)
+      if (!parameters.contains(wire->edge.value))
+        return Result<BodyWireBinding>::Err(Error(
+            "Missing or foreign wire interval", ErrorCode::kInvalidOptions));
   std::sort(wires.begin(), wires.end(),
             [](const auto* a, const auto* b) { return a->edge < b->edge; });
   std::vector<BoundWireGeometry> bindings;
   for (const auto* wire : wires) {
-    auto binding =
-        BindWire(model, *wire, parameters.find(wire->edge.value)->second,
-                 tolerance, options.intersection);
+    auto binding = [&]() -> Result<BoundWireGeometry> {
+      if (intervals)
+        return BindWire(model, *wire, parameters.find(wire->edge.value)->second,
+                        tolerance, options.intersection);
+      const auto& edges = topology.value().edges;
+      const auto edge = std::lower_bound(
+          edges.begin(), edges.end(), wire->edge,
+          [](const auto& boundary, NodeId id) { return boundary.edge < id; });
+      if (edge == edges.end() || edge->edge != wire->edge || edge->fins.empty())
+        return Result<BoundWireGeometry>::Err(
+            Error("Missing validated wire anchor"));
+      const auto interval = internal::InferFinInterval(
+          model, edge->fins.front().use, tolerance, options.intersection);
+      if (!interval.ok())
+        return Result<BoundWireGeometry>::Err(interval.error());
+      return BindWire(
+          model, *wire,
+          {wire->edge, interval.value().start, interval.value().end}, tolerance,
+          options.intersection);
+    }();
     if (!binding.ok()) {
       auto error = binding.error();
       error.message = "Body " + std::to_string(body.value) + ", wire edge " +
@@ -181,5 +202,17 @@ Result<BodyWireBinding> BindBodyWires(
   }
   return Result<BodyWireBinding>::Ok(
       {std::move(topology).value(), std::move(bindings)});
+}
+}  // namespace
+Result<BodyWireBinding> BindBodyWires(
+    const Model& model, NodeId body,
+    std::span<const WireParameterInterval> intervals, double tolerance,
+    const BodyWireBindingOptions& options) {
+  return Bind(model, body, intervals, tolerance, options);
+}
+Result<BodyWireBinding> BindBodyWires(const Model& model, NodeId body,
+                                      double tolerance,
+                                      const BodyWireBindingOptions& options) {
+  return Bind(model, body, std::nullopt, tolerance, options);
 }
 }  // namespace openparasolid

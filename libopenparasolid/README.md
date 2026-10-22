@@ -178,6 +178,23 @@ in natural edge direction and original curve parameter units. Parameters are
 explicit: periodic branches, turn counts and partial spline domains are not
 inferred. Face-owned edges cannot be supplied as wire intervals.
 
+The overload `BindBodyWires(model, body, tolerance, options)` determines
+intervals automatically using the same bounded inference as face fins. It
+resolves lines from vertex points, directed circle/ellipse arcs and one turn
+for rings, transmitted trim intervals, and complete NURBS/SP domains with
+unambiguous endpoint correspondence. With explicit intersection settings it
+also recovers intersection endpoint parameters from chart points or verified
+chord-plane solutions, retaining chart units and work limits. No partial
+spline inversion or additional turns are guessed. Unsupported or ambiguous
+wires still require the explicit overload; an explicit empty interval span
+retains the complete-coverage requirement.
+
+Both paths reuse the existing explicit wire membership checks. Inference
+runs after full topology validation and respects the same aggregate edge
+limit. Source trim points must agree with their stored parameters. Projected
+line parameters must be representable as doubles before conversion. A single
+unsupported wire fails the whole query with body/edge context.
+
 `BodyWireBinding` owns the validated topology and a `wires` vector sorted by
 edge ID. Each `BoundWireGeometry` retains the source `WireEdgeUse`, directed
 parameters and optional owned intersection settings. Faces and acorns remain
@@ -220,9 +237,13 @@ intervals/options, resource limits, topology and late geometry failures,
 owned intersection settings and tangent overflow. The separate 39-stream
 private selection contains one shell wire edge, a vertex-free circle. With an
 explicit one-turn interval, it binds and evaluates at five fractions. The
-other 56 body occurrences have empty wire selections. Face-binding results
-remain at 56 of 57 successful occurrences; wire binding does not resolve the
-remaining ambiguous fin trim. Private CAD and comparison programs remain
+other 56 body occurrences have empty wire selections. Automatic inference
+reproduces the same circular binding and five samples without caller intervals.
+Its synthetic regressions additionally cover reversed lines, directed conic
+seams, rational/nonrational and unclamped NURBS/SP domains, explicit partial
+spline fallback, trim metadata, empty selections, limits and parameter overflow.
+Face-binding results remain at 56 of 57 successful occurrences; wire binding
+does not resolve the remaining ambiguous fin trim. Private CAD and comparison programs remain
 outside the repository.
 
 ## Partial fin intervals

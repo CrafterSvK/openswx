@@ -746,6 +746,23 @@ ModelFixture TwoFaceBody() {
   Set(f, 11, "next_at_vx", 10);
   return f;
 }
+ModelFixture WireFromFace(ModelFixture f) {
+  std::erase_if(f.report.nodes,
+                [](const auto& n) { return n.index == 20 || n.index == 30; });
+  Set(f, 1, "body_type", 2);
+  Set(f, 1, "edge", 0);
+  Set(f, 2, "owner", 6);
+  Set(f, 6, "edge", 2);
+  Set(f, 6, "face", 0);
+  Set(f, 6, "front_face", 0);
+  for (uint32_t id : {10u, 11u}) {
+    Set(f, id, "loop", 0);
+    Set(f, id, "forward", 0);
+    Set(f, id, "backward", 0);
+    Set(f, id, "curve", 0);
+  }
+  return f;
+}
 ModelFixture TwoWireBody() {
   auto f = Wire();
   Set(f, 2, "next", 3);
@@ -765,11 +782,102 @@ ModelFixture TwoWireBody() {
   f.Add(29, 203, {Numbers("position", {3, 0, 0}, FieldType::kVector)});
   return f;
 }
+TEST(ParasolidAutomaticWireBinding, ConicArcsPreserveDirectedSeamBranches) {
+  for (bool ellipse : {false, true}) {
+    for (bool negative : {false, true}) {
+      auto f = Wire();
+      const double minor = ellipse ? 1 : 2;
+      for (auto& node : f.report.nodes) {
+        const double angle = node.index == 200 ? 3 : -3;
+        if (node.index == 200 || node.index == 201)
+          node.fields[0].values = {2 * std::cos(angle), minor * std::sin(angle),
+                                   0.};
+      }
+      std::vector<ModelField> fields{
+          Numbers("center", {0, 0, 0}, FieldType::kVector),
+          Numbers("normal", {0, 0, 1}, FieldType::kVector),
+          Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+          ByteValue("sense", negative ? '-' : '+', FieldType::kCharacter)};
+      if (ellipse) {
+        fields.push_back(Numbers("major_radius", {2}));
+        fields.push_back(Numbers("minor_radius", {minor}));
+      } else
+        fields.push_back(Numbers("radius", {2}));
+      f.Add(ellipse ? 32 : 31, 401, std::move(fields));
+      Set(f, 2, "curve", 401);
+      const auto model = ModelBuilder::Build(f.report);
+      ASSERT_TRUE(model.ok());
+      const auto result = BindBodyWires(model.value(), NodeId{1}, 1e-12);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      const auto& wire = result.value().wires[0];
+      EXPECT_NEAR(wire.start, 3, 1e-12);
+      EXPECT_NEAR(wire.end, negative ? -3 : 2 * std::numbers::pi - 3, 1e-12);
+    }
+  }
+}
+TEST(ParasolidAutomaticWireBinding, TrimsRequireMatchingTransmittedPoints) {
+  auto f = Wire();
+  f.Add(133, 401,
+        {Pointer("basis_curve", 400, 1008),
+         Numbers("point_1", {0, 0, 0}, FieldType::kVector),
+         Numbers("point_2", {2, 0, 0}, FieldType::kVector),
+         Numbers("parm_1", {0}), Numbers("parm_2", {1}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 2, "curve", 401);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyWires(model.value(), NodeId{1}, 0);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+  EXPECT_NE(result.error().message.find("wire edge 2"), std::string::npos);
+}
+TEST(ParasolidAutomaticWireBinding,
+     OptionsAndAggregateLimitsApplyBeforeInference) {
+  const auto f = TwoWireBody();
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  BodyWireBindingOptions options;
+  options.max_edges = 1;
+  const auto limit = BindBodyWires(model.value(), NodeId{1}, 0, options);
+  ASSERT_FALSE(limit.ok());
+  EXPECT_EQ(limit.error().code, ErrorCode::kResourceLimit);
+  const auto sheet = Sheet(Face());
+  const auto empty_model = ModelBuilder::Build(sheet.report);
+  ASSERT_TRUE(empty_model.ok());
+  EXPECT_TRUE(BindBodyWires(empty_model.value(), NodeId{1}, 0).ok());
+  options.intersection = IntersectionEvaluationOptions{};
+  const auto invalid =
+      BindBodyWires(empty_model.value(), NodeId{1}, 0, options);
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ErrorCode::kInvalidOptions);
+  EXPECT_FALSE(BindBodyWires(empty_model.value(), NodeId{1}, -1).ok());
+}
+TEST(ParasolidAutomaticWireBinding, RejectsUnrepresentableLineParameters) {
+  auto f = Wire();
+  const double largest = std::numeric_limits<double>::max();
+  for (auto& node : f.report.nodes) {
+    if (node.index == 400) node.fields[0].values = {-largest, 0., 0.};
+    if (node.index == 201) node.fields[0].values = {largest, 0., 0.};
+  }
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyWires(model.value(), NodeId{1}, 0);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+}
 TEST(ParasolidBodyWireBinding,
      BindsSortedWiresAndPreservesNaturalEdgeDirection) {
   const auto f = TwoWireBody();
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
+  const auto automatic = BindBodyWires(model.value(), NodeId{1}, 0);
+  ASSERT_TRUE(automatic.ok()) << automatic.error().message;
+  ASSERT_EQ(automatic.value().wires.size(), 2);
+  EXPECT_EQ(automatic.value().wires[0].start, 0);
+  EXPECT_EQ(automatic.value().wires[0].end, 1);
+  EXPECT_EQ(automatic.value().wires[1].start, 2);
+  EXPECT_EQ(automatic.value().wires[1].end, 3);
+  EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, {}, 0).ok());
   const WireParameterInterval intervals[]{{NodeId{3}, 2, 3}, {NodeId{2}, 0, 1}};
   const auto result = BindBodyWires(model.value(), NodeId{1}, intervals, 0);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -793,6 +901,10 @@ TEST(ParasolidBodyWireBinding, ReversedSourceCurveRetainsFractionTangents) {
     if (node.index == 400) node.fields[1].values = {-1., 0., 0.};
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
+  const auto automatic = BindBodyWires(model.value(), NodeId{1}, 0);
+  ASSERT_TRUE(automatic.ok()) << automatic.error().message;
+  ASSERT_EQ(automatic.value().wires.size(), 1);
+  EXPECT_EQ(automatic.value().wires[0].end, -1);
   const WireParameterInterval intervals[]{{NodeId{2}, 0, -1}};
   const auto result = BindBodyWires(model.value(), NodeId{1}, intervals, 0);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -819,6 +931,9 @@ TEST(ParasolidBodyWireBinding,
   Set(f, 2, "curve", 401);
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
+  const auto automatic = BindBodyWires(model.value(), NodeId{1}, 1e-12);
+  ASSERT_TRUE(automatic.ok()) << automatic.error().message;
+  EXPECT_NEAR(automatic.value().wires[0].end, 2 * std::numbers::pi, 1e-12);
   for (double turns : {1., 2.}) {
     const WireParameterInterval intervals[]{
         {NodeId{2}, 0, turns * 2 * std::numbers::pi}};
@@ -920,6 +1035,11 @@ TEST(ParasolidBodyWireBinding, RetainsOwnedIntersectionSettings) {
   EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, intervals, 1e-12).ok());
   BodyWireBindingOptions options;
   options.intersection = IntersectionEvaluationOptions{1e-12, 1e-12};
+  const auto automatic = BindBodyWires(model.value(), NodeId{1}, 1e-12, options);
+  ASSERT_TRUE(automatic.ok()) << automatic.error().message;
+  EXPECT_NEAR(automatic.value().wires[0].end, std::sqrt(2.), 1e-12);
+  EXPECT_TRUE(automatic.value().wires[0].intersection.has_value());
+
   const auto result =
       BindBodyWires(model.value(), NodeId{1}, intervals, 1e-12, options);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -944,6 +1064,8 @@ TEST(ParasolidBodyWireBinding, SourceTrimsKeepDomainsAndExplicitEndpointToleranc
     if (node.index == 201) node.fields[0].values = {1., 1e-4, 0.};
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
+  EXPECT_TRUE(BindBodyWires(model.value(), NodeId{1}, 1e-3).ok());
+  EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, 1e-5).ok());
   const WireParameterInterval intervals[]{{NodeId{2}, 0, 1}};
   const auto result = BindBodyWires(model.value(), NodeId{1}, intervals, 1e-3);
   ASSERT_TRUE(result.ok()) << result.error().message;
@@ -1325,6 +1447,37 @@ ModelFixture SplineFace(bool on_surface, bool rational = false,
     Set(f, 2, "curve", 410);
   }
   return f;
+}
+TEST(ParasolidAutomaticWireBinding,
+     SplinesAndSurfaceCurvesKeepCompleteKnotDomains) {
+  for (bool on_surface : {false, true}) {
+    for (bool rational : {false, true}) {
+      for (bool unclamped : {false, true}) {
+        auto f = WireFromFace(SplineFace(on_surface, rational, unclamped));
+        if (on_surface) Set(f, 2, "curve", 500);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto result = BindBodyWires(model.value(), NodeId{1}, 1e-12);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().wires[0].start, -2);
+        EXPECT_EQ(result.value().wires[0].end, 3);
+      }
+    }
+  }
+}
+TEST(ParasolidAutomaticWireBinding,
+     PartialSplineDomainsStillRequireExplicitIntervals) {
+  auto f = WireFromFace(SplineFace(false));
+  for (auto& node : f.report.nodes)
+    if (node.index == 201) node.fields[0].values = {.5, 0., 0.};
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto result = BindBodyWires(model.value(), NodeId{1}, 1e-12);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(result.error().message.find("wire edge 2"), std::string::npos);
+  const WireParameterInterval intervals[]{{NodeId{2}, -2, .5}};
+  EXPECT_TRUE(BindBodyWires(model.value(), NodeId{1}, intervals, 1e-12).ok());
 }
 TEST(ParasolidSplineFinIntervals,
      BindsCompleteDomainsWithRationalAndUnclampedAxes) {

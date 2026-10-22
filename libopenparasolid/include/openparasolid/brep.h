@@ -182,6 +182,14 @@ struct BodyWireBinding {
     const Model& model, NodeId body,
     std::span<const WireParameterInterval> intervals, double tolerance,
     const BodyWireBindingOptions& options = {});
+// Automatic intervals share face-fin inference: lines from vertices, directed
+// circle/ellipse arcs (one turn for rings), transmitted trims, complete spline
+// domains with unambiguous endpoints, and intersections with explicit solver
+// settings. Partial/ambiguous domains and extra turns need the explicit API.
+// Keeps the same full topology, resource, direction and membership checks.
+[[nodiscard]] Result<BodyWireBinding> BindBodyWires(
+    const Model& model, NodeId body, double tolerance,
+    const BodyWireBindingOptions& options = {});
 // Fraction is in [0,1]; tangent is dP/d(fraction), including interval reversal.
 // Uses the owned solver settings. Inherits curve domain/resource checks;
 // does not revalidate topology, endpoints or closure after binding.

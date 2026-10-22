@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <utility>
 
+#include "brep_internal.h"
 #include "evaluate_internal.h"
 namespace openparasolid {
 namespace {
@@ -413,6 +414,69 @@ Result<FinParameterInterval> TrimInterval(
        forward ? trim.parameter_2 : trim.parameter_1});
 }
 }  // namespace
+namespace internal {
+Result<FinParameterInterval> InferFinInterval(
+    const Model& model, const FinUse& use, double tolerance,
+    const std::optional<IntersectionEvaluationOptions>& intersection) {
+  const NodeId curve_id = use.fin_curve.value ? use.fin_curve : use.edge_curve;
+  const auto* curve = Geometry(model, curve_id);
+  if (!curve)
+    return Result<FinParameterInterval>::Err(
+        Error("Curve interval needs explicit branch/endpoints", 0,
+              ErrorCode::kUnsupportedFormat));
+  if (std::holds_alternative<NurbsCurveGeometry>(curve->payload) ||
+      std::holds_alternative<SurfaceCurveGeometry>(curve->payload))
+    return SplineInterval(model, *curve, use, tolerance);
+  if (std::holds_alternative<IntersectionCurveGeometry>(curve->payload))
+    return ChartInterval(model, *curve, use, tolerance, intersection);
+  if (std::holds_alternative<CircleGeometry>(curve->payload) ||
+      std::holds_alternative<EllipseGeometry>(curve->payload))
+    return ConicInterval(model, *curve, use);
+  if (const auto* trim = std::get_if<TrimmedCurveGeometry>(&curve->payload))
+    return TrimInterval(model, curve_id, *trim, use, tolerance, intersection);
+  if (!use.start_vertex.value || !use.end_vertex.value)
+    return Result<FinParameterInterval>::Err(
+        Error("Curve interval needs explicit endpoints", 0,
+              ErrorCode::kUnsupportedFormat));
+  const auto start = Point(model, use.start_vertex),
+             end = Point(model, use.end_vertex);
+  if (!start.ok()) return Result<FinParameterInterval>::Err(start.error());
+  if (!end.ok()) return Result<FinParameterInterval>::Err(end.error());
+  FinParameterInterval interval{use.fin, 0, 0};
+  if (const auto* line = std::get_if<LineGeometry>(&curve->payload)) {
+    const long double denominator =
+        static_cast<long double>(line->direction.x) * line->direction.x +
+        static_cast<long double>(line->direction.y) * line->direction.y +
+        static_cast<long double>(line->direction.z) * line->direction.z;
+    if (!(denominator > 0) || !std::isfinite(denominator))
+      return Result<FinParameterInterval>::Err(Error("Invalid line direction"));
+    auto parameter = [&](Vector3 point) {
+      const long double value =
+          ((static_cast<long double>(point.x) - line->origin.x) *
+               line->direction.x +
+           (static_cast<long double>(point.y) - line->origin.y) *
+               line->direction.y +
+           (static_cast<long double>(point.z) - line->origin.z) *
+               line->direction.z) /
+          denominator;
+      if (!std::isfinite(value) ||
+          std::abs(value) > std::numeric_limits<double>::max())
+        return std::numeric_limits<double>::quiet_NaN();
+      return static_cast<double>(value);
+    };
+    interval.start = parameter(start.value());
+    interval.end = parameter(end.value());
+  } else
+    return Result<FinParameterInterval>::Err(
+        Error("Curve type needs explicit directed interval", 0,
+              ErrorCode::kUnsupportedFormat));
+  if (!std::isfinite(interval.start) || !std::isfinite(interval.end) ||
+      interval.start == interval.end)
+    return Result<FinParameterInterval>::Err(
+        Error("Unresolvable curve interval", 0, ErrorCode::kUnsupportedFormat));
+  return Result<FinParameterInterval>::Ok(interval);
+}
+}  // namespace internal
 Result<ValidatedBodyTopology> ValidateBodyTopology(
     const Model& model, NodeId body, const BodyValidationOptions& options) {
   const auto& b = options.traversal.body;
@@ -794,79 +858,10 @@ Result<FaceTrimming> BindFaceTrimmingWithOverrides(
         supplied.erase(specified);
         continue;
       }
-      const NodeId curve_id =
-          use.fin_curve.value ? use.fin_curve : use.edge_curve;
-      const auto* curve = Geometry(model, curve_id);
-      if (!curve)
-        return Result<FaceTrimming>::Err(
-            Error("Curve interval needs explicit branch/endpoints", 0,
-                  ErrorCode::kUnsupportedFormat));
-      if (std::holds_alternative<NurbsCurveGeometry>(curve->payload) ||
-          std::holds_alternative<SurfaceCurveGeometry>(curve->payload)) {
-        auto interval = SplineInterval(model, *curve, use, tolerance);
-        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
-        intervals.push_back(interval.value());
-        continue;
-      }
-      if (std::holds_alternative<IntersectionCurveGeometry>(curve->payload)) {
-        auto interval =
-            ChartInterval(model, *curve, use, tolerance, intersection);
-        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
-        intervals.push_back(interval.value());
-        continue;
-      }
-      if (std::holds_alternative<CircleGeometry>(curve->payload) ||
-          std::holds_alternative<EllipseGeometry>(curve->payload)) {
-        auto interval = ConicInterval(model, *curve, use);
-        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
-        intervals.push_back(interval.value());
-        continue;
-      }
-      if (const auto* trim =
-              std::get_if<TrimmedCurveGeometry>(&curve->payload)) {
-        auto interval =
-            TrimInterval(model, curve_id, *trim, use, tolerance, intersection);
-        if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
-        intervals.push_back(interval.value());
-        continue;
-      }
-      if (!use.start_vertex.value || !use.end_vertex.value)
-        return Result<FaceTrimming>::Err(
-            Error("Curve interval needs explicit endpoints", 0,
-                  ErrorCode::kUnsupportedFormat));
-      const auto start = Point(model, use.start_vertex),
-                 end = Point(model, use.end_vertex);
-      if (!start.ok()) return Result<FaceTrimming>::Err(start.error());
-      if (!end.ok()) return Result<FaceTrimming>::Err(end.error());
-      FinParameterInterval interval{use.fin, 0, 0};
-      if (const auto* line = std::get_if<LineGeometry>(&curve->payload)) {
-        const long double denominator =
-            static_cast<long double>(line->direction.x) * line->direction.x +
-            static_cast<long double>(line->direction.y) * line->direction.y +
-            static_cast<long double>(line->direction.z) * line->direction.z;
-        if (!(denominator > 0) || !std::isfinite(denominator))
-          return Result<FaceTrimming>::Err(Error("Invalid line direction"));
-        auto parameter = [&](Vector3 point) {
-          return static_cast<double>(
-              ((static_cast<long double>(point.x) - line->origin.x) *
-                   line->direction.x +
-               (static_cast<long double>(point.y) - line->origin.y) *
-                   line->direction.y +
-               (static_cast<long double>(point.z) - line->origin.z) *
-                   line->direction.z) /
-              denominator);
-        };
-        interval.start = parameter(start.value());
-        interval.end = parameter(end.value());
-      } else
-        return Result<FaceTrimming>::Err(
-            Error("Curve type needs explicit directed interval", 0,
-                  ErrorCode::kUnsupportedFormat));
-      if (!std::isfinite(interval.start) || !std::isfinite(interval.end) ||
-          interval.start == interval.end)
-        return Result<FaceTrimming>::Err(Error("Unresolvable curve interval", 0,
-                                               ErrorCode::kUnsupportedFormat));
-      intervals.push_back(interval);
+      const auto interval =
+          internal::InferFinInterval(model, use, tolerance, intersection);
+      if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
+      intervals.push_back(interval.value());
     }
   return BindFaceTrimming(model, face, intervals, tolerance, options,
                           intersection);
