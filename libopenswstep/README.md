@@ -12,7 +12,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Source geometry | STEP representation |
 | --- | --- |
 | LINE, CIRCLE and ELLIPSE wire edges, including supported source trim wrappers | `EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION`, with shared `VERTEX_POINT` and `EDGE_CURVE` instances |
-| Clamped open polynomial/rational B_CURVE wire edges, including certified partial intervals | Exact `B_SPLINE_CURVE_WITH_KNOTS` and, for positive homogeneous weights, `RATIONAL_B_SPLINE_CURVE` |
+| Open polynomial/rational B_CURVE wire edges, including unclamped source axes and certified partial intervals | Exact `B_SPLINE_CURVE_WITH_KNOTS` and, for positive homogeneous weights, `RATIONAL_B_SPLINE_CURVE` |
 | Vertex-free full circle/ellipse wire rings | One exact conic with a synthetic seam vertex shared by both edge ends |
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
@@ -50,7 +50,7 @@ body. Conic intervals longer than one turn are rejected because a single
 Open B-spline wire edges support complete or partial natural domains, in either
 direction, including nested source trim wrappers, explicit caller intervals and
 nonuniform knots. Complete-domain curves retain degree, distinct knots,
-multiplicities and control order unchanged.
+multiplicities and control order unchanged when their source axis is clamped.
 Rational controls contain weighted coordinates: each pole is divided by its
 positive weight, and the weights are serialized separately in the STEP complex
 entity. Polynomial controls are written directly. Three spatial coordinates are
@@ -69,18 +69,28 @@ Distinct selected edges on one basis receive their own restricted curves.
 The reader's trim-sense checks still apply: a descending outer trim on a
 positively sensed inner trim is contradictory and remains rejected.
 
-Both end knots must be clamped with degree-plus-one multiplicity, and the spline
-must be open and nonperiodic. Every interior Cartesian control point must lie
+Unclamped open source axes use the same restriction, including complete natural
+domains. For the expanded source knot vector `U`, degree `p` and control count
+`N`, that domain is `[U[p], U[N]]`; it is not the span between the smallest and
+largest transmitted knots. Knot insertion followed by cropping removes the
+inactive exterior data and clamps the selected endpoints. Nonuniform and
+asymmetric exterior layouts retain their active source polynomial pieces and
+parameter values. Exterior knots never authorize extrapolation beyond the
+natural domain. Axes already having endpoint multiplicity `p` can lose their
+inactive end knots without inserting or changing controls.
+
+The resulting end knots are clamped with degree-plus-one multiplicity; the source
+spline must be open and nonperiodic. Every retained interior Cartesian control point must lie
 strictly between the two supporting planes normal to the endpoint chord, with
 clearance for source tolerance and coordinate roundoff. The positive-weight
 convex hull property then excludes either endpoint everywhere inside the curve,
 so the STEP edge limits retain the complete selected source interval. This
 conservative certificate can reject valid curves; it does not certify global
 wire simplicity. Every retained interior control consumes one shared comparison
-check. Partial restriction additionally charges one check per original control
+check. Restriction of partial or unclamped domains additionally charges one check per original control
 for the source copy and per output control at each knot insertion. Temporary
 control storage retains the reader evaluator's one-million-scalar limit.
-Closed or periodic splines, unclamped source axes and B-spline face boundaries remain
+Closed or periodic splines and B-spline face boundaries remain
 unsupported. No fitting, resampling or tessellation replaces the source curve.
 
 Body binding validates recorded incidence, directed intervals, finite curve
@@ -488,7 +498,7 @@ each loop, all segment pairs between loops, and containment edge tests across
 the entire selected body. Convex line/arc contours consume one check per corner.
 Circular containment and hole-pair comparisons consume one check each from the
 same budget. Each open B-spline wire interior control point consumes one
-endpoint separation check. Partial spline restriction also charges the original
+endpoint separation check. Partial or unclamped spline restriction also charges the original
 control count and every insertion's new control count. Convex curved-hole envelopes consume one check per edge plus
 one per convex corner; both original and envelope-augmented mixed-boundary
 validation passes share this budget. Convex curved contours with circular holes consume one additional
@@ -540,7 +550,8 @@ hole envelopes, invalid
 topology, budget boundaries and preserved source diagnostics.
 
 An optional independent Open CASCADE round-trip test can be enabled with a
-Python interpreter providing the `OCP` bindings:
+Python interpreter providing the `OCP` 7.x bindings (`cadquery-ocp<8`). The
+test harness uses the 7.x topology-container API; OCP 8 is not yet supported:
 
 ```sh
 cmake -S . -B build \
@@ -580,6 +591,13 @@ existing knots, reversed and nested trims, and two independent sections sharing
 one source basis. Imported points are compared against the original uncut
 source's Cox basis, including both selected endpoints and values around retained
 knots. Polynomial and rational arc lengths keep the same analytic tolerance.
+
+Sixteen unclamped-source round trips additionally verify nonuniform exterior
+knots, inactive endpoint knots, rational/nonplanar controls, full natural domains
+and partial intervals in both directions. Independent source Cox-basis checks
+use the left polynomial at the natural end, even when source knots continue
+beyond it. Unit tests cover degrees one through three, reflected/asymmetric
+exterior axes, work-budget boundaries and rejected extrapolation.
 
 The private regression queries 57 explicitly selected bodies in 39
 extracted streams: 53 export successfully, including twenty-three face-bearing

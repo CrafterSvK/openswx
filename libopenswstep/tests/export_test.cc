@@ -285,6 +285,127 @@ TEST(OpenSwStep, BoundsSplineKnotInsertionBeforePublishingSections) {
   ASSERT_FALSE(result.ok());
   EXPECT_EQ(result.error().code, ErrorCode::kResourceLimit);
 }
+TEST(OpenSwStep, ExportsUnclampedSplineNaturalDomainsAndPartialIntervals) {
+  for (bool rational : {false, true})
+    for (bool reverse : {false, true})
+      for (bool partial : {false, true})
+        for (bool inactive : {false, true}) {
+          const auto fixture =
+              test::UnclampedSplineWire(rational, reverse, partial, inactive);
+          const auto result = Export(fixture);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          EXPECT_EQ(result.value().statistics.edges, 1);
+          EXPECT_EQ(result.value().statistics.vertices, 2);
+          CheckReferences(result.value());
+          const auto source = test::Serialize(fixture);
+          const auto binary = ExportParasolid(source.bytes, NodeId{1},
+                                              Options(), &source.catalog);
+          ASSERT_TRUE(binary.ok()) << binary.error().message;
+          EXPECT_EQ(binary.value().text, result.value().text);
+        }
+}
+TEST(OpenSwStep, ClampsUnclampedSplineDomainsWithoutChangingTheirCurves) {
+  for (uint32_t degree : {1u, 2u, 3u})
+    for (bool rational : {false, true})
+      for (unsigned layout : {0u, 1u, 2u}) {
+        NurbsCurveGeometry curve;
+        curve.axis.degree = degree;
+        curve.axis.control_count = degree + 3;
+        curve.controls.dimension = rational ? 4 : 3;
+        curve.controls.rational = rational;
+        // Simple exterior knots on both sides, with a nonuniform active axis.
+        for (uint32_t i = 0; i < 2 * degree + 4; ++i) {
+          curve.axis.knots.push_back(double(i * i + i));
+          curve.axis.multiplicities.push_back(1);
+        }
+        if (layout && degree > 1) {
+          // Mixed endpoint multiplicities exercise natural boundaries inside
+          // repeated-knot groups, instead of only simple outer knots.
+          curve.axis.knots.erase(curve.axis.knots.begin() + 1);
+          curve.axis.multiplicities.erase(curve.axis.multiplicities.begin() +
+                                          1);
+          curve.axis.multiplicities[degree] = 2;
+        }
+        if (layout == 2) {
+          std::reverse(curve.axis.knots.begin(), curve.axis.knots.end());
+          for (auto& knot : curve.axis.knots) knot = -knot;
+          std::reverse(curve.axis.multiplicities.begin(),
+                       curve.axis.multiplicities.end());
+        }
+        for (uint32_t i = 0; i < curve.axis.control_count; ++i) {
+          const double weight = rational ? double(1 + i % 3) : 1.;
+          for (double p : {double(i), double(i % 2), double(i % 3)})
+            curve.controls.values.push_back(p * weight);
+          if (rational) curve.controls.values.push_back(weight);
+        }
+        std::vector<double> expanded;
+        for (std::size_t i = 0; i < curve.axis.knots.size(); ++i)
+          expanded.insert(expanded.end(), curve.axis.multiplicities[i],
+                          curve.axis.knots[i]);
+        const auto low = expanded[degree];
+        const auto high = expanded[curve.axis.control_count];
+        for (bool partial : {false, true}) {
+          const auto a = partial ? std::lerp(low, high, .2) : low;
+          const auto b = partial ? std::lerp(low, high, .8) : high;
+          uint64_t checks = 10000;
+          const auto section = internal::RestrictNurbsWire(curve, a, b, checks);
+          ASSERT_TRUE(section.ok()) << section.error().message;
+          EXPECT_EQ(section.value().axis.knots.front(), a);
+          EXPECT_EQ(section.value().axis.knots.back(), b);
+          EXPECT_EQ(section.value().axis.multiplicities.front(), degree + 1);
+          EXPECT_EQ(section.value().axis.multiplicities.back(), degree + 1);
+          for (unsigned i = 0; i <= 100; ++i) {
+            const double t = std::lerp(a, b, i / 100.);
+            const auto before = EvaluateCurve(curve, t);
+            const auto after = EvaluateCurve(section.value(), t);
+            ASSERT_TRUE(before.ok()) << before.error().message;
+            ASSERT_TRUE(after.ok()) << after.error().message;
+            const auto p = before.value(), q = after.value();
+            EXPECT_NEAR(p.position.x, q.position.x, 2e-14);
+            EXPECT_NEAR(p.position.y, q.position.y, 2e-14);
+            EXPECT_NEAR(p.position.z, q.position.z, 2e-14);
+            EXPECT_NEAR(p.first_derivative.x, q.first_derivative.x, 2e-14);
+            EXPECT_NEAR(p.first_derivative.y, q.first_derivative.y, 2e-14);
+            EXPECT_NEAR(p.first_derivative.z, q.first_derivative.z, 2e-14);
+          }
+        }
+      }
+}
+TEST(OpenSwStep, BoundsUnclampedSplineWorkAndRejectsKnotExteriorExtrapolation) {
+  for (bool inactive : {false, true}) {
+    const auto fixture =
+        test::UnclampedSplineWire(true, false, false, inactive);
+    auto options = Options();
+    // Source copy + each insertion's output controls + retained interior
+    // endpoint checks: 4+5+6+2, or 3+1 for inactive exterior end knots.
+    options.max_polygon_checks = inactive ? 4 : 17;
+    const auto exact = Export(fixture, options);
+    ASSERT_TRUE(exact.ok()) << exact.error().message;
+    --options.max_polygon_checks;
+    const auto limited = Export(fixture, options);
+    ASSERT_FALSE(limited.ok());
+    EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+    const auto model = ModelBuilder::Build(fixture.report).value();
+    auto curve = std::get<NurbsCurveGeometry>(
+        model.geometry()[*model.FindNode(NodeId{4000})->geometry].payload);
+    uint64_t checks = 1000;
+    for (const auto bounds : {std::pair{curve.axis.knots.front(), 7.},
+                              std::pair{2., curve.axis.knots.back()}}) {
+      const auto outside = internal::RestrictNurbsWire(curve, bounds.first,
+                                                       bounds.second, checks);
+      ASSERT_FALSE(outside.ok());
+      EXPECT_EQ(outside.error().code, ErrorCode::kInvalidOptions);
+    }
+    curve.axis.closed = true;
+    const auto closed = internal::RestrictNurbsWire(curve, 2, 7, checks);
+    ASSERT_FALSE(closed.ok());
+    EXPECT_EQ(closed.error().code, ErrorCode::kUnsupportedFormat);
+    curve.axis.periodic = true;
+    const auto periodic = internal::RestrictNurbsWire(curve, 2, 7, checks);
+    ASSERT_FALSE(periodic.ok());
+    EXPECT_EQ(periodic.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
 TEST(OpenSwStep, RestrictsLinearAndCubicSplineSectionsWithoutResampling) {
   for (uint32_t degree : {1u, 3u})
     for (bool rational : {false, true}) {

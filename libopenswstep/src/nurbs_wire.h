@@ -6,10 +6,12 @@
 #include "step_writer.h"
 
 namespace openswstep::internal {
-// Restricts an open clamped source spline by homogeneous knot insertion.
-// Keeps the source parameter frame and charges the initial source copy and each
-// insertion's new control count to the shared work budget. The source curve is
-// never modified; stored controls remain subject to double-precision rounding.
+// Clamps a selected interval of an open nonperiodic source spline by
+// homogeneous knot insertion. Exterior knots do not permit extrapolating its
+// natural domain. Keeps the source parameter frame and charges the initial
+// source copy and each insertion's new control count to the shared work budget.
+// The source curve is never modified; stored controls remain subject to
+// double-precision rounding.
 [[nodiscard]] Result<openparasolid::NurbsCurveGeometry> RestrictNurbsWire(
     const openparasolid::NurbsCurveGeometry& curve, double first, double last,
     uint64_t& checks_remaining);

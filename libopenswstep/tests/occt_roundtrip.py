@@ -31,6 +31,22 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "spline-polynomial-unclamped": (2,1,0,0,None,None),
+    "spline-polynomial-unclamped-reversed": (2,1,0,0,None,None),
+    "spline-rational-unclamped": (2,1,0,0,None,None),
+    "spline-rational-unclamped-reversed": (2,1,0,0,None,None),
+    "spline-polynomial-unclamped-trimmed": (2,1,0,0,None,None),
+    "spline-polynomial-unclamped-trimmed-reversed": (2,1,0,0,None,None),
+    "spline-rational-unclamped-trimmed": (2,1,0,0,None,None),
+    "spline-rational-unclamped-trimmed-reversed": (2,1,0,0,None,None),
+    "spline-polynomial-unclamped-inactive": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
+    "spline-polynomial-unclamped-inactive-reversed": (2,1,0,0,"length",math.sqrt(2)+math.asinh(1)),
+    "spline-rational-unclamped-inactive": (2,1,0,0,"length",math.pi/2),
+    "spline-rational-unclamped-inactive-reversed": (2,1,0,0,"length",math.pi/2),
+    "spline-polynomial-unclamped-inactive-trimmed": (2,1,0,0,None,None),
+    "spline-polynomial-unclamped-inactive-trimmed-reversed": (2,1,0,0,None,None),
+    "spline-rational-unclamped-inactive-trimmed": (2,1,0,0,None,None),
+    "spline-rational-unclamped-inactive-trimmed-reversed": (2,1,0,0,None,None),
     "spline-polynomial-trimmed": (2,1,0,0,"length",TRIMMED_PARABOLA_LENGTH),
     "spline-polynomial-trimmed-reversed": (2,1,0,0,"length",TRIMMED_PARABOLA_LENGTH),
     "spline-rational-trimmed": (2,1,0,0,"length",TRIMMED_CIRCLE_LENGTH),
@@ -329,6 +345,14 @@ def check_source_spline(name, shape):
         poles = [(1,0,0), (1,1,0), (0,1,0)] if rational else [(0,0,0), (1,1,0), (2,0,0)]
         weights = [1,math.sqrt(.5),1] if rational else [1]*3
         knots, multiplicities = [2,7], [3,3]
+    unclamped = "unclamped" in name
+    if unclamped:
+        if "inactive" in name:
+            knots, multiplicities = [-1,2,7,10], [1,2,2,1]
+        else:
+            poles = [(0,0,0), (1,.1,0), (2,-.1,.1), (3,0,0)]
+            weights = [1,2,3,1] if rational else [1]*4
+            knots, multiplicities = [-2,0,2,3,7,9,11], [1]*7
     if "translated" in name:
         poles = [(y+10,z-20,x+30) for x,y,z in poles]
     expanded = [k for k,m in zip(knots,multiplicities) for _ in range(m)]
@@ -336,6 +360,10 @@ def check_source_spline(name, shape):
     # evaluator. Include interior knots and values on both adjacent spans.
     def basis(i, degree, t):
         if degree == 0:
+            if t == expanded[len(poles)]:
+                # The reader uses the left polynomial at the natural end,
+                # even when exterior knots continue beyond that parameter.
+                return float(expanded[i] < t <= expanded[i+1])
             return float(expanded[i] <= t < expanded[i+1])
         left = expanded[i+degree] - expanded[i]
         right = expanded[i+degree+1] - expanded[i+1]
@@ -345,6 +373,8 @@ def check_source_spline(name, shape):
     intervals = [(2,7)]
     if trimmed:
         intervals = [(3,5)] if "knots" in name else [(2.5,6)]
+        if unclamped:
+            intervals = [(2.5,6.5)]
         if "pair" in name:
             intervals = [(2.25,3.5), (4.5,6.75)]
     edges = TopTools_IndexedMapOfShape()
@@ -364,7 +394,7 @@ def check_source_spline(name, shape):
         assert not spline.IsPeriodic() and not spline.IsClosed(), name
         for i, (knot, count) in enumerate(zip(kept_knots, kept_counts), 1):
             assert spline.Knot(i) == knot and spline.Multiplicity(i) == count, name
-        if not trimmed:
+        if not trimmed and not unclamped:
             for i, (pole, weight) in enumerate(zip(poles, weights), 1):
                 actual = spline.Pole(i)
                 assert math.isclose(spline.Weight(i), weight, rel_tol=1e-14), name
@@ -373,7 +403,7 @@ def check_source_spline(name, shape):
         samples.update(t for t in (2.99,3,3.01,4.99,5,5.01) if low <= t <= high)
         for t in sorted(samples):
             coefficients = [basis(i, 2, t)*w for i,w in enumerate(weights)]
-            expected = poles[-1] if t == 7 else [sum(c*p[axis] for c,p in zip(coefficients, poles))/sum(coefficients) for axis in range(3)]
+            expected = [sum(c*p[axis] for c,p in zip(coefficients, poles))/sum(coefficients) for axis in range(3)]
             actual = curve.Value(t)
             assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),expected)) < 1e-12, (name,t)
     assert sorted(observed) == sorted(intervals), (name,observed)

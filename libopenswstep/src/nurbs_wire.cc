@@ -88,13 +88,16 @@ Result<openparasolid::NurbsCurveGeometry> RestrictNurbsWire(
     return Return::Err({ErrorCode::kInvalidOptions, 0,
                         "STEP spline interval must have distinct endpoints"});
   if (curve.controls.dimension != (curve.controls.rational ? 4 : 3) ||
-      curve.axis.periodic || curve.axis.closed ||
-      curve.axis.multiplicities.front() != curve.axis.degree + 1 ||
-      curve.axis.multiplicities.back() != curve.axis.degree + 1)
-    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                        "STEP wire splines require clamped open 3D knot axes"});
+      curve.axis.periodic || curve.axis.closed)
+    return Return::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "STEP wire splines require open nonperiodic 3D knot axes"});
   const auto low = std::min(first, last), high = std::max(first, last);
-  if (low == curve.axis.knots.front() && high == curve.axis.knots.back())
+  const bool clamped =
+      curve.axis.multiplicities.front() == curve.axis.degree + 1 &&
+      curve.axis.multiplicities.back() == curve.axis.degree + 1;
+  if (clamped && low == curve.axis.knots.front() &&
+      high == curve.axis.knots.back())
     return Return::Ok(curve);
   if (checks_remaining < curve.axis.control_count)
     return Return::Err({ErrorCode::kResourceLimit, 0,

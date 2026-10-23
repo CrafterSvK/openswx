@@ -3,6 +3,7 @@
 #ifndef OPENSWSTEP_TESTS_FIXTURES_H_
 #define OPENSWSTEP_TESTS_FIXTURES_H_
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <map>
@@ -356,6 +357,68 @@ inline ModelFixture TwoSplineSections(bool rational = false) {
          Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
          Numbers("parm_1", {4.5}), Numbers("parm_2", {6.75}),
          ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
+inline ModelFixture UnclampedSplineWire(bool rational = false,
+                                        bool reverse = false,
+                                        bool partial = false,
+                                        bool inactive_knots = false) {
+  auto f = SplineWire(rational, false, reverse);
+  std::vector<ScalarValue> knots, multiplicities;
+  if (inactive_knots) {
+    knots = {-1., 2., 7., 10.};
+    multiplicities = {int64_t{1}, int64_t{2}, int64_t{2}, int64_t{1}};
+  } else {
+    knots = {-2., 0., 2., 3., 7., 9., 11.};
+    multiplicities.assign(7, int64_t{1});
+    std::vector<ScalarValue> controls;
+    const std::array<Vector3, 4> poles{
+        {{0, 0, 0}, {1, .1, 0}, {2, -.1, .1}, {3, 0, 0}}};
+    for (std::size_t i = 0; i < poles.size(); ++i) {
+      const double weight = rational ? double(1 + i % 3) : 1.;
+      for (double value : {poles[i].x, poles[i].y, poles[i].z})
+        controls.emplace_back(value * weight);
+      if (rational) controls.emplace_back(weight);
+    }
+    RemoveNode(f, 8001);
+    f.Add(45, 8001,
+          {Array("vertices", FieldType::kDouble, std::move(controls))});
+  }
+  for (auto& node : f.report.nodes)
+    if (node.index == 8000) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (fields[i].name == "n_vertices")
+          node.fields[i].values = {int64_t{inactive_knots ? 3 : 4}};
+        if (fields[i].name == "n_knots")
+          node.fields[i].values = {static_cast<int64_t>(knots.size())};
+      }
+    }
+  RemoveNode(f, 8002);
+  RemoveNode(f, 8003);
+  f.Add(128, 8002, {Array("knots", FieldType::kDouble, std::move(knots))});
+  f.Add(
+      127, 8003,
+      {Array("multiplicities", FieldType::kShort, std::move(multiplicities))});
+  const auto model = ModelBuilder::Build(f.report).value();
+  const double low = partial ? 2.5 : 2, high = partial ? 6.5 : 7;
+  const auto first = reverse ? high : low, last = reverse ? low : high;
+  const auto a = EvaluateCurve(model, NodeId{4000}, first).value().position;
+  const auto b = EvaluateCurve(model, NodeId{4000}, last).value().position;
+  for (auto& node : f.report.nodes) {
+    if (node.index == 500) node.fields[0].values = {a.x, a.y, a.z};
+    if (node.index == 501) node.fields[0].values = {b.x, b.y, b.z};
+  }
+  if (partial) {
+    f.Add(133, 8004,
+          {Pointer("basis_curve", 4000, 1008),
+           Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+           Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+           Numbers("parm_1", {first}), Numbers("parm_2", {last}),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    Set(f, 100, "curve", 8004);
+  }
   return f;
 }
 // Groups source faces into one face's ordered loop list, retaining fin/edge

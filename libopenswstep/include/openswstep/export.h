@@ -59,8 +59,8 @@ struct ExportOptions {
   /// Automatic closed tolerant-ring recovery charges both its preflight and
   /// final Bernstein certificates to this same budget. Open B-spline wires
   /// consume one endpoint separation check per interior control point.
-  /// Partial restriction also charges the original control count for copying
-  /// and the new control count at each homogeneous knot insertion.
+  /// Partial or unclamped restriction also charges the original control count
+  /// for copying and the new control count at each homogeneous knot insertion.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -100,31 +100,33 @@ struct StepDocument {
 
 /// @brief Binds and exports one body in source coordinates, without
 /// tessellation. Supports LINE/CIRCLE/ELLIPSE wire bodies and open
-/// B_CURVE wires with clamped knot axes and three spatial coordinates. Rational
-/// homogeneous controls become Cartesian poles plus positive STEP weights;
-/// degree and directed source endpoints are retained. Complete domains preserve
-/// knots and controls unchanged; partial domains use homogeneous knot insertion
-/// and cropping, with original parameters and retained interior knots. Rounded
-/// restricted endpoints must still meet the named source vertex tolerance.
-/// Source trim wrappers and caller wire intervals can select partial domains.
-/// All retained interior control points must lie strictly between the endpoint
-/// planes normal to the endpoint chord, with tolerance/roundoff clearance.
-/// Positive weights then exclude ambiguous interior occurrences of the edge
-/// endpoints. This is not a wire self-intersection certificate.
-/// Periodic or closed splines, unclamped axes and B-spline face boundaries
-/// remain unsupported. Supports point-only acorns, and planar polygon faces
-/// with LINE edges, one outer loop and disjoint, nonnested polygonal and
-/// full-circle hole loops. Source loop order does not determine the outer loop.
-/// Planar faces also support one-edge full CIRCLE/ELLIPSE disks and circular
-/// faces with disjoint polygonal and/or circular holes. Complete CYLINDER/CONE
-/// bands use two coaxial full-circle loops at distinct axial levels and
-/// positive cut radii. CYLINDER/CONE also support a single four-edge loop with
-/// two coaxial circular arcs and two straight LINE generators, spanning less
-/// than one full turn. Generators follow the respective cylinder/cone profile.
-/// Full-azimuth CYLINDER bands also support monotone CIRCLE/ELLIPSE arc
-/// profiles with isolated axial LINE steps. Whole supporting conics must
-/// project onto the cylinder circle; complete profile axial ranges must be
-/// separated by more than two tolerances. Overlapping ranges remain
+/// B_CURVE wires with three spatial coordinates, including unclamped axes.
+/// Rational homogeneous controls become Cartesian poles plus positive STEP
+/// weights; degree and directed source endpoints are retained. Complete domains
+/// preserve knots and controls unchanged for clamped axes; partial or unclamped
+/// domains use homogeneous knot insertion and cropping, with original
+/// parameters and retained interior knots. Rounded restricted endpoints must
+/// still meet the named source vertex tolerance. Source trim wrappers and
+/// caller wire intervals can select partial domains. The natural source domain
+/// is U[p] through U[N] in the expanded knot vector, with degree p and control
+/// count N; exterior knots do not allow extrapolation. All retained interior
+/// control points must lie strictly between the endpoint planes normal to the
+/// endpoint chord, with tolerance/roundoff clearance. Positive weights then
+/// exclude ambiguous interior occurrences of the edge endpoints. This is not a
+/// wire self-intersection certificate. Periodic or closed splines and B-spline
+/// face boundaries remain unsupported. Supports point-only acorns, and planar
+/// polygon faces with LINE edges, one outer loop and disjoint, nonnested
+/// polygonal and full-circle hole loops. Source loop order does not determine
+/// the outer loop. Planar faces also support one-edge full CIRCLE/ELLIPSE disks
+/// and circular faces with disjoint polygonal and/or circular holes. Complete
+/// CYLINDER/CONE bands use two coaxial full-circle loops at distinct axial
+/// levels and positive cut radii. CYLINDER/CONE also support a single four-edge
+/// loop with two coaxial circular arcs and two straight LINE generators,
+/// spanning less than one full turn. Generators follow the respective
+/// cylinder/cone profile. Full-azimuth CYLINDER bands also support monotone
+/// CIRCLE/ELLIPSE arc profiles with isolated axial LINE steps. Whole supporting
+/// conics must project onto the cylinder circle; complete profile axial ranges
+/// must be separated by more than two tolerances. Overlapping ranges remain
 /// unsupported. Exact transverse and axial flux terms are retained for solid
 /// patches and variable-height complete cylinder bands. SPHERE faces use one
 /// full latitude circle for a cap or two full coaxial latitude circles for a
