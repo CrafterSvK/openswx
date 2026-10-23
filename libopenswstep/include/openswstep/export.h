@@ -66,7 +66,8 @@ struct ExportOptions {
   /// Both C1 and explicitly verified tangent joins consume one check each. Each
   /// piece restriction is charged separately. Face preparation and final edge
   /// serialization share this budget, including restriction work in both stages
-  /// and the existing corner checks.
+  /// and the existing corner checks. Spline-hole envelopes additionally charge
+  /// one check per retained control and their own interval restriction work.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -172,20 +173,24 @@ struct StepDocument {
 /// Partial/unclamped source axes use exact knot insertion and cropping; edge
 /// endpoint certificates and source vertex tolerances still apply. Rational
 /// spline face bounds, polynomial degrees above three, internal kinks and
-/// spline holes are unsupported. Convex LINE/CIRCLE outer contours also support
-/// polygonal and complete circular holes. Circles and polygon vertices are
-/// checked against all supporting tangent half-planes, with two tolerances of
-/// clearance. Convexity contains entire polygon edges and interiors. Shared
-/// polygon/disk checks exclude intersections and nesting. Each
-/// circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair consumes
-/// one check, alongside polygon segment/containment comparisons. Polygonal or
-/// complete circular outer bounds also support convex multi-edge
-/// LINE/CIRCLE/ELLIPSE holes. Analytic, inflated enclosing rectangles
-/// conservatively certify containment and separation; only original curves and
+/// holes inside spline outer contours are unsupported. Convex LINE/CIRCLE outer
+/// contours also support polygonal and complete circular holes. Circles and
+/// polygon vertices are checked against all supporting tangent half-planes,
+/// with two tolerances of clearance. Convexity contains entire polygon edges
+/// and interiors. Shared polygon/disk checks exclude intersections and nesting.
+/// Each circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair
+/// consumes one check, alongside polygon segment/containment comparisons.
+/// Polygonal or complete circular outer bounds also support convex multi-edge
+/// LINE/CIRCLE/ELLIPSE holes, optionally containing supported polynomial
+/// quadratic/cubic B_CURVE edges. Restricted spline control hulls and analytic
+/// conic extrema provide inflated enclosing rectangles that conservatively
+/// certify containment and separation; only original curves and
 /// analytic areas are exported. Uncertified envelopes return unsupported-format
 /// errors, even for some valid close contours. Each curved edge consumes one
-/// extrema check plus its corner check; original and envelope-augmented
-/// mixed-boundary checks both share the budget. Planar annular sectors support
+/// envelope check plus its corner check; spline holes additionally charge one
+/// check per retained control and all restriction/curve-certificate work.
+/// Original and envelope-augmented mixed-boundary checks both share the budget.
+/// Planar annular sectors support
 /// two concentric circular arcs joined by two radial lines, including major
 /// sectors. Single hole-free LINE/CIRCLE contours with minor arcs also support
 /// concave corners when chord simplicity, adjacent departure cones and

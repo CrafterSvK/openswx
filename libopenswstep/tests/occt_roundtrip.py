@@ -31,6 +31,24 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "hole-spline-quadratic": (6,6,1,0,"area",72-4/3),
+    "hole-spline-quadratic-partial": (6,6,1,0,"area",72-256/375),
+    "hole-spline-quadratic-reversed": (6,6,1,0,"area",72-4/3),
+    "hole-spline-quadratic-partial-inward": (6,6,1,0,"area",72-256/375),
+    "hole-spline-quadratic-circle": (3,3,1,0,"area",100*math.pi-4/3),
+    "hole-spline-quadratic-multi-repeated": (6,6,1,0,"area",72-4/3),
+    "hole-spline-quadratic-multi-simple-partial-reversed": (3,3,1,0,"area",100*math.pi-256/375),
+    "hole-spline-cubic": (6,6,1,0,"area",72-63/40),
+    "hole-spline-cubic-partial-reversed": (6,6,1,0,"area",72-12924/15625),
+    "hole-spline-cubic-inward": (6,6,1,0,"area",72-63/40),
+    "hole-spline-cubic-circle-partial": (3,3,1,0,"area",100*math.pi-12924/15625),
+    "hole-spline-cubic-multi-three-partial": (6,6,1,0,"area",72-12924/15625),
+    "hole-spline-cubic-multi-two-reversed": (3,3,1,0,"area",100*math.pi-63/40),
+    "hole-spline-cubic-two-mixed": (13,13,1,0,"area",72-2*63/40-.5-math.pi/16),
+    "hole-spline-cubic-circle-two-mixed-partial-inward": (10,10,1,0,"area",100*math.pi-2*12924/15625-.5-math.pi/16),
+    "hole-spline-quadratic-two": (8,8,1,0,"area",72-2*4/3),
+    "hole-spline-cubic-two-mixed-oblique": (13,13,1,0,"area",72-2*63/40-.5-math.pi/16),
+    "hole-spline-quadratic-circle-partial-oblique": (3,3,1,0,"area",100*math.pi-256/375),
     "cubic-face-three-span": (2,2,1,0,"area",63/40),
     "cubic-face-three-span-partial-reversed": (2,2,1,0,"area",12924/15625),
     "cubic-face-three-span-oblique": (2,2,1,0,"area",63/40),
@@ -547,6 +565,55 @@ def check_cubic_face(name,shape):
         tolerance=1e-9 if "oblique" in name else 1e-12
         assert max(abs(a-b) for a,b in zip((point.X(),point.Y(),point.Z()),(x,y,z)))<tolerance,(name,t)
 
+def check_spline_hole(name, shape):
+    edges = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
+    shifts = set()
+    for index in range(1, edges.Extent()+1):
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(index)))
+        if curve.GetType() != GeomAbs_BSplineCurve:
+            continue
+        spline = curve.BSpline()
+        degree = 3 if "cubic" in name else 2
+        extra = next((m for word,m in (("one",1),("two",2),("three",3))
+                      if "multi-"+word in name), 0)
+        if "multi-repeated" in name:
+            extra = 2
+        if "multi-simple" in name:
+            extra = 1
+        assert spline.Degree() == degree and spline.NbPoles() == degree+1+extra, name
+        assert not spline.IsRational(), name
+        low,high = (2.5,6.5) if "partial" in name else (2,7)
+        assert curve.FirstParameter() == low and curve.LastParameter() == high, name
+        samples = {low+(high-low)*i/40 for i in range(41)}
+        if extra:
+            assert spline.NbKnots() == 3 and spline.Knot(2) == 4.5, name
+            assert spline.Multiplicity(2) == extra, name
+            samples.update((4.5-1e-6,4.5,4.5+1e-6))
+        else:
+            assert spline.NbKnots() == 2, name
+        middle = curve.Value(4.5)
+        displacement = middle.Z()-3e6 if "oblique" in name else middle.X()
+        shift = 6 if displacement > 3 else 0
+        assert shift not in shifts, name
+        shifts.add(shift)
+        for t in sorted(samples):
+            u = (t-2)/5
+            if "reversed" in name:
+                u = 1-u
+            if degree == 2:
+                x,y = 1-2*u,4*u*(1-u)
+            else:
+                x,y = 1-1.5*u-1.5*u*u+u**3,6*u-9*u*u+3*u**3
+            x += shift
+            z = 0
+            if "oblique" in name:
+                x,y,z = y+1e6,z-2e6,x+3e6
+            actual = curve.Value(t)
+            tolerance = 1e-9 if "oblique" in name else 1e-12
+            assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),(x,y,z))) < tolerance, (name,t)
+    assert shifts == ({0,6} if "-two" in name and "multi-two" not in name else {0}), name
+
 with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
     subprocess.run([sys.argv[1], directory], check=True)
     for name, expected in CASES.items():
@@ -562,6 +629,8 @@ with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
             assert topology.Extent() == count, (name, kind, topology.Extent(), count)
         if name.startswith("spline-"):
             check_source_spline(name, shape)
+        if name.startswith("hole-spline-"):
+            check_spline_hole(name, shape)
         if name.startswith("quadratic-face"):
             check_quadratic_face(name, shape)
         if name.startswith("cubic-face"):

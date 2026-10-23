@@ -721,7 +721,9 @@ inline void AppendFaceLoops(ModelFixture& f, const ModelFixture& donor,
   for (const auto& node : donor.report.nodes) {
     if (node.node_type != 15 && node.node_type != 16 && node.node_type != 17 &&
         node.node_type != 18 && node.node_type != 29 && node.node_type != 30 &&
-        node.node_type != 31 && node.node_type != 32)
+        node.node_type != 31 && node.node_type != 32 && node.node_type != 45 &&
+        node.node_type != 127 && node.node_type != 128 &&
+        node.node_type != 133 && node.node_type != 134 && node.node_type != 136)
       continue;
     const auto& definitions =
         donor.report.schemas[node.schema_index].definition.fields;
@@ -2587,7 +2589,7 @@ inline ModelFixture MultiSpanQuadraticSplineFace(bool repeated = true,
 inline ModelFixture ObliqueSplineFace(ModelFixture f) {
   f = RotateAndTranslate(std::move(f));
   for (auto& node : f.report.nodes)
-    if (node.index == 8001) {
+    if (node.node_type == 45) {
       auto& values = node.fields[0].values;
       for (std::size_t i = 0; i < values.size(); i += 3) {
         const auto x = std::get<double>(values[i]);
@@ -2602,6 +2604,74 @@ inline ModelFixture ObliqueSplineFace(ModelFixture f) {
 }
 inline ModelFixture ObliqueQuadraticSplineFace(bool partial = false) {
   return ObliqueSplineFace(QuadraticSplineFace(partial));
+}
+inline ModelFixture TranslateSplineFace(ModelFixture f, Vector3 offset) {
+  f = TranslateProfile(std::move(f), offset);
+  for (auto& node : f.report.nodes) {
+    if (node.node_type == 45) {
+      auto& values = node.fields[0].values;
+      for (std::size_t i = 0; i < values.size(); i += 3) {
+        values[i] = std::get<double>(values[i]) + offset.x;
+        values[i + 1] = std::get<double>(values[i + 1]) + offset.y;
+        values[i + 2] = std::get<double>(values[i + 2]) + offset.z;
+      }
+    }
+    if (node.node_type == 133) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < fields.size(); ++i)
+        if (fields[i].name == "point_1" || fields[i].name == "point_2") {
+          auto& v = node.fields[i].values;
+          v = {std::get<double>(v[0]) + offset.x,
+               std::get<double>(v[1]) + offset.y,
+               std::get<double>(v[2]) + offset.z};
+        }
+    }
+  }
+  return f;
+}
+struct SplineHoleOptions {
+  bool circular_outer = false;
+  bool hole_first = false;
+  bool inward = false;
+  bool second = false;
+  bool mixed = false;
+  double top = 4;
+  double separation = 6;
+};
+// The donor is a counterclockwise spline-bounded planar face at Z=0.
+inline ModelFixture WithSplineHole(ModelFixture donor,
+                                   SplineHoleOptions options = {}) {
+  ModelFixture f;
+  if (options.circular_outer) {
+    ConicLoopSpec outer;
+    outer.center = {3, 1, 0};
+    outer.major = 10;
+    f = ConicSheet({outer});
+  } else {
+    f = PlanarFace(
+        {{-3, -2, 0}, {9, -2, 0}, {9, options.top, 0}, {-3, options.top, 0}},
+        {{0, 1, 2, 3}});
+  }
+  if (options.inward) f = ClockwiseHole(std::move(f));
+  auto hole = options.inward ? donor : ClockwiseHole(donor);
+  AppendFaceLoops(f, hole, 300, options.hole_first, 10000);
+  if (options.second)
+    AppendFaceLoops(f, TranslateSplineFace(hole, {options.separation, 0, 0}),
+                    300, options.hole_first, 30000);
+  if (options.mixed) {
+    auto polygon =
+        PlanarFace({{2.5, 2.5, 0}, {2.5, 3, 0}, {3.5, 3, 0}, {3.5, 2.5, 0}},
+                   {{0, 1, 2, 3}});
+    if (options.inward) polygon = ClockwiseHole(std::move(polygon));
+    AppendFaceLoops(f, polygon, 300, options.hole_first, 50000);
+    ConicLoopSpec circle;
+    circle.center = {3, 0, 0};
+    circle.major = .25;
+    circle.reverse_fin = !options.inward;
+    AddConicFaceLoops(f, 300, {circle}, true, options.hole_first, 70000);
+  }
+  return f;
 }
 struct Serialized {
   std::vector<uint8_t> bytes;

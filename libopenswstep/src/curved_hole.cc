@@ -8,6 +8,7 @@
 #include <limits>
 #include <utility>
 
+#include "nurbs_wire.h"
 #include "openparasolid/evaluate.h"
 
 namespace openswstep::internal {
@@ -42,10 +43,11 @@ Result<Envelope> ReadEnvelope(std::span<const PlanarCurve> curves,
     if (!curve.geometry ||
         (!std::holds_alternative<LineGeometry>(*curve.geometry) &&
          !std::holds_alternative<CircleGeometry>(*curve.geometry) &&
-         !std::holds_alternative<EllipseGeometry>(*curve.geometry)))
-      return Return::Err(
-          {ErrorCode::kUnsupportedFormat, 0,
-           "Convex curved holes require LINE/CIRCLE/ELLIPSE bases"});
+         !std::holds_alternative<EllipseGeometry>(*curve.geometry) &&
+         !std::holds_alternative<NurbsCurveGeometry>(*curve.geometry)))
+      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                          "Convex curved holes require LINE/CIRCLE/ELLIPSE or "
+                          "supported polynomial B_CURVE bases"});
   const auto valid = ValidateConvexPlanarLoop(curves, plane, !natural_sense,
                                               tolerance, remaining);
   if (!valid.ok()) return Return::Err(valid.error());
@@ -67,6 +69,29 @@ Result<Envelope> ReadEnvelope(std::span<const PlanarCurve> curves,
       return Return::Err({ErrorCode::kResourceLimit, 0,
                           "Curved hole envelope limit exceeded"});
     --remaining;
+    if (const auto* spline = std::get_if<NurbsCurveGeometry>(curve.geometry)) {
+      const auto selected =
+          RestrictNurbsWire(*spline, curve.start, curve.end, remaining);
+      if (!selected.ok()) return Return::Err(selected.error());
+      const auto& controls = selected.value().controls.values;
+      for (std::size_t k = 0; k < selected.value().axis.control_count; ++k) {
+        if (!remaining)
+          return Return::Err({ErrorCode::kResourceLimit, 0,
+                              "Spline hole control envelope limit exceeded"});
+        --remaining;
+        const Vector3 point{controls[k * 3], controls[k * 3 + 1],
+                            controls[k * 3 + 2]};
+        for (std::size_t i = 0; i < axes.size(); ++i) {
+          const auto value = Project(point, origin, axes[i]);
+          if (!std::isfinite(value))
+            return Return::Err({ErrorCode::kInvalidRecord, 0,
+                                "Spline hole envelope is unrepresentable"});
+          minimum[i] = std::min(minimum[i], value);
+          maximum[i] = std::max(maximum[i], value);
+        }
+      }
+      continue;
+    }
     for (std::size_t i = 0; i < axes.size(); ++i) {
       long double low, high;
       const auto* circle = std::get_if<CircleGeometry>(curve.geometry);

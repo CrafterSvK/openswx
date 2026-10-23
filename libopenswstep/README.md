@@ -20,7 +20,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Single convex planar contour additionally containing polynomial quadratic/cubic B_CURVE edges, including smooth multi-span bounds | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
 | Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
-| Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
+| Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE and polynomial quadratic/cubic B_CURVE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
 | Planar annular sectors with two concentric circular arcs and two radial lines | Exact single-loop `ADVANCED_FACE`, including nonconvex major sectors and analytic source-curve area |
 | Single-edge full CIRCLE/ELLIPSE planar disks | Exact conic `EDGE_CURVE` and one `FACE_OUTER_BOUND`; source seam vertex reused or one synthetic seam added |
 | Circular planar faces with polygonal and/or circular holes | Exact circular outer bound, source polygon edges and circular inner bounds, including annuli and mixed holes |
@@ -204,7 +204,8 @@ serialized as the boundary. Piece areas and tangent turning are accumulated in
 source traversal order. STEP retains a single selected source B-spline per edge,
 including its interior knots and multiplicities; internal validation pieces
 are never emitted as additional edges. Rational spline bounds, polynomial
-degrees above three, spline holes and additional hole loops remain unsupported.
+degrees above three and additional hole loops inside spline outer contours
+remain unsupported.
 NURBS supporting surfaces are a separate remaining extension.
 
 Each Bezier piece consumes one plane check per control; each cubic additionally
@@ -266,7 +267,8 @@ Net area subtracts both hole types. Closed supported mixtures include sector
 solids with polygonal through bores and unchanged analytic outer mantles.
 
 A polygonal or complete one-edge circular outer bound may also contain
-convex multi-edge `LINE`/`CIRCLE`/`ELLIPSE` holes, alongside polygonal and full-circle
+convex multi-edge `LINE`/`CIRCLE`/`ELLIPSE` holes, optionally containing supported
+polynomial quadratic/cubic B-spline edges, alongside polygonal and full-circle
 holes. The curved hole must wind against the effective face normal. The
 existing convexity and exact source-curve area checks validate each complete
 hole contour. Analytic directed-arc extrema produce enclosing rectangles in
@@ -280,6 +282,18 @@ major elliptic segments and split ellipses preserve their original parameters
 and source edges. This support requires a multi-edge contour; single-edge
 complete elliptical holes remain outside this subset.
 
+Spline holes use the same whole-curve plane, curvature, smooth-join and analytic
+area certificates as hole-free spline contours. Exact restriction to each
+selected source interval provides a control hull; projections of all retained
+controls enclose the entire spline in the face frame. These bounds join the
+analytic line/conic bounds in one tolerance-expanded rectangle per hole. Source
+knots, multiplicities, parameter intervals and edge identity remain intact;
+validation never converts a spline into polygon edges. Multiple spline holes,
+including mixtures with polygonal and full circular holes, are supported in
+either face sense and any source loop order. Rational and degree-above-three
+spline holes remain unsupported. Spline outer contours still require a single
+hole-free loop.
+
 For nearly tangent contours at large world coordinates, explicit source fin
 intervals avoid ambiguity from re-inferring parameters at rounded endpoints.
 The same strict convexity, planarity and area checks still apply.
@@ -292,11 +306,15 @@ parameter-seam crossings. Closed supported shells can therefore include
 prisms with rounded through bores. Original loop order and outer-bound identity
 remain intact. One shared check is charged for every curved edge's extrema,
 in addition to its convex corner check. The original mixed-boundary checks
-and the envelope-augmented checks both consume the same shared budget.
+and the envelope-augmented checks both consume the same shared budget. Spline
+holes additionally charge one check per retained envelope control, the existing
+polynomial plane/curvature/join checks and each restriction performed for the
+curve certificate, control envelope and final source-edge serialization.
 
 The envelope test is conservative: geometrically disjoint holes may have
 overlapping rectangles, or a valid curved hole's rectangle may leave its outer
-boundary. Such cases return an explicit unsupported-format error rather than
+boundary. Spline controls may leave that boundary even when the actual curve
+fits. Such cases return an explicit unsupported-format error rather than
 claiming a validity certificate. Curved outer contours with multi-edge curved
 holes, nonconvex curved holes, single-edge elliptical holes and elliptic outer arcs
 with holes remain unsupported. Existing hole-free elliptic contours and
@@ -502,7 +520,7 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS curves outside the open-wire/planar-quadratic subsets and NURBS surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
+NURBS curves outside the supported open-wire/planar-polynomial subsets and NURBS surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
 uncertified curved-hole envelopes, curved outer contours with curved holes,
 nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
 horn/apple/lemon tori, apex loops, explicit seam fins, other
@@ -567,7 +585,8 @@ Circular containment and hole-pair comparisons consume one check each from the
 same budget. Each open B-spline wire interior control point consumes one
 endpoint separation check. Partial or unclamped spline restriction also charges the original
 control count and every insertion's new control count. Convex curved-hole envelopes consume one check per edge plus
-one per convex corner; both original and envelope-augmented mixed-boundary
+one per convex corner, with an additional check per retained spline control
+and restriction/certificate work; both original and envelope-augmented mixed-boundary
 validation passes share this budget. Convex curved contours with circular holes consume one additional
 check per circular-hole/outer-edge pair, polygon-vertex/outer-edge pair and
 circular-hole pair. Mixed polygon/circle
@@ -678,6 +697,16 @@ partial intervals, spatial transforms and cuts excluding the original join.
 The imported source B-spline remains one edge with its retained interior knot
 and multiplicity. Source parameter values and analytic areas retain the same
 independent checks and 1e-9 area tolerance.
+
+Eighteen spline-hole round trips additionally cover quadratic/cubic holes,
+selected partial intervals, retained multi-span knots, reverse source parameters,
+inward faces, loop order, polygonal/circular outer bounds, multiple mixed holes
+and large translated/rotated frames. OCCT independently checks B-rep validity,
+unchanged source topology, retained spline degrees/controls/knots and source
+polynomial values. Net areas subtract the analytic hole areas from the original
+outer area, retaining the existing 1e-9 relative tolerance. Negative tests cover
+crossings, touching/nested contours, incorrect winding, conservative envelope
+rejection and exact resource-budget boundaries.
 
 Twenty-three cubic face round trips additionally cover genuine cubics,
 degree-elevated quadratics, a zero middle derivative control, interior knot multiplicities one

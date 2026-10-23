@@ -48,6 +48,41 @@ bool IsConicHole(std::span<const PlanarCurve> curves,
   }
   return conic;
 }
+// Winding selects a candidate route only. The mixed-boundary validator still
+// proves the complete base region and every additional curved hole.
+bool HasBasicOuter(std::span<const std::vector<Vector3>> polygons,
+                   std::span<const ConicBoundary> circles,
+                   const PlaneGeometry& plane, bool natural_sense) {
+  const long double sign = natural_sense ? 1 : -1;
+  for (const auto& circle : circles) {
+    const auto& a = circle.normal;
+    const auto& b = plane.normal;
+    const auto alignment = static_cast<long double>(a.x) * b.x +
+                           static_cast<long double>(a.y) * b.y +
+                           static_cast<long double>(a.z) * b.z;
+    if (sign * alignment * (circle.end - circle.start) > 0) return true;
+  }
+  for (const auto& polygon : polygons) {
+    if (polygon.size() < 3) continue;
+    const auto origin = polygon.front();
+    long double area = 0;
+    for (std::size_t i = 1; i + 1 < polygon.size(); ++i) {
+      const std::array<long double, 3> a{
+          static_cast<long double>(polygon[i].x) - origin.x,
+          static_cast<long double>(polygon[i].y) - origin.y,
+          static_cast<long double>(polygon[i].z) - origin.z};
+      const std::array<long double, 3> b{
+          static_cast<long double>(polygon[i + 1].x) - origin.x,
+          static_cast<long double>(polygon[i + 1].y) - origin.y,
+          static_cast<long double>(polygon[i + 1].z) - origin.z};
+      area += (a[1] * b[2] - a[2] * b[1]) * plane.normal.x +
+              (a[2] * b[0] - a[0] * b[2]) * plane.normal.y +
+              (a[0] * b[1] - a[1] * b[0]) * plane.normal.z;
+    }
+    if (std::isfinite(area) && sign * area > 0) return true;
+  }
+  return false;
+}
 struct FaceData {
   const FaceTrimming* source = nullptr;
   const PlaneGeometry* plane = nullptr;
@@ -532,7 +567,14 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                   [&face](const auto& loop) {
                     return IsConicHole(loop, *face.plane, face.natural_sense);
                   });
-  if (inward && face.source->loops.size() > 1) {
+  bool spline = false;
+  for (const auto& loop : curved_loops)
+    for (const auto& curve : loop)
+      spline =
+          spline || std::holds_alternative<NurbsCurveGeometry>(*curve.geometry);
+  const bool spline_holes =
+      spline && HasBasicOuter(polygons, holes, *face.plane, face.natural_sense);
+  if ((inward || spline_holes) && face.source->loops.size() > 1) {
     const auto region = ValidateConvexCurvedHoles(
         curved_loops, polygons, holes, *face.plane, face.natural_sense,
         options_.tolerance, polygon_checks_remaining_);

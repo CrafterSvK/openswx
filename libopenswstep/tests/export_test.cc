@@ -400,6 +400,115 @@ TEST(OpenSwStep, RejectsUncertifiedQuadraticSplineFacesAndHoleMixtures) {
   ASSERT_FALSE(holes.ok());
   EXPECT_EQ(holes.error().code, ErrorCode::kUnsupportedFormat);
 }
+TEST(OpenSwStep, ExportsPolynomialSplineHolesWithOriginalSourceTopology) {
+  for (unsigned kind : {0u, 1u, 2u, 3u})
+    for (bool partial : {false, true})
+      for (bool reverse : {false, true})
+        for (bool circular : {false, true})
+          for (bool first : {false, true})
+            for (bool inward : {false, true}) {
+              const auto donor =
+                  kind == 0   ? test::QuadraticSplineFace(partial, reverse)
+                  : kind == 1 ? test::CubicSplineFace(partial, reverse)
+                  : kind == 2 ? test::MultiSpanQuadraticSplineFace(
+                                    true, partial, reverse)
+                              : test::CubicSplineFace(partial, reverse, false,
+                                                      false, 3);
+              test::SplineHoleOptions hole;
+              hole.circular_outer = circular;
+              hole.hole_first = first;
+              hole.inward = inward;
+              const auto fixture = test::WithSplineHole(donor, hole);
+              const auto result = Export(fixture);
+              ASSERT_TRUE(result.ok()) << result.error().message;
+              EXPECT_EQ(result.value().statistics.faces, 1);
+              EXPECT_EQ(result.value().statistics.edges, circular ? 3 : 6);
+              EXPECT_EQ(result.value().statistics.vertices, circular ? 3 : 6);
+              CheckReferences(result.value());
+              const auto source = test::Serialize(fixture);
+              const auto binary = ExportParasolid(source.bytes, NodeId{1},
+                                                  Options(), &source.catalog);
+              ASSERT_TRUE(binary.ok()) << binary.error().message;
+              EXPECT_EQ(binary.value().text, result.value().text);
+            }
+  for (bool circular : {false, true})
+    for (bool inward : {false, true}) {
+      test::SplineHoleOptions options;
+      options.circular_outer = circular;
+      options.inward = inward;
+      options.hole_first = true;
+      options.second = true;
+      options.mixed = true;
+      const auto fixture =
+          test::WithSplineHole(test::CubicSplineFace(true), options);
+      const auto result = Export(fixture);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.edges, circular ? 10 : 13);
+      EXPECT_EQ(result.value().statistics.vertices, circular ? 10 : 13);
+      const auto oblique = Export(test::ObliqueSplineFace(fixture));
+      ASSERT_TRUE(oblique.ok()) << oblique.error().message;
+    }
+}
+TEST(OpenSwStep, BoundsSplineHoleEnvelopeAndRestrictionWork) {
+  for (bool cubic : {false, true})
+    for (bool partial : {false, true}) {
+      const auto donor = cubic ? test::CubicSplineFace(partial)
+                               : test::QuadraticSplineFace(partial);
+      const auto fixture = test::WithSplineHole(donor);
+      auto options = Options();
+      options.max_polygon_checks =
+          cubic ? (partial ? 188 : 41) : (partial ? 112 : 37);
+      const auto exact = Export(fixture, options);
+      ASSERT_TRUE(exact.ok()) << exact.error().message;
+      --options.max_polygon_checks;
+      const auto limited = Export(fixture, options);
+      ASSERT_FALSE(limited.ok());
+      EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+    }
+}
+TEST(OpenSwStep, RejectsSplineHoleCrossingsNestingAndUncertifiedEnvelopes) {
+  for (double top : {.5, 1.5}) {
+    test::SplineHoleOptions options;
+    options.top = top;
+    const auto fixture =
+        test::WithSplineHole(test::QuadraticSplineFace(), options);
+    const auto model = ModelBuilder::Build(fixture.report);
+    ASSERT_TRUE(model.ok());
+    ASSERT_TRUE(BindBodyGeometry(model.value(), NodeId{1}, 1e-7).ok());
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  for (double separation : {0., 1., 2.}) {
+    test::SplineHoleOptions options;
+    options.second = true;
+    options.separation = separation;
+    const auto result =
+        Export(test::WithSplineHole(test::CubicSplineFace(), options));
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  auto nested = test::WithSplineHole(test::QuadraticSplineFace());
+  test::AppendFaceLoops(nested,
+                        test::ClockwiseHole(test::QuadraticSplineFace(true)),
+                        300, false, 30000);
+  const auto result = Export(nested);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, RejectsIncorrectlyWoundSplineHoles) {
+  for (bool circular : {false, true})
+    for (bool inward : {false, true}) {
+      test::SplineHoleOptions options;
+      options.circular_outer = circular;
+      options.inward = inward;
+      const auto fixture = test::WithSplineHole(
+          test::ClockwiseHole(test::CubicSplineFace()), options);
+      const auto result = Export(fixture);
+      ASSERT_FALSE(result.ok());
+      EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    }
+}
 TEST(OpenSwStep, RejectsRationalAndHigherDegreeSplineFaceBounds) {
   for (unsigned kind : {0u, 1u}) {
     auto fixture = test::QuadraticSplineFace();
