@@ -31,6 +31,24 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "quadratic-face-multi-repeated": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-simple": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-repeated-partial": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-simple-partial": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-repeated-reversed": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-simple-reversed": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-repeated-inward": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-simple-inward": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-repeated-partial-reversed": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-simple-partial-inward": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-repeated-nonuniform": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-simple-nonuniform-reversed": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-repeated-partial-nonuniform": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-simple-partial-nonuniform-reversed": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-repeated-partial-oblique": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-simple-oblique": (2,2,1,0,"area",4/3),
+    "quadratic-face-multi-repeated-partial-outside-knot": (2,2,1,0,"area",256/375),
+    "quadratic-face-multi-simple-partial-outside-knot": (2,2,1,0,"area",256/375),
     "quadratic-face": (2,2,1,0,"area",4/3),
     "quadratic-face-reversed": (2,2,1,0,"area",4/3),
     "quadratic-face-inward": (2,2,1,0,"area",4/3),
@@ -431,12 +449,24 @@ def check_quadratic_face(name, shape):
     assert len(splines) == 1, name
     curve = splines[0]
     spline = curve.BSpline()
-    assert spline.Degree() == 2 and spline.NbPoles() == 3, name
+    count = 3
+    if "multi" in name and "outside-knot" not in name:
+        count = 5 if "repeated" in name else 4
+    assert spline.Degree() == 2 and spline.NbPoles() == count, name
     assert not spline.IsRational(), name
     low,high = (2.5,6.5) if "partial" in name else (2,7)
     assert curve.FirstParameter() == low and curve.LastParameter() == high, name
-    for i in range(41):
-        t = low+(high-low)*i/40
+    sample_parameters = {low+(high-low)*i/40 for i in range(41)}
+    if count > 3:
+        split = .3 if "nonuniform" in name else .5
+        knot = 2+5*(1-split if "reversed" in name else split)
+        assert spline.NbKnots() == 3, name
+        assert math.isclose(spline.Knot(2), knot, abs_tol=1e-14), name
+        assert spline.Multiplicity(2) == (2 if "repeated" in name else 1), name
+        sample_parameters.update((knot-1e-6,knot,knot+1e-6))
+    else:
+        assert spline.NbKnots() == 2, name
+    for t in sorted(sample_parameters):
         u = (t-2)/5
         x,y,z = 1-2*u,4*u*(1-u),0
         if "reversed" in name:

@@ -2426,9 +2426,47 @@ inline ModelFixture QuadraticSplineFace(bool partial = false,
   if (conic) CircleBasis(f, 4000, {0, 0, 0});
   return inward ? ClockwiseHole(std::move(f)) : f;
 }
+inline ModelFixture MultiSpanQuadraticSplineFace(bool repeated = true,
+                                                 bool partial = false,
+                                                 bool reverse = false,
+                                                 bool inward = false,
+                                                 double split = .5) {
+  auto f = QuadraticSplineFace(partial, reverse, inward);
+  for (auto& node : f.report.nodes)
+    if (node.index == 8000) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (fields[i].name == "n_vertices")
+          node.fields[i].values = {int64_t{repeated ? 5 : 4}};
+        if (fields[i].name == "n_knots") node.fields[i].values = {int64_t{3}};
+      }
+    }
+  std::vector<Vector3> points{{1, 0, 0},
+                              {1 - split, 2 * split, 0},
+                              {-split, 2 * (1 - split), 0},
+                              {-1, 0, 0}};
+  if (repeated)
+    points.insert(points.begin() + 2,
+                  {1 - 2 * split, 4 * split * (1 - split), 0});
+  if (reverse) std::reverse(points.begin(), points.end());
+  std::vector<ScalarValue> controls;
+  for (const auto p : points)
+    for (double value : {p.x, p.y, p.z}) controls.emplace_back(value);
+  RemoveNode(f, 8001);
+  RemoveNode(f, 8002);
+  RemoveNode(f, 8003);
+  f.Add(45, 8001, {Array("vertices", FieldType::kDouble, std::move(controls))});
+  const double knot = 2 + 5 * (reverse ? 1 - split : split);
+  f.Add(128, 8002, {Array("knots", FieldType::kDouble, {2., knot, 7.})});
+  f.Add(127, 8003,
+        {Array("multiplicities", FieldType::kShort,
+               {int64_t{3}, int64_t{repeated ? 2 : 1}, int64_t{3}})});
+  return f;
+}
 // Rotate spline controls with the same rigid frame as the other source data.
-inline ModelFixture ObliqueQuadraticSplineFace(bool partial = false) {
-  auto f = RotateAndTranslate(QuadraticSplineFace(partial));
+inline ModelFixture ObliqueSplineFace(ModelFixture f) {
+  f = RotateAndTranslate(std::move(f));
   for (auto& node : f.report.nodes)
     if (node.index == 8001) {
       auto& values = node.fields[0].values;
@@ -2442,6 +2480,9 @@ inline ModelFixture ObliqueQuadraticSplineFace(bool partial = false) {
       }
     }
   return f;
+}
+inline ModelFixture ObliqueQuadraticSplineFace(bool partial = false) {
+  return ObliqueSplineFace(QuadraticSplineFace(partial));
 }
 struct Serialized {
   std::vector<uint8_t> bytes;

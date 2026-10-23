@@ -17,7 +17,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Point-only acorn bodies | `GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_REPRESENTATION` containing a `GEOMETRIC_CURVE_SET` |
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
-| Single convex planar contour additionally containing polynomial quadratic Bezier B_CURVE sections | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
+| Single convex planar contour additionally containing polynomial quadratic B_CURVE edges, including smooth multi-span bounds | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
 | Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
 | Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
@@ -160,11 +160,13 @@ analytically over each source line/arc.
 No chords, fitted curves or triangulation replace the source boundary.
 
 A hole-free convex planar outer contour may additionally contain polynomial
-quadratic B-spline edges, each selecting one Bezier section. Source intervals
-can be partial or start from an unclamped axis; homogeneous knot insertion and
-cropping isolate the selected quadratic without changing its parameter frame.
-The three retained controls must lie in the face plane within the source length
-tolerance. Their convex hull then certifies the whole curve's plane membership.
+quadratic B-spline edges, including multiple Bezier pieces within one source
+edge. Source intervals can be partial or start from an unclamped axis;
+homogeneous knot insertion and
+cropping isolate the selected interval without changing its parameter frame.
+For validation, each selected knot span is restricted to a quadratic Bezier
+piece. Its three controls must lie in the face plane within the source length
+tolerance. Their convex hull then certifies that whole piece's plane membership.
 This conservative hull test can reject curves whose actual excursion is within
 tolerance. The serialized edge retains the wire exporter's endpoint separation
 certificate and checks its rounded endpoints against the named source vertices.
@@ -172,20 +174,34 @@ certificate and checks its rounded endpoints against the named source vertices.
 The derivative of a quadratic Bezier curve interpolates its two endpoint
 derivatives. Nonnegative tangent turning shorter than pi excludes inflections
 and interior derivative reversals; degenerate endpoint derivatives fail. The
-existing convex-corner and full-revolution checks apply to the complete contour,
-including adjacent LINE/CIRCLE/ELLIPSE edges. For projected controls `P,Q,R`,
-the exact doubled signed area contribution is
+projected control-polygon perimeter of each piece must exceed the source length
+tolerance. Existing convex-corner and full-revolution checks apply to the contour,
+including adjacent LINE/CIRCLE/ELLIPSE edges. Consecutive pieces within one
+spline edge must have continuous projected tangent directions; their nonzero
+parameter speeds may differ. The per-join angular noise allowance is
+`min(1e-10, tolerance/perimeter)/piece_count`, in radians. Genuine internal
+kinks are unsupported, even when the resulting contour would be convex.
+For projected controls `P,Q,R`, the exact doubled signed area contribution is
 `(2*cross(P,Q) + cross(P,R) + 2*cross(Q,R))/3`, with the source traversal sign.
 The control polygon supplies only a conservative perimeter bound; it is not
-serialized as the boundary. Rational or cubic spline bounds, multiple Bezier
-pieces on one edge, spline holes and additional hole loops remain unsupported.
+serialized as the boundary. Piece areas and tangent turning are accumulated in
+source traversal order. STEP retains a single selected source B-spline per edge,
+including its interior knots and multiplicities; internal validation pieces
+are never emitted as additional edges. Rational or cubic spline bounds,
+spline holes and additional hole loops remain unsupported.
 NURBS supporting surfaces are a separate remaining extension.
 
-Each quadratic edge consumes three control-plane checks, alongside the existing
+Each Bezier piece consumes three control-plane checks, alongside the existing
 corner checks and final edge endpoint-hull check. Restrictions during both face
 preparation and edge serialization share the same work budget. A full two-edge
 parabolic segment consumes six checks; a partial segment of the same clamped
 quadratic consumes 56, including both sets of knot insertions.
+Multi-span validation additionally charges each piece restriction and one check
+per internal tangent join. A clamped two-span full parabolic bound with a chord
+consumes 29 checks for a simple interior knot or 22 for a double knot; partial
+intervals with two new interior endpoints crossing that knot consume 89 or 92
+checks, respectively. The extra work isolates polynomials for proof and does not
+alter source topology.
 
 Elliptic tangent turning is computed analytically, rather than equating the
 ellipse parameter to its tangent angle. Arcs exceeding half a revolution,
@@ -635,8 +651,15 @@ axes, translated/rotated frames and a mixed circle/parabola lens. They check
 exact B-spline degree/control counts, analytic source parameter values, topology,
 B-rep validity and analytic face areas with the existing 1e-9 relative tolerance.
 
-The private regression queries 57 explicitly selected bodies in 39
-extracted streams: 53 export successfully, including twenty-three face-bearing
+Eighteen multi-span quadratic face round trips additionally cover simple and
+double interior knots, nonuniform knot spacing, reversed and inward bounds,
+partial intervals, spatial transforms and cuts excluding the original join.
+The imported source B-spline remains one edge with its retained interior knot
+and multiplicity. Source parameter values and analytic areas retain the same
+independent checks and 1e-9 area tolerance.
+
+The last recorded private regression queried 57 explicitly selected bodies in 39
+extracted streams: 53 exported successfully, including twenty-three face-bearing
 bodies with 388 faces; 30 successes contain only wire/point geometry. All 53
 generated documents pass OCCT import and B-rep validity checks. Closed tolerant
 ring resolution adds one complete body with 16 faces and 16 source edges,
@@ -650,8 +673,10 @@ errors. Their first remaining geometry obstacles are:
 | 2 | Implicit plane/cone intersection curves and faces trimmed by them |
 | 2 | NURBS surfaces and implicit intersections with analytic surfaces |
 
-These counts describe this private regression selection, not general format
-coverage. No private source files or generated exports are stored here.
+These private figures precede the subsequent B-spline export extensions, which
+are covered by the synthetic cases above. These counts describe this private
+regression selection, not general format coverage. No private source files or
+generated exports are stored here.
 
 Synthetic OCCT round trips independently check circular/elliptic convex
 curved-hole and polygonal/mixed curved-hole areas, circular/polygonal cylinder-sector

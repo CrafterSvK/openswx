@@ -25,13 +25,14 @@ struct ConvexBoundary {
   long double area;
   openparasolid::Vector3 reference_point;
 };
-// Checks one closed convex LINE/CIRCLE/ELLIPSE/polynomial quadratic Bezier
+// Checks one closed convex LINE/CIRCLE/ELLIPSE/polynomial quadratic B-spline
 // loop, with topology and endpoint closure already established by body binding.
 // Nonnegative directed curvature and corner turns must total one revolution.
 // Each corner consumes one shared comparison check. Each spline restricts its
-// selected interval and checks all three controls against the plane using the
-// shared budget. Polynomial area and tangent turning are analytic. No polygonal
-// approximation is constructed.
+// selected interval and checks each Bezier piece's controls against the plane
+// using the shared budget. Multi-span spline edges require continuous tangent
+// directions and consume one additional check per internal join. Polynomial
+// area and tangent turning are analytic; source edges remain unsplit in STEP.
 [[nodiscard]] openparasolid::Result<ConvexBoundary> ValidateConvexPlanarLoop(
     std::span<const PlanarCurve> curves,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
