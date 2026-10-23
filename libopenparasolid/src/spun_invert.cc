@@ -40,6 +40,58 @@ double Clamp(const SpunSurfaceGeometry& spun, double u) {
   if (spun.end_parameter) u = std::min(u, *spun.end_parameter);
   return u;
 }
+// A pole-to-pole meridian selects one spherical parameter branch. Profiles
+// crossing the axis internally remain ambiguous and retain the ring rejection.
+Result<SurfaceParameterSeed> SphericalStart(const SpunSurfaceGeometry& spun,
+                                            const CircleGeometry& circle,
+                                            const Vector& axis, Vector3 point) {
+  using Return = Result<SurfaceParameterSeed>;
+  constexpr long double kAngleTolerance = 1e-10L;
+  constexpr long double kPi = std::numbers::pi_v<long double>;
+  const auto x = Components(circle.x_axis);
+  const auto y = Cross(Components(circle.normal), x);
+  const auto a = Dot(x, axis), b = Dot(y, axis);
+  if (!spun.start_parameter || !spun.end_parameter ||
+      std::abs(static_cast<long double>(*spun.end_parameter) -
+               *spun.start_parameter - kPi) > kAngleTolerance ||
+      std::abs(Dot(Components(circle.normal), axis)) > kAngleTolerance)
+    return Return::Err(
+        Error("Spherical spun inversion requires one pole-to-pole meridian",
+              ErrorCode::kUnsupportedFormat));
+  const long double first = *spun.start_parameter, last = *spun.end_parameter;
+  const auto derivative = [a, b](long double u) {
+    return -a * std::sin(u) + b * std::cos(u);
+  };
+  if (std::abs(derivative(first)) > kAngleTolerance ||
+      std::abs(derivative(last)) > kAngleTolerance)
+    return Return::Err(Error(
+        "Spherical spun inversion requires meridian endpoints at the poles",
+        ErrorCode::kUnsupportedFormat));
+  const auto target = std::midpoint(first, last);
+  const Vector relative{static_cast<long double>(point.x) - circle.center.x,
+                        static_cast<long double>(point.y) - circle.center.y,
+                        static_cast<long double>(point.z) - circle.center.z};
+  const auto height = Dot(relative, axis);
+  Vector radial = relative;
+  for (std::size_t i = 0; i < 3; ++i) radial[i] -= height * axis[i];
+  const auto polar = std::atan2(Length(radial), height);
+  long double u = std::atan2(b, a) + (derivative(target) < 0 ? polar : -polar);
+  u += std::round((target - u) / (2 * kPi)) * (2 * kPi);
+  Vector profile{};
+  for (std::size_t i = 0; i < 3; ++i)
+    profile[i] = x[i] * std::cos(u) + y[i] * std::sin(u);
+  const auto axial = Dot(profile, axis);
+  for (std::size_t i = 0; i < 3; ++i) profile[i] -= axial * axis[i];
+  const auto v =
+      Length(radial) == 0
+          ? 0.L
+          : std::atan2(Dot(axis, Cross(profile, radial)), Dot(profile, radial));
+  if (!Representable(u) || !Representable(v))
+    return Return::Err(
+        Error("Spherical spun parameters are not representable"));
+  return Return::Ok(
+      {Clamp(spun, static_cast<double>(u)), static_cast<double>(v)});
+}
 Result<SurfaceParameterSeed> Start(const SpunSurfaceGeometry& spun,
                                    const CircleGeometry& circle,
                                    Vector3 point) {
@@ -55,6 +107,10 @@ Result<SurfaceParameterSeed> Start(const SpunSurfaceGeometry& spun,
   const long double height = Dot(center, axis);
   for (std::size_t i = 0; i < 3; ++i) radial[i] -= height * axis[i];
   const long double major = Length(radial);
+  // Classification supplies a start only. The unmodified source evaluator
+  // must still meet the caller's absolute residual tolerance after refinement.
+  if (std::isfinite(major) && major <= 1e-10L * circle.radius)
+    return SphericalStart(spun, circle, axis, point);
   if (!std::isfinite(major) || major <= circle.radius)
     return Result<SurfaceParameterSeed>::Err(
         Error("Spun inversion requires a regular circular ring",

@@ -20,6 +20,7 @@
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
 #include "../src/nurbs_wire.h"
+#include "../src/spun_sphere.h"
 #include "../src/spun_torus.h"
 #include "../src/tolerant_circle.h"
 #include "../src/torus_boundary.h"
@@ -1916,6 +1917,53 @@ TEST(OpenSwStep, ExportsCircularSpunSurfacesWithCorrectNormals) {
       ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_EQ(result.value().statistics.solids, 1);
+}
+TEST(OpenSwStep, ExportsSphericalSpunCapsAcrossIndependentCutAxes) {
+  for (const bool reverse : {false, true})
+    for (const bool major : {false, true}) {
+      const auto fixture = test::SpunSphericalCap(reverse, major);
+      for (const auto& input : {fixture, test::RotateAndTranslate(fixture)}) {
+        const auto result = Export(input);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.faces, 2);
+        EXPECT_EQ(result.value().statistics.edges, 1);
+        EXPECT_EQ(result.value().statistics.solids, 1);
+        EXPECT_NE(result.value().text.find("=SPHERICAL_SURFACE("),
+                  std::string::npos);
+        EXPECT_EQ(result.value().text.find("=TOROIDAL_SURFACE("),
+                  std::string::npos);
+        CheckReferences(result.value());
+      }
+      const auto binary = test::Serialize(fixture);
+      const auto parsed =
+          ExportParasolid(binary.bytes, NodeId{1}, Options(), &binary.catalog);
+      ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+    }
+}
+TEST(OpenSwStep, RejectsUncertifiedSphericalSpunSupports) {
+  SpunSurfaceGeometry spun;
+  spun.axis = {0, 1, 0};
+  spun.start_parameter = 0;
+  spun.end_parameter = std::numbers::pi;
+  CircleGeometry circle{{}, {1, 0, 0}, {0, 1, 0}, 5};
+  const auto exact = internal::RecognizeSpunSphere(spun, circle, 1e-7);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  EXPECT_TRUE(exact.value().same_normal);
+  for (const int kind : {0, 1, 2, 3}) {
+    auto s = spun;
+    auto c = circle;
+    if (kind == 0) s.end_parameter = 2 * std::numbers::pi;
+    if (kind == 1) s.start_parameter.reset();
+    if (kind == 2) c.center.x = .1;
+    if (kind == 3) c.x_axis = {0, 0, 1};
+    const auto rejected = internal::RecognizeSpunSphere(s, c, 1e-7);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  EXPECT_FALSE(internal::RecognizeSpunSphere(spun, circle, 0).ok());
+  auto near = circle;
+  near.center.x = 1e-10;
+  EXPECT_FALSE(internal::RecognizeSpunSphere(spun, near, 1e-12).ok());
 }
 TEST(OpenSwStep, RecognizesSpunTorusFramesIndependentlyOfParameterPhase) {
   const auto canonical_model = ModelBuilder::Build(test::ToroidalBand().report);

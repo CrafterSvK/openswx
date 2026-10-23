@@ -21,6 +21,7 @@
 #include "nurbs_wire.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
+#include "spun_sphere.h"
 #include "spun_torus.h"
 #include "step_writer.h"
 #include "tolerant_circle.h"
@@ -90,7 +91,8 @@ struct FaceData {
   const CylinderGeometry* cylinder = nullptr;
   const ConeGeometry* cone = nullptr;
   std::optional<TorusGeometry> torus;
-  const SphereGeometry* sphere = nullptr;
+  std::optional<SphereGeometry> sphere;
+  bool spherical_spun = false;
   bool natural_sense = true;
   std::vector<std::vector<Vector3>> polygons;
   std::optional<std::size_t> outer_loop = 0;
@@ -438,6 +440,13 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
   const auto loops = ConicLoops(face);
   if (!loops.ok()) return Result<bool>::Err(loops.error());
   if (face.sphere) {
+    if (face.spherical_spun) {
+      // The spherical support is independent of its polar frame. Align the
+      // canonical frame with the saved cut, even for a cut oblique to SPUN's
+      // rotation axis. Source circle edges and outward normal stay unchanged.
+      face.sphere->axis = loops.value().front().normal;
+      face.sphere->x_axis = loops.value().front().x_axis;
+    }
     const auto band =
         ValidateSphereLoops(loops.value(), *face.sphere, face.natural_sense,
                             options_.tolerance, polygon_checks_remaining_);
@@ -765,6 +774,7 @@ Result<bool> BodyWriter::PrepareFaces() {
     const auto* torus = std::get_if<TorusGeometry>(&surface.value()->payload);
     const auto* sphere = std::get_if<SphereGeometry>(&surface.value()->payload);
     std::optional<SpunTorus> spun_torus;
+    std::optional<SpunSphere> spun_sphere;
     if (const auto* spun =
             std::get_if<SpunSurfaceGeometry>(&surface.value()->payload)) {
       const auto profile = Geometry(spun->profile);
@@ -774,15 +784,28 @@ Result<bool> BodyWriter::PrepareFaces() {
       if (!circle)
         return Result<bool>::Err(
             Error(source.face, ErrorCode::kUnsupportedFormat,
-                  "Spun torus export requires a CIRCLE generator"));
-      const auto recognized =
-          RecognizeSpunTorus(*spun, *circle, options_.tolerance);
-      if (!recognized.ok())
-        return Result<bool>::Err(Error(source.face, recognized.error().code,
-                                       recognized.error().message.c_str()));
-      spun_torus = recognized.value();
+                  "Spun surface export requires a CIRCLE generator"));
+      const auto spherical =
+          RecognizeSpunSphere(*spun, *circle, options_.tolerance);
+      if (spherical.ok()) {
+        spun_sphere = spherical.value();
+      } else {
+        // The torus route excludes all bounded profiles. Do not replace a
+        // spherical-domain or invalid-frame failure with its unrelated error.
+        if (spherical.error().code != ErrorCode::kUnsupportedFormat ||
+            spun->start_parameter || spun->end_parameter)
+          return Result<bool>::Err(Error(source.face, spherical.error().code,
+                                         spherical.error().message.c_str()));
+        const auto recognized =
+            RecognizeSpunTorus(*spun, *circle, options_.tolerance);
+        if (!recognized.ok())
+          return Result<bool>::Err(Error(source.face, recognized.error().code,
+                                         recognized.error().message.c_str()));
+        spun_torus = recognized.value();
+      }
     }
-    if (!plane && !cylinder && !cone && !torus && !sphere && !spun_torus)
+    if (!plane && !cylinder && !cone && !torus && !sphere && !spun_torus &&
+        !spun_sphere)
       return Result<bool>::Err(
           Error(source.face, ErrorCode::kUnsupportedFormat,
                 "Face export requires PLANE/CYLINDER/CONE/SPHERE "
@@ -800,8 +823,14 @@ Result<bool> BodyWriter::PrepareFaces() {
     face.cone = cone;
     if (torus) face.torus = *torus;
     if (spun_torus) face.torus = spun_torus->geometry;
-    face.sphere = sphere;
+    if (sphere) face.sphere = *sphere;
+    if (spun_sphere) {
+      face.sphere = spun_sphere->geometry;
+      face.spherical_spun = true;
+    }
     face.natural_sense = source.face_sense == surface.value()->sense;
+    if (spun_sphere && !spun_sphere->same_normal)
+      face.natural_sense = !face.natural_sense;
     if (spun_torus && !spun_torus->same_normal)
       face.natural_sense = !face.natural_sense;
     const bool all_conic =

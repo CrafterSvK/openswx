@@ -1020,6 +1020,31 @@ inline ModelFixture SphericalCap(double level = 3, bool north = true,
   Set(f, fin, "backward", fin);
   return f;
 }
+inline ModelFixture SpunSphericalCap(bool reverse = false, bool major = false) {
+  auto f = SphericalCap(major ? -3 : 3);
+  RemoveNode(f, 701);
+  const auto null_vector = [](const char* name) -> ModelField {
+    return {{name, FieldType::kVector},
+            {std::monostate{}, std::monostate{}, std::monostate{}}};
+  };
+  f.Add(68, 701,
+        {Pointer("profile", 9000, 1008),
+         Numbers("base", {0, 0, 0}, FieldType::kVector),
+         Numbers("axis", {0, 1, 0}, FieldType::kVector), null_vector("start"),
+         null_vector("end"), null_vector("x_axis"),
+         Numbers("start_param", {reverse ? std::numbers::pi : 0.}),
+         Numbers("end_param",
+                 {reverse ? 2 * std::numbers::pi : std::numbers::pi}),
+         Numbers("scale", {0}),
+         ByteValue("sense", reverse ? '-' : '+', FieldType::kCharacter)});
+  f.Add(
+      31, 9000,
+      {Numbers("center", {0, 0, 0}, FieldType::kVector),
+       Numbers("normal", {1, 0, 0}, FieldType::kVector),
+       Numbers("x_axis", {0, 1, 0}, FieldType::kVector), Numbers("radius", {5}),
+       ByteValue("sense", '+', FieldType::kCharacter)});
+  return f;
+}
 inline ModelFixture PartitionedSphere(double level = 0,
                                       bool named_seams = false) {
   auto f = SphericalCap(level, true, named_seams);

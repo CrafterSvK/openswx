@@ -3138,3 +3138,20 @@ tables are not included.
 The MIT-licensed [ps-parser](https://github.com/khoanguyen-3fc/ps-parser) by
 khoanguyen-3fc provides another schema and topology traversal reference.
 Its source and schema tables are not incorporated into this implementation.
+
+### Spherical circular SPUN inversion
+
+A circular `SPUN_SURF` profile centered on its rotation axis can describe a
+sphere rather than a regular ring torus. The inverse now accepts a bounded,
+pole-to-pole meridian spanning one half-turn. Its circle plane must contain the
+axis, and both parameter endpoints must be poles. These conditions select one
+source polar branch. The initial estimate resolves profile phase, lifted bounds
+and source azimuth; the existing bounded refinement verifies the result against
+the unmodified source evaluator and the caller's original absolute tolerance.
+Preferred spin periods remain available through explicit seeds. Spin angle is
+nonunique at a pole; residual-checked pole positions remain invertible.
+
+The small center-on-axis classification threshold supplies only an initial
+guess, not a relaxed acceptance tolerance. General horn/spindle rings, unbounded
+spherical profiles, non-polar half-turns and repeated meridians remain unsupported.
+The evaluator's auxiliary nullable `scale`/frame metadata is not reinterpreted.

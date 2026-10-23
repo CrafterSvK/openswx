@@ -175,6 +175,79 @@ TEST(ParasolidSpunSurface, InversionRejectsOffSurfaceAndInvalidRequests) {
     EXPECT_EQ(result.error().code, ErrorCode::kInvalidOptions);
   }
 }
+TEST(ParasolidSpunSurface,
+     InvertsPoleToPoleSphericalProfilesInSourceParameters) {
+  constexpr double kPi = std::numbers::pi;
+  for (const bool oblique : {false, true})
+    for (const bool reverse_branch : {false, true})
+      for (const double phase : {0., .4}) {
+        const Vector3 axis = oblique ? Vector3{0, .6, .8} : Vector3{0, 0, 1};
+        const Vector3 normal{1, 0, 0};
+        const Vector3 side{0, -axis.z, axis.y};
+        const Vector3 x{0, axis.y * std::cos(phase) + side.y * std::sin(phase),
+                        axis.z * std::cos(phase) + side.z * std::sin(phase)};
+        const double first = -phase + (reverse_branch ? 3 * kPi : 2 * kPi);
+        ModelFixture f;
+        Spun(f, 1, first, first + kPi, {2, -3, 4}, axis);
+        Circle(f, {2, -3, 4}, normal, x);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        for (const double fraction : {0., .1, .5, .9, 1.})
+          for (const double v : {-2.7, 0., 2.9}) {
+            const double u = first + fraction * kPi;
+            const auto point = EvaluateSurface(model.value(), NodeId{20}, u, v);
+            ASSERT_TRUE(point.ok());
+            const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                               point.value().position, 1e-12);
+            ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+            EXPECT_GE(inverse.value().u, first);
+            EXPECT_LE(inverse.value().u, first + kPi);
+            EXPECT_LE(inverse.value().residual, 1e-12);
+            EXPECT_NEAR(inverse.value().u, u, 1e-11);
+            if (fraction > 0 && fraction < 1)
+              EXPECT_NEAR(std::remainder(inverse.value().v - v, 2 * kPi), 0,
+                          1e-11);
+          }
+      }
+}
+TEST(ParasolidSpunSurface,
+     SphericalInversionKeepsSeedsAndRejectsOffSurfacePoints) {
+  ModelFixture f;
+  Spun(f, 1, 0., std::numbers::pi);
+  Circle(f, {}, {1, 0, 0}, {0, 0, 1});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const SurfaceParameterSeed seed{.7, 9.};
+  const auto point = EvaluateSurface(model.value(), NodeId{20}, seed.u, seed.v);
+  ASSERT_TRUE(point.ok());
+  const auto inverse =
+      InvertSurface(model.value(), NodeId{20}, point.value().position, 0, seed);
+  ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+  EXPECT_DOUBLE_EQ(inverse.value().u, seed.u);
+  EXPECT_DOUBLE_EQ(inverse.value().v, seed.v);
+  for (const Vector3 outside : {Vector3{}, Vector3{1.01, 0, 0}}) {
+    const auto rejected =
+        InvertSurface(model.value(), NodeId{20}, outside, 1e-8);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kInvalidRecord);
+  }
+}
+TEST(ParasolidSpunSurface, RejectsAmbiguousOrNonmeridionalSphericalProfiles) {
+  for (const int kind : {0, 1, 2, 3}) {
+    ModelFixture f;
+    Spun(f, 1, kind == 0 ? std::optional<double>{} : std::optional<double>{.0},
+         kind == 1 ? 2 * std::numbers::pi : std::numbers::pi);
+    Circle(f, {}, kind == 2 ? Vector3{0, 0, 1} : Vector3{1, 0, 0},
+           kind == 2 ? Vector3{1, 0, 0}
+                     : (kind == 3 ? Vector3{0, 1, 0} : Vector3{0, 0, 1}));
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto rejected =
+        InvertSurface(model.value(), NodeId{20}, {1, 0, 0}, 1e-8);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
 TEST(ParasolidSpunSurface, InversionRestrictsProfilesToRegularMeridianRings) {
   for (int kind = 0; kind < 4; ++kind) {
     ModelFixture f;

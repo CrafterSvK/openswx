@@ -227,6 +227,11 @@ struct SurfaceParameterSeed {
     const GeometryPayload& geometry, Vector3 point, double tolerance);
 /// The model overload also inverts circular SPUN_SURF rings whose profile
 /// lies in a meridian plane and whose major radius exceeds its profile radius.
+/// It also supports circular pole-to-pole meridians centered on the spin axis
+/// (spherical support), with both profile bounds selecting one half-turn and
+/// placing its endpoints at the poles. These bounds select the source polar
+/// branch; horn/spindle rings and incomplete or repeated meridians remain
+/// unsupported. Polar spin angles are nonunique at the poles.
 /// It preserves source profile bounds and refines against the source evaluator:
 /// at most 128 evaluations shared by the preferred and analytic starts, with
 /// 24 updates and eight damping trials per update. Exhaustion returns
@@ -238,7 +243,8 @@ struct SurfaceParameterSeed {
 /// model surface evaluations validate (0,0) and the recovered point, with no
 /// implicit tolerance. Other swept profiles remain unsupported.
 ///
-/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)"
+/// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)", @ref xt_spun
+/// "XT 5.2.2.11: Spun_surf (p. 68)"
 ///
 /// @param model Source model providing stream-local identities and typed
 /// geometry.
@@ -340,7 +346,7 @@ struct IntersectionChartEvaluation {
 
 /// Reconstructs a directly referenced INTERSECTION's chart from the model.
 /// Both targets must have known senses and support analytic, NURBS, circular
-/// spun ring, analytic-section swept or supported analytic-offset inversion.
+/// spun ring/sphere, analytic-section swept or supported analytic-offset inversion.
 /// The previous UV supplies the next hint;
 /// local NURBS roots and periodic seam continuity are not certified.
 /// Each stored chart position must invert onto both surfaces within the finite
@@ -418,7 +424,7 @@ struct IntersectionEvaluationOptions {
     const IntersectionEvaluationOptions& options);
 
 /// Evaluates a directly referenced INTERSECTION with analytic, NURBS, supported
-/// circular spun ring, analytic-section swept or analytic-offset surfaces
+/// circular spun ring/sphere, analytic-section swept or analytic-offset surfaces
 /// within its chart.
 /// Requires a finite parameter and explicit finite chart/solve tolerances in
 /// source units. Optional endpoint tolerance uses original parameter units.

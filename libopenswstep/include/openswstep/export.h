@@ -145,8 +145,13 @@ struct StepDocument {
 /// supporting circle, retaining the individual source edges. Unbounded
 /// SPUN_SURF circular generators in an axial meridian plane of a regular ring
 /// torus use the equivalent TOROIDAL_SURFACE with corrected normal orientation.
-/// Bounded generators, tilted/skew circle planes and other generators remain
-/// unsupported. Planar faces also support a single convex
+/// A circular pole-to-pole meridian centered on the spin axis uses an equivalent
+/// SPHERICAL_SURFACE. Its complete half-turn, meridian frame and source normal
+/// are certified within the unchanged length tolerance. Full circular cuts may
+/// be oblique to the source spin axis; the equivalent sphere frame aligns with
+/// the cut, retaining exact source edges. Other bounded generators, tilted/skew
+/// circle planes and other generators remain unsupported.
+/// Planar faces also support a single convex
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
 /// two-edge segments/lenses. A hole-free convex contour may additionally use
 /// polynomial quadratic/cubic B_CURVE edges, including smooth multi-span

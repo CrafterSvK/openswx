@@ -33,6 +33,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles, including split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | SPUN_SURF with an unbounded circular generator in an axial meridian plane of a regular ring torus | Equivalent analytic `TOROIDAL_SURFACE`, preserving source normal orientation and boundary edges |
+| SPUN_SURF with a centered circular pole-to-pole half-meridian | Equivalent analytic `SPHERICAL_SURFACE`; complete circular cuts may be oblique to the source spin axis |
 | Certified paired planar/rotational tolerant circular edges | Shared exact circular 3D master with `SURFACE_CURVE`, both source `PCURVE` representations and declared edge uncertainty |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
@@ -777,3 +778,23 @@ Run `doxygen Doxyfile` from this directory to generate public API HTML at
 
 The implementation is original MIT code; no third-party parser/exporter
 implementation is incorporated.
+
+### Spherical SPUN supports
+
+A circle centered on the spin axis, with a bounded pole-to-pole half-turn,
+generates a spherical support. The exporter certifies its meridian plane,
+profile domain, center displacement, accepted frame residuals and normal sign.
+The whole-support discrepancy bound must fit the existing source length
+tolerance. Canonical `SPHERICAL_SURFACE` uses the unchanged source center and
+radius. Its polar frame aligns with the first circular cut; a sphere's geometry
+and outward normal are independent of that frame. This permits circular cuts
+oblique to the original spin axis while retaining the exact source edges.
+Existing spherical cap/band, winding, shell and volume checks remain in force.
+
+Synthetic regressions cover minor/major caps, opposite source meridians,
+rotated/translated frames, binary inputs, invalid or repeated profile domains,
+off-axis centers and insufficient tolerance. Independent OCCT round trips check
+closed B-reps and analytic cap volumes. No proprietary CAD fixture is stored.
+A private body that previously failed spherical SPUN binding now binds fully;
+its later cone/intersection boundary restriction is separate and still rejects
+the complete export rather than producing a partial body.
