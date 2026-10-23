@@ -2370,6 +2370,29 @@ inline ModelFixture ConcaveMinorArcFace(double bottom = 0, double radius = 5) {
   CircleBasis(f, 4004, {2, 2 + std::sqrt(radius * radius - 1), 0}, radius, '-');
   return f;
 }
+inline ModelFixture TrimSplineFace(ModelFixture f, bool reverse) {
+  const auto model = ModelBuilder::Build(f.report).value();
+  const double first = reverse ? 6.5 : 2.5, last = reverse ? 2.5 : 6.5;
+  const auto a = EvaluateCurve(model, NodeId{4001}, first).value().position;
+  const auto b = EvaluateCurve(model, NodeId{4001}, last).value().position;
+  for (auto& node : f.report.nodes) {
+    if (node.index == 500) node.fields[0].values = {b.x, b.y, b.z};
+    if (node.index == 501) node.fields[0].values = {a.x, a.y, a.z};
+    if (node.index == 4000) {
+      node.fields[0].values = {b.x, b.y, b.z};
+      const auto direction = Unit(Sub(a, b));
+      node.fields[1].values = {direction.x, direction.y, direction.z};
+    }
+  }
+  f.Add(133, 8004,
+        {Pointer("basis_curve", 4001, 1008),
+         Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+         Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+         Numbers("parm_1", {first}), Numbers("parm_2", {last}),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  Set(f, 101, "curve", 8004);
+  return f;
+}
 inline ModelFixture QuadraticSplineFace(bool partial = false,
                                         bool reverse = false,
                                         bool inward = false,
@@ -2401,30 +2424,126 @@ inline ModelFixture QuadraticSplineFace(bool partial = false,
                unclamped ? std::vector<ScalarValue>{int64_t{1}, int64_t{2},
                                                     int64_t{2}, int64_t{1}}
                          : std::vector<ScalarValue>{int64_t{3}, int64_t{3}})});
-  if (partial) {
-    const auto model = ModelBuilder::Build(f.report).value();
-    const double first = reverse ? 6.5 : 2.5, last = reverse ? 2.5 : 6.5;
-    const auto a = EvaluateCurve(model, NodeId{4001}, first).value().position;
-    const auto b = EvaluateCurve(model, NodeId{4001}, last).value().position;
-    for (auto& node : f.report.nodes) {
-      if (node.index == 500) node.fields[0].values = {b.x, b.y, b.z};
-      if (node.index == 501) node.fields[0].values = {a.x, a.y, a.z};
-      if (node.index == 4000) {
-        node.fields[0].values = {b.x, b.y, b.z};
-        const auto direction = Unit(Sub(a, b));
-        node.fields[1].values = {direction.x, direction.y, direction.z};
-      }
-    }
-    f.Add(133, 8004,
-          {Pointer("basis_curve", 4001, 1008),
-           Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
-           Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
-           Numbers("parm_1", {first}), Numbers("parm_2", {last}),
-           ByteValue("sense", '+', FieldType::kCharacter)});
-    Set(f, 101, "curve", 8004);
-  }
+  if (partial) f = TrimSplineFace(std::move(f), reverse);
   if (conic) CircleBasis(f, 4000, {0, 0, 0});
   return inward ? ClockwiseHole(std::move(f)) : f;
+}
+inline ModelFixture CubicSplineFace(bool partial = false, bool reverse = false,
+                                    bool inward = false, bool unclamped = false,
+                                    unsigned multiplicity = 0,
+                                    bool elevated = false, double split = .5) {
+  auto f = QuadraticSplineFace(false, reverse, inward, unclamped);
+  std::vector<Vector3> points =
+      elevated ? std::vector<Vector3>{{1, 0, 0},
+                                      {1. / 3, 4. / 3, 0},
+                                      {-1. / 3, 4. / 3, 0},
+                                      {-1, 0, 0}}
+               : std::vector<Vector3>{
+                     {1, 0, 0}, {.5, 2, 0}, {-.5, 1, 0}, {-1, 0, 0}};
+  if (reverse) std::reverse(points.begin(), points.end());
+  if (multiplicity) {
+    const auto blend = [split](Vector3 a, Vector3 b) {
+      return Vector3{std::lerp(a.x, b.x, split), std::lerp(a.y, b.y, split),
+                     std::lerp(a.z, b.z, split)};
+    };
+    const auto p = points[0], q = points[1], r = points[2], s = points[3];
+    const auto a = blend(p, q), b = blend(q, r), c = blend(r, s);
+    points = {p, a, b, c, s};
+    if (multiplicity >= 2) {
+      const auto d = blend(a, b), e = blend(b, c);
+      points = {p, a, d, e, c, s};
+      if (multiplicity == 3) points.insert(points.begin() + 3, blend(d, e));
+    }
+  }
+  std::vector<ScalarValue> controls, knots, mults;
+  for (const auto p : points)
+    for (double value : {p.x, p.y, p.z}) controls.emplace_back(value);
+  if (unclamped) {
+    knots.emplace_back(-1.);
+    mults.emplace_back(int64_t{1});
+  }
+  knots.emplace_back(2.);
+  mults.emplace_back(int64_t{unclamped ? 3 : 4});
+  if (multiplicity) {
+    knots.emplace_back(2 + 5 * split);
+    mults.emplace_back(static_cast<int64_t>(multiplicity));
+  }
+  knots.emplace_back(7.);
+  mults.emplace_back(int64_t{unclamped ? 3 : 4});
+  if (unclamped) {
+    knots.emplace_back(10.);
+    mults.emplace_back(int64_t{1});
+  }
+  for (auto& node : f.report.nodes)
+    if (node.index == 8000) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (fields[i].name == "degree") node.fields[i].values = {int64_t{3}};
+        if (fields[i].name == "n_vertices")
+          node.fields[i].values = {static_cast<int64_t>(points.size())};
+        if (fields[i].name == "n_knots")
+          node.fields[i].values = {static_cast<int64_t>(knots.size())};
+      }
+    }
+  RemoveNode(f, 8001);
+  RemoveNode(f, 8002);
+  RemoveNode(f, 8003);
+  f.Add(45, 8001, {Array("vertices", FieldType::kDouble, std::move(controls))});
+  f.Add(128, 8002, {Array("knots", FieldType::kDouble, std::move(knots))});
+  f.Add(127, 8003,
+        {Array("multiplicities", FieldType::kShort, std::move(mults))});
+  return partial ? TrimSplineFace(std::move(f), reverse) : f;
+}
+inline ModelFixture CubicZeroMiddleFace() {
+  auto f = CubicSplineFace();
+  for (auto& node : f.report.nodes)
+    if (node.index == 8001) {
+      auto& v = node.fields[0].values;
+      v[3] = v[5] = v[6] = v[8] = 0.;
+      v[4] = v[7] = 1.;
+    }
+  return f;
+}
+inline ModelFixture CubicThreeSpanFace(bool partial = false,
+                                       bool reverse = false) {
+  auto f = CubicSplineFace(partial, reverse);
+  // Evaluate the cubic polynomial's blossom at successive knot triples.
+  // This gives a source spline with two distinct C1 joins without reusing the
+  // exporter's restriction algorithm to construct the fixture.
+  const std::array<double, 12> knots{0,   0,   0, 0, .25, .25,
+                                     .75, .75, 1, 1, 1,   1};
+  std::vector<Vector3> points;
+  for (std::size_t i = 0; i < 8; ++i) {
+    const auto a = knots[i + 1], b = knots[i + 2], c = knots[i + 3];
+    const auto sum = a + b + c, pairs = a * b + a * c + b * c,
+               product = a * b * c;
+    points.push_back({1 - .5 * sum - .5 * pairs + product,
+                      2 * sum - 3 * pairs + 3 * product, 0});
+  }
+  if (reverse) std::reverse(points.begin(), points.end());
+  std::vector<ScalarValue> values;
+  for (auto p : points)
+    for (double v : {p.x, p.y, p.z}) values.emplace_back(v);
+  for (auto& node : f.report.nodes)
+    if (node.index == 8000) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (fields[i].name == "n_vertices")
+          node.fields[i].values = {int64_t{8}};
+        if (fields[i].name == "n_knots") node.fields[i].values = {int64_t{4}};
+      }
+    }
+  RemoveNode(f, 8001);
+  RemoveNode(f, 8002);
+  RemoveNode(f, 8003);
+  f.Add(45, 8001, {Array("vertices", FieldType::kDouble, std::move(values))});
+  f.Add(128, 8002, {Array("knots", FieldType::kDouble, {2., 3.25, 5.75, 7.})});
+  f.Add(127, 8003,
+        {Array("multiplicities", FieldType::kShort,
+               {int64_t{4}, int64_t{2}, int64_t{2}, int64_t{4}})});
+  return f;
 }
 inline ModelFixture MultiSpanQuadraticSplineFace(bool repeated = true,
                                                  bool partial = false,

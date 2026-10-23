@@ -40,12 +40,13 @@ Result<StepDocument> Export(const test::ModelFixture& f,
   return ExportBody(model.value(), NodeId{1}, options);
 }
 Result<internal::ConvexBoundary> ValidateSplineFace(
-    const test::ModelFixture& fixture, uint64_t& checks) {
+    const test::ModelFixture& fixture, uint64_t& checks,
+    double tolerance = 1e-7) {
   using Return = Result<internal::ConvexBoundary>;
   const auto built = ModelBuilder::Build(fixture.report);
   if (!built.ok()) return Return::Err(built.error());
   const auto& model = built.value();
-  const auto bound = BindBodyGeometry(model, NodeId{1}, 1e-7);
+  const auto bound = BindBodyGeometry(model, NodeId{1}, tolerance);
   if (!bound.ok()) return Return::Err(bound.error());
   const auto& face = bound.value().faces.front();
   std::vector<internal::PlanarCurve> curves;
@@ -64,7 +65,7 @@ Result<internal::ConvexBoundary> ValidateSplineFace(
       model.geometry()[*model.FindNode(face.surface)->geometry];
   return internal::ValidateConvexPlanarLoop(
       curves, std::get<PlaneGeometry>(surface.payload),
-      face.face_sense == surface.sense, 1e-7, checks);
+      face.face_sense == surface.sense, tolerance, checks);
 }
 void CheckReferences(const StepDocument& document) {
   const std::regex definitions("#([0-9]+)="), references("#([0-9]+)");
@@ -202,7 +203,137 @@ TEST(OpenSwStep, BoundsMultiSpanQuadraticFaceRestrictionAndJoinChecks) {
       EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
     }
 }
-TEST(OpenSwStep, RejectsKinksBetweenQuadraticSplinePieces) {
+TEST(OpenSwStep, ExportsCubicSplineFaceBoundsWithExactAnalyticArea) {
+  for (bool partial : {false, true})
+    for (bool reverse : {false, true})
+      for (bool inward : {false, true})
+        for (bool elevated : {false, true})
+          for (unsigned multiplicity : {0u, 1u, 2u, 3u}) {
+            const auto fixture = test::CubicSplineFace(
+                partial, reverse, inward, false, multiplicity, elevated);
+            const auto result = Export(fixture);
+            ASSERT_TRUE(result.ok()) << result.error().message;
+            EXPECT_EQ(result.value().statistics.faces, 1);
+            EXPECT_EQ(result.value().statistics.edges, 2);
+            EXPECT_EQ(result.value().statistics.vertices, 2);
+            CheckReferences(result.value());
+            uint64_t checks = 10000;
+            const auto area = ValidateSplineFace(fixture, checks);
+            ASSERT_TRUE(area.ok()) << area.error().message;
+            const long double expected =
+                elevated ? (partial ? 256.L / 375 : 4.L / 3)
+                         : (partial ? 12924.L / 15625 : 63.L / 40);
+            EXPECT_NEAR(area.value().area, expected, 1e-14);
+            const auto source = test::Serialize(fixture);
+            const auto binary = ExportParasolid(source.bytes, NodeId{1},
+                                                Options(), &source.catalog);
+            ASSERT_TRUE(binary.ok()) << binary.error().message;
+            EXPECT_EQ(result.value().text, binary.value().text);
+          }
+  for (bool partial : {false, true})
+    for (bool reverse : {false, true}) {
+      const auto fixture =
+          test::CubicSplineFace(partial, reverse, false, true, 2, false, .3);
+      const auto result = Export(fixture);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      const auto oblique_fixture = test::ObliqueSplineFace(fixture);
+      uint64_t checks = 10000;
+      const auto certificate = ValidateSplineFace(oblique_fixture, checks);
+      ASSERT_TRUE(certificate.ok())
+          << "partial=" << partial << " reverse=" << reverse << ": "
+          << certificate.error().message;
+      const auto oblique = Export(oblique_fixture);
+      ASSERT_TRUE(oblique.ok()) << oblique.error().message;
+    }
+}
+TEST(OpenSwStep, BoundsCubicSplineControlAndCurvatureProofs) {
+  for (bool partial : {false, true})
+    for (bool reverse : {false, true}) {
+      const auto fixture = test::CubicThreeSpanFace(partial, reverse);
+      const auto result = Export(fixture);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.edges, 2);
+      uint64_t checks = 10000;
+      const auto area = ValidateSplineFace(fixture, checks);
+      ASSERT_TRUE(area.ok()) << area.error().message;
+      EXPECT_NEAR(area.value().area, partial ? 12924.L / 15625 : 63.L / 40,
+                  1e-14);
+      auto options = Options();
+      options.max_polygon_checks = partial ? 240 : 86;
+      const auto exact = Export(fixture, options);
+      ASSERT_TRUE(exact.ok()) << exact.error().message;
+      --options.max_polygon_checks;
+      const auto limited = Export(fixture, options);
+      ASSERT_FALSE(limited.ok());
+      EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+    }
+  for (unsigned multiplicity : {0u, 1u, 2u, 3u}) {
+    const auto fixture =
+        test::CubicSplineFace(false, false, false, false, multiplicity);
+    auto options = Options();
+    const std::array<uint64_t, 4> costs{9, 52, 43, 32};
+    options.max_polygon_checks = costs[multiplicity];
+    const auto exact = Export(fixture, options);
+    ASSERT_TRUE(exact.ok()) << exact.error().message;
+    --options.max_polygon_checks;
+    const auto limited = Export(fixture, options);
+    ASSERT_FALSE(limited.ok());
+    EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  }
+  auto options = Options();
+  options.max_polygon_checks = 107;
+  const auto exact = Export(test::CubicSplineFace(true), options);
+  ASSERT_TRUE(exact.ok()) << exact.error().message;
+  --options.max_polygon_checks;
+  const auto limited = Export(test::CubicSplineFace(true), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStep, BoundsRoundoffAtKnownContinuousSplineJoins) {
+  const auto fixture = test::ObliqueSplineFace(
+      test::CubicSplineFace(false, false, false, true, 2, false, .3));
+  uint64_t checks = 10000;
+  const auto resolved = ValidateSplineFace(fixture, checks);
+  ASSERT_TRUE(resolved.ok()) << resolved.error().message;
+  checks = 10000;
+  const auto strict = ValidateSplineFace(fixture, checks, 1e-12);
+  ASSERT_FALSE(strict.ok());
+  EXPECT_EQ(strict.error().code, ErrorCode::kUnsupportedFormat);
+  EXPECT_NE(strict.error().message.find("rounding"), std::string::npos);
+}
+TEST(OpenSwStep, CertifiesCubicDerivativeConesBeyondEndpointTurning) {
+  // Equal middle poles are safe: the endpoint derivative controls still
+  // provide a nonzero derivative throughout the open parameter interval.
+  const auto zero = test::CubicZeroMiddleFace();
+  const auto exported = Export(zero);
+  ASSERT_TRUE(exported.ok()) << exported.error().message;
+  uint64_t checks = 1000;
+  const auto area = ValidateSplineFace(zero, checks);
+  ASSERT_TRUE(area.ok());
+  EXPECT_NEAR(area.value().area, 9.L / 10, 1e-14);
+  for (bool reversal : {false, true}) {
+    auto fixture = test::CubicSplineFace();
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 8001) {
+        auto& values = node.fields[0].values;
+        // Both endpoint tangents turn positively, but the middle derivative
+        // control lies outside their cone and introduces an inflection.
+        values[3] = reversal ? -2. : -.8;
+        values[4] = reversal ? 0. : 2.;
+        values[6] = reversal ? 2. : .8;
+        values[7] = reversal ? 0. : 1.;
+      }
+    checks = 1000;
+    const auto certified = ValidateSplineFace(fixture, checks);
+    ASSERT_FALSE(certified.ok());
+    EXPECT_EQ(certified.error().code, ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(certified.error().message.find("tangent cone"),
+              std::string::npos);
+    const auto result = Export(fixture);
+    ASSERT_FALSE(result.ok());
+  }
+}
+TEST(OpenSwStep, RejectsKinksBetweenPolynomialSplinePieces) {
   for (double height : {.75, 1.25}) {
     auto fixture = test::MultiSpanQuadraticSplineFace();
     for (auto& node : fixture.report.nodes)
@@ -216,6 +347,17 @@ TEST(OpenSwStep, RejectsKinksBetweenQuadraticSplinePieces) {
     const auto result = Export(fixture);
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  for (double height : {1.2, 1.3}) {
+    auto fixture = test::CubicSplineFace(false, false, false, false, 3);
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 8001) node.fields[0].values[7] = height;
+    uint64_t checks = 1000;
+    const auto certified = ValidateSplineFace(fixture, checks);
+    ASSERT_FALSE(certified.ok());
+    EXPECT_EQ(certified.error().code, ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(certified.error().message.find("continuous tangent"),
+              std::string::npos);
   }
 }
 TEST(OpenSwStep, BoundsQuadraticSplineFaceChecksAcrossPreparationAndWriting) {
@@ -258,7 +400,7 @@ TEST(OpenSwStep, RejectsUncertifiedQuadraticSplineFacesAndHoleMixtures) {
   ASSERT_FALSE(holes.ok());
   EXPECT_EQ(holes.error().code, ErrorCode::kUnsupportedFormat);
 }
-TEST(OpenSwStep, RejectsRationalAndCubicSplineFaceBounds) {
+TEST(OpenSwStep, RejectsRationalAndHigherDegreeSplineFaceBounds) {
   for (unsigned kind : {0u, 1u}) {
     auto fixture = test::QuadraticSplineFace();
     for (auto& node : fixture.report.nodes)
@@ -271,9 +413,9 @@ TEST(OpenSwStep, RejectsRationalAndCubicSplineFaceBounds) {
           if (kind == 0 && fields[i].name == "vertex_dim")
             node.fields[i].values = {int64_t{4}};
           if (kind == 1 && fields[i].name == "degree")
-            node.fields[i].values = {int64_t{3}};
+            node.fields[i].values = {int64_t{4}};
           if (fields[i].name == "n_vertices")
-            node.fields[i].values = {int64_t{kind == 0 ? 3 : 4}};
+            node.fields[i].values = {int64_t{kind == 0 ? 3 : 5}};
         }
       }
     test::RemoveNode(fixture, 8001);
@@ -285,12 +427,12 @@ TEST(OpenSwStep, RejectsRationalAndCubicSplineFaceBounds) {
     if (kind == 1) {
       fixture.Add(45, 8001,
                   {test::Array("vertices", FieldType::kDouble,
-                               {1., 0., 0., 1. / 3, 4. / 3, 0., -1. / 3, 4. / 3,
+                               {1., 0., 0., .5, 1., 0., 0., 4. / 3, 0., -.5, 1.,
                                 0., -1., 0., 0.})});
       test::RemoveNode(fixture, 8003);
       fixture.Add(127, 8003,
                   {test::Array("multiplicities", FieldType::kShort,
-                               {int64_t{4}, int64_t{4}})});
+                               {int64_t{5}, int64_t{5}})});
     }
     const auto model = ModelBuilder::Build(fixture.report);
     ASSERT_TRUE(model.ok()) << model.error().message;

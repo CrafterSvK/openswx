@@ -61,9 +61,10 @@ struct ExportOptions {
   /// consume one endpoint separation check per interior control point.
   /// Partial or unclamped restriction also charges the original control count
   /// for copying and the new control count at each homogeneous knot insertion.
-  /// Planar quadratic spline bounds consume three control-plane checks per
-  /// Bezier piece and one tangent check per internal join. Each piece
-  /// restriction is charged separately. Face preparation and final edge
+  /// Planar polynomial spline bounds consume one plane check per control;
+  /// cubics additionally consume one derivative-cone check per Bezier piece.
+  /// Both C1 and explicitly verified tangent joins consume one check each. Each
+  /// piece restriction is charged separately. Face preparation and final edge
   /// serialization share this budget, including restriction work in both stages
   /// and the existing corner checks.
   uint64_t max_polygon_checks = 1000000;
@@ -119,7 +120,7 @@ struct StepDocument {
 /// endpoint chord, with tolerance/roundoff clearance. Positive weights then
 /// exclude ambiguous interior occurrences of the edge endpoints. This is not a
 /// wire self-intersection certificate. Periodic or closed spline wires remain
-/// unsupported. The planar quadratic face subset is described below.
+/// unsupported. The planar polynomial face subset is described below.
 /// Supports point-only acorns, and planar
 /// polygon faces with LINE edges, one outer loop and disjoint, nonnested
 /// polygonal and full-circle hole loops. Source loop order does not determine
@@ -147,59 +148,68 @@ struct StepDocument {
 /// unsupported. Planar faces also support a single convex
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
 /// two-edge segments/lenses. A hole-free convex contour may additionally use
-/// polynomial quadratic B_CURVE edges, including smooth multi-span sections.
-/// Each selected knot span is restricted to a Bezier piece for validation;
-/// all three controls must lie in the face plane within length tolerance.
-/// Their convex hull certifies the whole selected curve. Nonnegative tangent
-/// turning shorter than pi excludes derivative reversals. Existing convex
-/// corners and one-full-revolution checks remain in force. Polynomial area is
-/// integrated analytically; no control polygon replaces the source curve.
-/// Internal piece tangent directions must agree within an angular allowance
-/// bounded by 1e-10 radians and the source tolerance/perimeter ratio, divided
-/// across the pieces. Speeds may differ; genuine internal kinks fail
-/// explicitly. Source traversal order determines accumulated area and tangent
-/// turning. The selected spline is serialized once per source edge, preserving
-/// interior knots and multiplicities; validation pieces do not change output
-/// topology. Partial/unclamped source axes use exact knot insertion and
-/// cropping; edge endpoint certificates and source vertex tolerances still
-/// apply. Rational, cubic and kinked spline face bounds and spline holes are
-/// unsupported. Convex LINE/CIRCLE outer contours also support polygonal and
-/// complete circular holes. Circles and polygon vertices are checked against
-/// all supporting tangent half-planes, with two tolerances of clearance.
-/// Convexity contains entire polygon edges and interiors. Shared polygon/disk
-/// checks exclude intersections and nesting. Each circle/outer-edge,
-/// polygon-vertex/outer-edge and circle/circle pair consumes one check,
-/// alongside polygon segment/containment comparisons. Polygonal or complete
-/// circular outer bounds also support convex multi-edge LINE/CIRCLE/ELLIPSE
-/// holes. Analytic, inflated enclosing rectangles conservatively certify
-/// containment and separation; only original curves and analytic areas are
-/// exported. Uncertified envelopes return unsupported-format errors, even for
-/// some valid close contours. Each curved edge consumes one extrema check plus
-/// its corner check; original and envelope-augmented mixed-boundary checks both
-/// share the budget. Planar annular sectors support two concentric circular
-/// arcs joined by two radial lines, including major sectors. Single hole-free
-/// LINE/CIRCLE contours with minor arcs also support concave corners when chord
-/// simplicity, adjacent departure cones and nonadjacent sagitta envelopes
-/// certify separation. These checks can reject valid close contours; exported
-/// curves and areas remain exact source geometry. Other nonconvex planar curved
-/// contours, holes in elliptic/nonconvex curved contours, curved outer contours
-/// with multi-edge curved holes, nonconvex curved holes, uncertified envelopes,
-/// other non-planar trimming contours, spherical pole cuts, apex loops,
-/// explicit seam fins, horn/apple/lemon tori and single-edge elliptical holes
-/// remain unsupported. Paired tolerant edges without a recorded 3D curve can
-/// use an exact constant-profile circular SP_CURVE on a recognized spun torus
-/// and a quadratic polynomial planar SP_CURVE. Whole-span Bernstein bounds
-/// certify radial agreement, monotone azimuth and branch selection. STEP
-/// SURFACE_CURVE retains the original planar PCURVE and the affine-mapped
-/// rotational PCURVE, with the exact rotational circle as its 3D master.
-/// Transmitted positive EDGE tolerances may be honored separately from binding
-/// tolerance; ExportStatistics::length_uncertainty reports the output maximum.
-/// Complete rings can be vertex-free or retain one source seam vertex. Missing
-/// ring intervals use stored trim order only after paired full-turn proof;
-/// generic reader inference remains unchanged. Quadratic ring pcurves with
-/// one inactive exterior knot on each side and endpoint multiplicity two can
-/// be clamped exactly to their natural domain without changing controls or
-/// polynomial pieces. Other periodic layouts, rational/partial-domain or other
+/// polynomial quadratic/cubic B_CURVE edges, including smooth multi-span
+/// sections. Each selected knot span is restricted to a Bezier piece for
+/// validation; all three/four controls must lie in the face plane within length
+/// tolerance. Their convex hull certifies the whole selected curve. Nonnegative
+/// tangent turning shorter than pi excludes derivative reversals. Cubic middle
+/// derivative controls must lie in their ordered endpoint tangent cone;
+/// nonnegative curvature Bernstein coefficients certify the whole piece. Zero
+/// middle controls are allowed when endpoint derivatives remain nonzero. The
+/// sufficient cone certificate can reject other valid convex cubics. Existing
+/// convex corners and one-full-revolution checks remain in force. Polynomial
+/// area is integrated analytically; no control polygon replaces the source
+/// curve. At full-degree knots, internal tangent directions must agree within
+/// an angular allowance bounded by 1e-10 radians and the source
+/// tolerance/perimeter ratio, divided across the pieces. Lower multiplicities
+/// prove C1 continuity; rounded piece tangents must agree with the shared
+/// source derivative within the length tolerance/perimeter ratio divided across
+/// pieces. Its signed roundoff correction changes no source geometry or STEP
+/// uncertainty. Speeds may differ; genuine internal kinks fail explicitly.
+/// Source traversal order determines accumulated area and tangent turning. The
+/// selected spline is serialized once per source edge, preserving interior
+/// knots and multiplicities; validation pieces do not change output topology.
+/// Partial/unclamped source axes use exact knot insertion and cropping; edge
+/// endpoint certificates and source vertex tolerances still apply. Rational
+/// spline face bounds, polynomial degrees above three, internal kinks and
+/// spline holes are unsupported. Convex LINE/CIRCLE outer contours also support
+/// polygonal and complete circular holes. Circles and polygon vertices are
+/// checked against all supporting tangent half-planes, with two tolerances of
+/// clearance. Convexity contains entire polygon edges and interiors. Shared
+/// polygon/disk checks exclude intersections and nesting. Each
+/// circle/outer-edge, polygon-vertex/outer-edge and circle/circle pair consumes
+/// one check, alongside polygon segment/containment comparisons. Polygonal or
+/// complete circular outer bounds also support convex multi-edge
+/// LINE/CIRCLE/ELLIPSE holes. Analytic, inflated enclosing rectangles
+/// conservatively certify containment and separation; only original curves and
+/// analytic areas are exported. Uncertified envelopes return unsupported-format
+/// errors, even for some valid close contours. Each curved edge consumes one
+/// extrema check plus its corner check; original and envelope-augmented
+/// mixed-boundary checks both share the budget. Planar annular sectors support
+/// two concentric circular arcs joined by two radial lines, including major
+/// sectors. Single hole-free LINE/CIRCLE contours with minor arcs also support
+/// concave corners when chord simplicity, adjacent departure cones and
+/// nonadjacent sagitta envelopes certify separation. These checks can reject
+/// valid close contours; exported curves and areas remain exact source
+/// geometry. Other nonconvex planar curved contours, holes in
+/// elliptic/nonconvex curved contours, curved outer contours with multi-edge
+/// curved holes, nonconvex curved holes, uncertified envelopes, other
+/// non-planar trimming contours, spherical pole cuts, apex loops, explicit seam
+/// fins, horn/apple/lemon tori and single-edge elliptical holes remain
+/// unsupported. Paired tolerant edges without a recorded 3D curve can use an
+/// exact constant-profile circular SP_CURVE on a recognized spun torus and a
+/// quadratic polynomial planar SP_CURVE. Whole-span Bernstein bounds certify
+/// radial agreement, monotone azimuth and branch selection. STEP SURFACE_CURVE
+/// retains the original planar PCURVE and the affine-mapped rotational PCURVE,
+/// with the exact rotational circle as its 3D master. Transmitted positive EDGE
+/// tolerances may be honored separately from binding tolerance;
+/// ExportStatistics::length_uncertainty reports the output maximum. Complete
+/// rings can be vertex-free or retain one source seam vertex. Missing ring
+/// intervals use stored trim order only after paired full-turn proof; generic
+/// reader inference remains unchanged. Quadratic ring pcurves with one inactive
+/// exterior knot on each side and endpoint multiplicity two can be clamped
+/// exactly to their natural domain without changing controls or polynomial
+/// pieces. Other periodic layouts, rational/partial-domain or other
 /// fin-specific mappings remain unsupported. Sheet orientation is propagated
 /// across shared edges. Solid export requires one material region with one
 /// closed, connected shell, consistent face-side uses and positive signed

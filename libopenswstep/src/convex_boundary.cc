@@ -74,23 +74,25 @@ long double EllipseTurning(double start, double end, long double major,
   }
   return turning;
 }
-Result<Segment> ReadQuadraticBezier(const NurbsCurveGeometry& bezier,
-                                    const PlaneGeometry& plane,
-                                    const Frame& frame, double tolerance,
-                                    bool forward, uint64_t& remaining_checks) {
+Result<Segment> ReadPolynomialBezier(const NurbsCurveGeometry& bezier,
+                                     const PlaneGeometry& plane,
+                                     const Frame& frame, double tolerance,
+                                     bool forward, uint64_t& remaining_checks) {
   using Return = Result<Segment>;
-  if (bezier.axis.control_count != 3 || bezier.axis.knots.size() != 2)
+  const auto degree = bezier.axis.degree;
+  if ((degree != 2 && degree != 3) || bezier.axis.control_count != degree + 1 ||
+      bezier.axis.knots.size() != 2)
     return Return::Err(Unsupported(
-        "Planar spline bounds require a single quadratic Bezier section"));
-  std::array<Point2, 3> controls;
-  for (std::size_t i = 0; i < controls.size(); ++i) {
+        "Planar spline bounds require quadratic or cubic Bezier sections"));
+  std::array<Point2, 4> controls;
+  for (std::size_t i = 0; i <= degree; ++i) {
     if (!remaining_checks)
       return Return::Err({ErrorCode::kResourceLimit, 0,
                           "Planar spline control check limit exceeded"});
     --remaining_checks;
     const auto& values = bezier.controls.values;
     const Vector3 point{values[i * 3], values[i * 3 + 1], values[i * 3 + 2]};
-    // The polynomial lies in its control hull, so all three controls certify
+    // The polynomial lies in its control hull, so all its controls certify
     // membership of the entire selected curve in the face plane.
     const auto residual = Project(point, plane.origin, plane.normal);
     if (!std::isfinite(residual) || std::abs(residual) > tolerance)
@@ -98,52 +100,85 @@ Result<Segment> ReadQuadraticBezier(const NurbsCurveGeometry& bezier,
           Unsupported("Spline control hull is outside the face plane"));
     controls[i] = frame.Point(point);
   }
-  const auto p = controls[0], q = controls[1], r = controls[2];
+  const auto p = controls[0], q = controls[1];
+  const auto r = controls[degree - 1], s = controls[degree];
   const auto a_length = std::hypot(q.x - p.x, q.y - p.y);
-  const auto b_length = std::hypot(r.x - q.x, r.y - q.y);
+  const auto b_length = std::hypot(s.x - r.x, s.y - r.y);
   if (!std::isfinite(a_length) || !std::isfinite(b_length) || a_length == 0 ||
       b_length == 0)
     return Return::Err(
         Invalid("Planar spline endpoint derivative is degenerate"));
   const Point2 a{(q.x - p.x) / a_length, (q.y - p.y) / a_length};
-  const Point2 b{(r.x - q.x) / b_length, (r.y - q.y) / b_length};
+  const Point2 b{(s.x - r.x) / b_length, (s.y - r.y) / b_length};
   const Point2 u = forward ? a : Point2{-b.x, -b.y};
   const Point2 v = forward ? b : Point2{-a.x, -a.y};
   Segment result{u, v, 0, 0, a_length + b_length};
   result.curvature = std::atan2(Cross(u, v), u.x * v.x + u.y * v.y);
-  // A quadratic derivative interpolates its endpoint derivatives. Turning
-  // shorter than pi excludes an interior reversal without sampling.
+  // Derivative controls must stay in the endpoint tangent cone, shorter than
+  // pi. Quadratics have no intermediate derivative control to check.
   if (!std::isfinite(result.curvature) || result.curvature < 0 ||
       result.curvature >= std::numbers::pi_v<long double> - 1e-10L)
     return Return::Err(
-        Unsupported("Planar quadratic spline bounds require nonnegative "
+        Unsupported("Planar spline bounds require nonnegative "
                     "curvature without reversals"));
+  if (degree == 3) {
+    if (!remaining_checks)
+      return Return::Err({ErrorCode::kResourceLimit, 0,
+                          "Cubic spline derivative-cone limit exceeded"});
+    --remaining_checks;
+    const auto length = std::hypot(r.x - q.x, r.y - q.y);
+    if (!std::isfinite(length))
+      return Return::Err(Invalid("Cubic spline derivative is unrepresentable"));
+    result.length += length;
+    if (length > 0) {
+      const long double direction = forward ? 1 : -1;
+      const Point2 middle{direction * (r.x - q.x) / length,
+                          direction * (r.y - q.y) / length};
+      // Ordered derivative-control directions give nonnegative Bernstein
+      // coefficients for cross(C',C''). Their cone also excludes a zero
+      // interior derivative. A zero middle control is harmless: the two
+      // nonzero endpoint controls have positive basis weights inside (0,1).
+      if (Cross(u, middle) < 0 || Cross(middle, v) < 0 ||
+          middle.x * (u.x + v.x) + middle.y * (u.y + v.y) <= 0)
+        return Return::Err(Unsupported(
+            "Cubic spline derivative controls leave the convex tangent cone"));
+    }
+  }
   const long double sign = forward ? 1 : -1;
-  // Exact integral of x*dy-y*dx for the selected quadratic polynomial.
-  result.area2 = sign * (2 * Cross(p, q) + Cross(p, r) + 2 * Cross(q, r)) / 3;
+  // Exact integral of x*dy-y*dx in the projected Bernstein basis.
+  if (degree == 2)
+    result.area2 = sign * (2 * Cross(p, q) + Cross(p, s) + 2 * Cross(q, s)) / 3;
+  else
+    result.area2 = sign *
+                   (6 * Cross(p, q) + 3 * Cross(p, r) + Cross(p, s) +
+                    3 * Cross(q, r) + 3 * Cross(q, s) + 6 * Cross(r, s)) /
+                   10;
   if (!std::isfinite(result.area2) || !std::isfinite(result.length) ||
       result.length <= tolerance)
     return Return::Err(
         Invalid("Planar spline area or perimeter is unresolved"));
   return Return::Ok(result);
 }
-Result<Segment> ReadQuadraticSegment(const PlanarCurve& curve,
-                                     const PlaneGeometry& plane,
-                                     const Frame& frame, double tolerance,
-                                     uint64_t& remaining_checks) {
+Result<Segment> ReadPolynomialSplineSegment(const PlanarCurve& curve,
+                                            const PlaneGeometry& plane,
+                                            const Frame& frame,
+                                            double tolerance,
+                                            uint64_t& remaining_checks) {
   using Return = Result<Segment>;
   const auto* spline = std::get_if<NurbsCurveGeometry>(curve.geometry);
-  if (!spline || spline->controls.rational || spline->axis.degree != 2)
-    return Return::Err(Unsupported(
-        "Planar spline bounds require polynomial quadratic B_CURVE sections"));
+  if (!spline || spline->controls.rational ||
+      (spline->axis.degree != 2 && spline->axis.degree != 3))
+    return Return::Err(
+        Unsupported("Planar spline bounds require polynomial quadratic or "
+                    "cubic B_CURVE sections"));
   const auto section =
       RestrictNurbsWire(*spline, curve.start, curve.end, remaining_checks);
   if (!section.ok()) return Return::Err(section.error());
   const auto& selected = section.value();
   const bool forward = curve.end > curve.start;
   if (selected.axis.knots.size() == 2)
-    return ReadQuadraticBezier(selected, plane, frame, tolerance, forward,
-                               remaining_checks);
+    return ReadPolynomialBezier(selected, plane, frame, tolerance, forward,
+                                remaining_checks);
 
   // Splitting is a validation operation only: serialization retains one
   // B-spline EDGE_CURVE with its selected source interval and interior knots.
@@ -156,7 +191,7 @@ Result<Segment> ReadQuadraticSegment(const PlanarCurve& curve,
         RestrictNurbsWire(selected, selected.axis.knots[k],
                           selected.axis.knots[k + 1], remaining_checks);
     if (!span.ok()) return Return::Err(span.error());
-    const auto piece = ReadQuadraticBezier(
+    const auto piece = ReadPolynomialBezier(
         span.value(), plane, frame, tolerance, forward, remaining_checks);
     if (!piece.ok()) return Return::Err(piece.error());
     pieces.push_back(piece.value());
@@ -178,6 +213,30 @@ Result<Segment> ReadQuadraticSegment(const PlanarCurve& curve,
                           "Planar spline tangent join limit exceeded"});
     --remaining_checks;
     const auto a = pieces[i - 1].last_tangent, b = pieces[i].first_tangent;
+    const auto knot = forward ? i : count - i;
+    if (selected.axis.multiplicities[knot] < selected.axis.degree) {
+      // The source basis proves C1 continuity here. Compare both rounded
+      // piece tangents with its shared derivative, rather than treating knot
+      // insertion roundoff at large coordinate offsets as a native kink.
+      const auto sample = EvaluateCurve(selected, selected.axis.knots[knot]);
+      if (!sample.ok()) return Return::Err(sample.error());
+      const auto tangent =
+          Tangent(sample.value().first_derivative, frame, forward);
+      if (!tangent.ok()) return Return::Err(tangent.error());
+      const auto t = tangent.value();
+      const auto left = std::atan2(Cross(a, t), a.x * t.x + a.y * t.y);
+      const auto right = std::atan2(Cross(t, b), t.x * b.x + t.y * b.y);
+      const auto rounding_bound =
+          static_cast<long double>(tolerance) / result.length / count;
+      if (!std::isfinite(left) || !std::isfinite(right) ||
+          std::abs(left) + std::abs(right) > rounding_bound)
+        return Return::Err(Unsupported(
+            "Spline piece tangent rounding exceeds source length tolerance"));
+      // This signed correction removes an artificial turn between rounded
+      // restrictions. The source derivative itself is shared and nonzero.
+      result.curvature += left + right;
+      continue;
+    }
     const auto angle = std::atan2(Cross(a, b), a.x * b.x + a.y * b.y);
     if (!std::isfinite(angle) || std::abs(angle) > join_tolerance)
       return Return::Err(Unsupported(
@@ -202,12 +261,12 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
   const auto* ellipse = std::get_if<EllipseGeometry>(curve.geometry);
   const auto* spline = std::get_if<NurbsCurveGeometry>(curve.geometry);
   if (spline)
-    return ReadQuadraticSegment(curve, plane, frame, tolerance,
-                                remaining_checks);
+    return ReadPolynomialSplineSegment(curve, plane, frame, tolerance,
+                                       remaining_checks);
   if (!line && !circle && !ellipse)
     return Return::Err(
         Unsupported("Convex boundaries require LINE/CIRCLE/ELLIPSE or "
-                    "polynomial quadratic B_CURVE bases"));
+                    "polynomial quadratic/cubic B_CURVE bases"));
   const auto first = EvaluateCurve(*curve.geometry, curve.start);
   if (!first.ok()) return Return::Err(first.error());
   const auto last = EvaluateCurve(*curve.geometry, curve.end);
