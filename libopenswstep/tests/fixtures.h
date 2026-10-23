@@ -2370,6 +2370,79 @@ inline ModelFixture ConcaveMinorArcFace(double bottom = 0, double radius = 5) {
   CircleBasis(f, 4004, {2, 2 + std::sqrt(radius * radius - 1), 0}, radius, '-');
   return f;
 }
+inline ModelFixture QuadraticSplineFace(bool partial = false,
+                                        bool reverse = false,
+                                        bool inward = false,
+                                        bool unclamped = false,
+                                        bool conic = false) {
+  auto f = HalfDisk();
+  RemoveNode(f, 4001);
+  f.Add(134, 4001,
+        {Pointer("nurbs", 8000, 136),
+         ByteValue("sense", reverse ? '-' : '+', FieldType::kCharacter)});
+  f.Add(136, 8000,
+        {Integer("degree", 2, FieldType::kShort), Integer("n_vertices", 3),
+         Integer("vertex_dim", 3, FieldType::kShort),
+         Integer("n_knots", unclamped ? 4 : 2), ByteValue("knot_type", 0),
+         Logical("periodic", false), Logical("closed", false),
+         Logical("rational", false), ByteValue("curve_form", 0),
+         Pointer("bspline_vertices", 8001, 45), Pointer("knots", 8002, 128),
+         Pointer("knot_mult", 8003, 127)});
+  f.Add(45, 8001,
+        {Array("vertices", FieldType::kDouble,
+               {reverse ? -1. : 1., 0., 0., 0., 2., 0., reverse ? 1. : -1., 0.,
+                0.})});
+  f.Add(128, 8002,
+        {Array("knots", FieldType::kDouble,
+               unclamped ? std::vector<ScalarValue>{-1., 2., 7., 10.}
+                         : std::vector<ScalarValue>{2., 7.})});
+  f.Add(127, 8003,
+        {Array("multiplicities", FieldType::kShort,
+               unclamped ? std::vector<ScalarValue>{int64_t{1}, int64_t{2},
+                                                    int64_t{2}, int64_t{1}}
+                         : std::vector<ScalarValue>{int64_t{3}, int64_t{3}})});
+  if (partial) {
+    const auto model = ModelBuilder::Build(f.report).value();
+    const double first = reverse ? 6.5 : 2.5, last = reverse ? 2.5 : 6.5;
+    const auto a = EvaluateCurve(model, NodeId{4001}, first).value().position;
+    const auto b = EvaluateCurve(model, NodeId{4001}, last).value().position;
+    for (auto& node : f.report.nodes) {
+      if (node.index == 500) node.fields[0].values = {b.x, b.y, b.z};
+      if (node.index == 501) node.fields[0].values = {a.x, a.y, a.z};
+      if (node.index == 4000) {
+        node.fields[0].values = {b.x, b.y, b.z};
+        const auto direction = Unit(Sub(a, b));
+        node.fields[1].values = {direction.x, direction.y, direction.z};
+      }
+    }
+    f.Add(133, 8004,
+          {Pointer("basis_curve", 4001, 1008),
+           Numbers("point_1", {a.x, a.y, a.z}, FieldType::kVector),
+           Numbers("point_2", {b.x, b.y, b.z}, FieldType::kVector),
+           Numbers("parm_1", {first}), Numbers("parm_2", {last}),
+           ByteValue("sense", '+', FieldType::kCharacter)});
+    Set(f, 101, "curve", 8004);
+  }
+  if (conic) CircleBasis(f, 4000, {0, 0, 0});
+  return inward ? ClockwiseHole(std::move(f)) : f;
+}
+// Rotate spline controls with the same rigid frame as the other source data.
+inline ModelFixture ObliqueQuadraticSplineFace(bool partial = false) {
+  auto f = RotateAndTranslate(QuadraticSplineFace(partial));
+  for (auto& node : f.report.nodes)
+    if (node.index == 8001) {
+      auto& values = node.fields[0].values;
+      for (std::size_t i = 0; i < values.size(); i += 3) {
+        const auto x = std::get<double>(values[i]);
+        const auto y = std::get<double>(values[i + 1]);
+        const auto z = std::get<double>(values[i + 2]);
+        values[i] = y + 1e6;
+        values[i + 1] = z - 2e6;
+        values[i + 2] = x + 3e6;
+      }
+    }
+  return f;
+}
 struct Serialized {
   std::vector<uint8_t> bytes;
   SchemaCatalog catalog;

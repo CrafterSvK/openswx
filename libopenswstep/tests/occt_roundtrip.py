@@ -31,6 +31,18 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "quadratic-face": (2,2,1,0,"area",4/3),
+    "quadratic-face-reversed": (2,2,1,0,"area",4/3),
+    "quadratic-face-inward": (2,2,1,0,"area",4/3),
+    "quadratic-face-reversed-inward": (2,2,1,0,"area",4/3),
+    "quadratic-face-unclamped": (2,2,1,0,"area",4/3),
+    "quadratic-face-partial": (2,2,1,0,"area",256/375),
+    "quadratic-face-partial-reversed": (2,2,1,0,"area",256/375),
+    "quadratic-face-partial-inward": (2,2,1,0,"area",256/375),
+    "quadratic-face-partial-unclamped": (2,2,1,0,"area",256/375),
+    "quadratic-face-oblique": (2,2,1,0,"area",4/3),
+    "quadratic-face-partial-oblique": (2,2,1,0,"area",256/375),
+    "quadratic-face-circle": (2,2,1,0,"area",4/3+math.pi/2),
     "spline-polynomial-unclamped": (2,1,0,0,None,None),
     "spline-polynomial-unclamped-reversed": (2,1,0,0,None,None),
     "spline-rational-unclamped": (2,1,0,0,None,None),
@@ -408,6 +420,33 @@ def check_source_spline(name, shape):
             assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),expected)) < 1e-12, (name,t)
     assert sorted(observed) == sorted(intervals), (name,observed)
 
+def check_quadratic_face(name, shape):
+    edges = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)
+    splines = []
+    for i in range(1,edges.Extent()+1):
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(edges.FindKey(i)))
+        if curve.GetType() == GeomAbs_BSplineCurve:
+            splines.append(curve)
+    assert len(splines) == 1, name
+    curve = splines[0]
+    spline = curve.BSpline()
+    assert spline.Degree() == 2 and spline.NbPoles() == 3, name
+    assert not spline.IsRational(), name
+    low,high = (2.5,6.5) if "partial" in name else (2,7)
+    assert curve.FirstParameter() == low and curve.LastParameter() == high, name
+    for i in range(41):
+        t = low+(high-low)*i/40
+        u = (t-2)/5
+        x,y,z = 1-2*u,4*u*(1-u),0
+        if "reversed" in name:
+            x = -x
+        if "oblique" in name:
+            x,y,z = y+1e6,z-2e6,x+3e6
+        actual = curve.Value(t)
+        tolerance = 1e-9 if "oblique" in name else 1e-12
+        assert max(abs(a-b) for a,b in zip((actual.X(),actual.Y(),actual.Z()),(x,y,z))) < tolerance, (name,t)
+
 with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
     subprocess.run([sys.argv[1], directory], check=True)
     for name, expected in CASES.items():
@@ -423,6 +462,8 @@ with tempfile.TemporaryDirectory(prefix="openswstep-occt-") as directory:
             assert topology.Extent() == count, (name, kind, topology.Extent(), count)
         if name.startswith("spline-"):
             check_source_spline(name, shape)
+        if name.startswith("quadratic-face"):
+            check_quadratic_face(name, shape)
         if name in SOURCE_TOLERANT_CIRCLE_RADII:
             edges = TopTools_IndexedMapOfShape()
             TopExp.MapShapes_s(shape, TopAbs_EDGE, edges)

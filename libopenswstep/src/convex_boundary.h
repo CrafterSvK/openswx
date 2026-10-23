@@ -11,7 +11,7 @@
 #include "openparasolid/model.h"
 
 namespace openswstep::internal {
-// Borrowed analytic basis and directed natural parameters for one source fin.
+// Borrowed curve basis and directed natural parameters for one source fin.
 struct PlanarCurve {
   const openparasolid::GeometryPayload* geometry;
   double start;
@@ -25,10 +25,13 @@ struct ConvexBoundary {
   long double area;
   openparasolid::Vector3 reference_point;
 };
-// Checks one closed convex LINE/CIRCLE/ELLIPSE loop, with topology and endpoint
-// closure already established by body binding. Nonnegative directed curvature
-// and corner turns must total one revolution. Each corner consumes one shared
-// comparison check. No polygonal approximation is constructed.
+// Checks one closed convex LINE/CIRCLE/ELLIPSE/polynomial quadratic Bezier
+// loop, with topology and endpoint closure already established by body binding.
+// Nonnegative directed curvature and corner turns must total one revolution.
+// Each corner consumes one shared comparison check. Each spline restricts its
+// selected interval and checks all three controls against the plane using the
+// shared budget. Polynomial area and tangent turning are analytic. No polygonal
+// approximation is constructed.
 [[nodiscard]] openparasolid::Result<ConvexBoundary> ValidateConvexPlanarLoop(
     std::span<const PlanarCurve> curves,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,

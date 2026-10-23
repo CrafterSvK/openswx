@@ -3,11 +3,13 @@
 #include "convex_boundary.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <numbers>
 #include <vector>
 
+#include "nurbs_wire.h"
 #include "openparasolid/evaluate.h"
 #include "planar_boundary.h"
 
@@ -72,9 +74,71 @@ long double EllipseTurning(double start, double end, long double major,
   }
   return turning;
 }
+Result<Segment> ReadQuadraticSegment(const PlanarCurve& curve,
+                                     const PlaneGeometry& plane,
+                                     const Frame& frame, double tolerance,
+                                     uint64_t& remaining_checks) {
+  using Return = Result<Segment>;
+  const auto* spline = std::get_if<NurbsCurveGeometry>(curve.geometry);
+  if (!spline || spline->controls.rational || spline->axis.degree != 2)
+    return Return::Err(Unsupported(
+        "Planar spline bounds require polynomial quadratic Bezier sections"));
+  const auto section =
+      RestrictNurbsWire(*spline, curve.start, curve.end, remaining_checks);
+  if (!section.ok()) return Return::Err(section.error());
+  const auto& bezier = section.value();
+  if (bezier.axis.control_count != 3 || bezier.axis.knots.size() != 2)
+    return Return::Err(Unsupported(
+        "Planar spline bounds require a single quadratic Bezier section"));
+  std::array<Point2, 3> controls;
+  for (std::size_t i = 0; i < controls.size(); ++i) {
+    if (!remaining_checks)
+      return Return::Err({ErrorCode::kResourceLimit, 0,
+                          "Planar spline control check limit exceeded"});
+    --remaining_checks;
+    const auto& values = bezier.controls.values;
+    const Vector3 point{values[i * 3], values[i * 3 + 1], values[i * 3 + 2]};
+    // The polynomial lies in its control hull, so all three controls certify
+    // membership of the entire selected curve in the face plane.
+    const auto residual = Project(point, plane.origin, plane.normal);
+    if (!std::isfinite(residual) || std::abs(residual) > tolerance)
+      return Return::Err(
+          Unsupported("Spline control hull is outside the face plane"));
+    controls[i] = frame.Point(point);
+  }
+  const auto p = controls[0], q = controls[1], r = controls[2];
+  const auto a_length = std::hypot(q.x - p.x, q.y - p.y);
+  const auto b_length = std::hypot(r.x - q.x, r.y - q.y);
+  if (!std::isfinite(a_length) || !std::isfinite(b_length) || a_length == 0 ||
+      b_length == 0)
+    return Return::Err(
+        Invalid("Planar spline endpoint derivative is degenerate"));
+  const Point2 a{(q.x - p.x) / a_length, (q.y - p.y) / a_length};
+  const Point2 b{(r.x - q.x) / b_length, (r.y - q.y) / b_length};
+  const Point2 u = curve.end > curve.start ? a : Point2{-b.x, -b.y};
+  const Point2 v = curve.end > curve.start ? b : Point2{-a.x, -a.y};
+  Segment result{u, v, 0, 0, a_length + b_length};
+  result.curvature = std::atan2(Cross(u, v), u.x * v.x + u.y * v.y);
+  // A quadratic derivative interpolates its endpoint derivatives. Turning
+  // shorter than pi excludes an interior reversal without sampling.
+  if (!std::isfinite(result.curvature) || result.curvature < 0 ||
+      result.curvature >= std::numbers::pi_v<long double> - 1e-10L)
+    return Return::Err(
+        Unsupported("Planar quadratic spline bounds require nonnegative "
+                    "curvature without reversals"));
+  const long double sign = curve.end > curve.start ? 1 : -1;
+  // Exact integral of x*dy-y*dx for the selected quadratic polynomial.
+  result.area2 = sign * (2 * Cross(p, q) + Cross(p, r) + 2 * Cross(q, r)) / 3;
+  if (!std::isfinite(result.area2) || !std::isfinite(result.length) ||
+      result.length <= tolerance)
+    return Return::Err(
+        Invalid("Planar spline area or perimeter is unresolved"));
+  return Return::Ok(result);
+}
 Result<Segment> ReadSegment(const PlanarCurve& curve,
                             const PlaneGeometry& plane, const Frame& frame,
-                            double tolerance, bool convex = true) {
+                            double tolerance, uint64_t& remaining_checks,
+                            bool convex = true) {
   using Return = Result<Segment>;
   if (!curve.geometry || !std::isfinite(curve.start) ||
       !std::isfinite(curve.end) || curve.start == curve.end)
@@ -83,9 +147,14 @@ Result<Segment> ReadSegment(const PlanarCurve& curve,
   const auto* line = std::get_if<LineGeometry>(curve.geometry);
   const auto* circle = std::get_if<CircleGeometry>(curve.geometry);
   const auto* ellipse = std::get_if<EllipseGeometry>(curve.geometry);
+  const auto* spline = std::get_if<NurbsCurveGeometry>(curve.geometry);
+  if (spline)
+    return ReadQuadraticSegment(curve, plane, frame, tolerance,
+                                remaining_checks);
   if (!line && !circle && !ellipse)
-    return Return::Err(Unsupported(
-        "Convex curved boundaries require LINE/CIRCLE/ELLIPSE bases"));
+    return Return::Err(
+        Unsupported("Convex boundaries require LINE/CIRCLE/ELLIPSE or "
+                    "polynomial quadratic B_CURVE bases"));
   const auto first = EvaluateCurve(*curve.geometry, curve.start);
   if (!first.ok()) return Return::Err(first.error());
   const auto last = EvaluateCurve(*curve.geometry, curve.end);
@@ -242,7 +311,8 @@ Result<ConvexBoundary> ValidateConvexPlanarLoop(
   segments.reserve(curves.size());
   long double area2 = 0, perimeter = 0, turning = 0;
   for (const auto& curve : curves) {
-    const auto segment = ReadSegment(curve, plane, frame, tolerance);
+    const auto segment =
+        ReadSegment(curve, plane, frame, tolerance, remaining_checks);
     if (!segment.ok()) return Return::Err(segment.error());
     segments.push_back(segment.value());
     area2 += segment.value().area2;
@@ -312,7 +382,8 @@ Result<ConvexBoundary> ValidateMinorArcPlanarLoop(
   std::vector<long double> sagitta, departure;
   long double area2 = 0, perimeter = 0;
   for (const auto& curve : curves) {
-    const auto segment = ReadSegment(curve, plane, frame, tolerance, false);
+    const auto segment =
+        ReadSegment(curve, plane, frame, tolerance, remaining_checks, false);
     if (!segment.ok()) return Return::Err(segment.error());
     const auto a = EvaluateCurve(*curve.geometry, curve.start);
     const auto b = EvaluateCurve(*curve.geometry, curve.end);

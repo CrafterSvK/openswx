@@ -16,6 +16,7 @@
 #include "../../libopenswx/tests/test_helpers.h"
 #include "../src/annular_boundary.h"
 #include "../src/cone_patch.h"
+#include "../src/convex_boundary.h"
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
 #include "../src/nurbs_wire.h"
@@ -84,6 +85,167 @@ TEST(OpenSwStep, ExportsSheetAndLineWireDeterministically) {
       wire.value().text.find("EDGE_BASED_WIREFRAME_SHAPE_REPRESENTATION("),
       std::string::npos);
   CheckReferences(wire.value());
+}
+TEST(OpenSwStep, ExportsPlanarQuadraticSplineBoundsWithSourceEdges) {
+  for (bool partial : {false, true})
+    for (bool reverse : {false, true})
+      for (bool inward : {false, true})
+        for (bool unclamped : {false, true}) {
+          const auto fixture =
+              test::QuadraticSplineFace(partial, reverse, inward, unclamped);
+          const auto result = Export(fixture);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          EXPECT_EQ(result.value().statistics.faces, 1);
+          EXPECT_EQ(result.value().statistics.edges, 2);
+          EXPECT_EQ(result.value().statistics.vertices, 2);
+          EXPECT_EQ(result.value().statistics.solids, 0);
+          EXPECT_NE(result.value().text.find("B_SPLINE_CURVE_WITH_KNOTS("),
+                    std::string::npos);
+          CheckReferences(result.value());
+          const auto source = test::Serialize(fixture);
+          const auto binary = ExportParasolid(source.bytes, NodeId{1},
+                                              Options(), &source.catalog);
+          ASSERT_TRUE(binary.ok()) << binary.error().message;
+          EXPECT_EQ(result.value().text, binary.value().text);
+        }
+  for (bool partial : {false, true}) {
+    const auto oblique = Export(test::ObliqueQuadraticSplineFace(partial));
+    ASSERT_TRUE(oblique.ok()) << oblique.error().message;
+  }
+  const auto mixed =
+      Export(test::QuadraticSplineFace(false, false, false, false, true));
+  ASSERT_TRUE(mixed.ok()) << mixed.error().message;
+}
+TEST(OpenSwStep, IntegratesQuadraticSplineFaceAreaAnalytically) {
+  for (bool partial : {false, true})
+    for (bool reverse : {false, true})
+      for (bool inward : {false, true}) {
+        const auto model =
+            ModelBuilder::Build(
+                test::QuadraticSplineFace(partial, reverse, inward).report)
+                .value();
+        const auto bound = BindBodyGeometry(model, NodeId{1}, 1e-7);
+        ASSERT_TRUE(bound.ok()) << bound.error().message;
+        const auto& face = bound.value().faces.front();
+        std::vector<internal::PlanarCurve> curves;
+        for (const auto& fin : face.loops.front().fins) {
+          auto id = fin.curve;
+          const GeometryPayload* geometry = nullptr;
+          while (true) {
+            geometry = &model.geometry()[*model.FindNode(id)->geometry].payload;
+            const auto* trim = std::get_if<TrimmedCurveGeometry>(geometry);
+            if (!trim) break;
+            id = trim->basis_curve;
+          }
+          curves.push_back({geometry, fin.start, fin.end});
+        }
+        const auto& plane = std::get<PlaneGeometry>(
+            model.geometry()[*model.FindNode(face.surface)->geometry].payload);
+        uint64_t checks = 1000;
+        const auto area = internal::ValidateConvexPlanarLoop(
+            curves, plane, !inward, 1e-7, checks);
+        ASSERT_TRUE(area.ok()) << area.error().message;
+        EXPECT_NEAR(area.value().area, partial ? 256.L / 375 : 4.L / 3, 1e-14);
+      }
+}
+TEST(OpenSwStep, BoundsQuadraticSplineFaceChecksAcrossPreparationAndWriting) {
+  for (bool partial : {false, true}) {
+    const auto fixture = test::QuadraticSplineFace(partial);
+    const auto baseline = Export(fixture);
+    ASSERT_TRUE(baseline.ok());
+    auto options = Options();
+    // Full: three plane checks, two corners and one endpoint-hull check.
+    // Partial: both preparation and serialization also restrict the source.
+    options.max_polygon_checks = partial ? 56 : 6;
+    const auto exact = Export(fixture, options);
+    ASSERT_TRUE(exact.ok()) << exact.error().message;
+    EXPECT_EQ(exact.value().text, baseline.value().text);
+    --options.max_polygon_checks;
+    const auto limited = Export(fixture, options);
+    ASSERT_FALSE(limited.ok());
+    EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  }
+}
+TEST(OpenSwStep, RejectsUncertifiedQuadraticSplineFacesAndHoleMixtures) {
+  for (int change = 0; change < 4; ++change) {
+    auto fixture = test::QuadraticSplineFace();
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 8001) {
+        auto& controls = node.fields[0].values;
+        if (change == 0) controls[4] = -2.;     // Concave source orientation.
+        if (change == 1) controls[5] = 1.5e-7;  // Hull outside plane tolerance.
+        if (change == 2) {                      // Zero endpoint derivative.
+          controls[3] = 1.;
+          controls[4] = 0.;
+        }
+        if (change == 3) controls[4] = 0.;  // Zero-area boundary.
+      }
+    const auto result = Export(fixture);
+    EXPECT_FALSE(result.ok());
+  }
+  const auto holes = Export(
+      test::WithCircularHole(test::QuadraticSplineFace(), {0, .5, 0}, .1));
+  ASSERT_FALSE(holes.ok());
+  EXPECT_EQ(holes.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, RejectsRationalCubicAndMultiPieceSplineFaceBounds) {
+  for (unsigned kind : {0u, 1u, 2u}) {
+    auto fixture = test::QuadraticSplineFace();
+    for (auto& node : fixture.report.nodes)
+      if (node.index == 8000) {
+        const auto& fields =
+            fixture.report.schemas[node.schema_index].definition.fields;
+        for (std::size_t i = 0; i < fields.size(); ++i) {
+          if (kind == 0 && fields[i].name == "rational")
+            node.fields[i].values = {true};
+          if (kind == 0 && fields[i].name == "vertex_dim")
+            node.fields[i].values = {int64_t{4}};
+          if (kind == 1 && fields[i].name == "degree")
+            node.fields[i].values = {int64_t{3}};
+          if (fields[i].name == "n_vertices")
+            node.fields[i].values = {int64_t{kind == 0   ? 3
+                                             : kind == 1 ? 4
+                                                         : 5}};
+          if (kind == 2 && fields[i].name == "n_knots")
+            node.fields[i].values = {int64_t{3}};
+        }
+      }
+    test::RemoveNode(fixture, 8001);
+    if (kind == 0)
+      fixture.Add(
+          45, 8001,
+          {test::Array("vertices", FieldType::kDouble,
+                       {1., 0., 0., 1., 0., 2., 0., 1., -1., 0., 0., 1.})});
+    if (kind == 1) {
+      fixture.Add(45, 8001,
+                  {test::Array("vertices", FieldType::kDouble,
+                               {1., 0., 0., 1. / 3, 4. / 3, 0., -1. / 3, 4. / 3,
+                                0., -1., 0., 0.})});
+      test::RemoveNode(fixture, 8003);
+      fixture.Add(127, 8003,
+                  {test::Array("multiplicities", FieldType::kShort,
+                               {int64_t{4}, int64_t{4}})});
+    }
+    if (kind == 2) {
+      fixture.Add(45, 8001,
+                  {test::Array("vertices", FieldType::kDouble,
+                               {1., 0., 0., .5, 1., 0., 0., 1., 0., -.5, 1., 0.,
+                                -1., 0., 0.})});
+      test::RemoveNode(fixture, 8002);
+      test::RemoveNode(fixture, 8003);
+      fixture.Add(128, 8002,
+                  {test::Array("knots", FieldType::kDouble, {2., 4.5, 7.})});
+      fixture.Add(127, 8003,
+                  {test::Array("multiplicities", FieldType::kShort,
+                               {int64_t{3}, int64_t{2}, int64_t{3}})});
+    }
+    const auto model = ModelBuilder::Build(fixture.report);
+    ASSERT_TRUE(model.ok()) << model.error().message;
+    ASSERT_TRUE(BindBodyGeometry(model.value(), NodeId{1}, 1e-7).ok());
+    const auto result = ExportBody(model.value(), NodeId{1}, Options());
+    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+  }
 }
 TEST(OpenSwStep, ExportsExactPolynomialAndRationalSplineWires) {
   for (bool rational : {false, true})

@@ -61,6 +61,9 @@ struct ExportOptions {
   /// consume one endpoint separation check per interior control point.
   /// Partial or unclamped restriction also charges the original control count
   /// for copying and the new control count at each homogeneous knot insertion.
+  /// Planar quadratic spline bounds additionally consume three control-plane
+  /// checks. Face preparation and final edge serialization share this budget,
+  /// including restriction work in both stages and the existing corner checks.
   uint64_t max_polygon_checks = 1000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
@@ -113,8 +116,9 @@ struct StepDocument {
 /// control points must lie strictly between the endpoint planes normal to the
 /// endpoint chord, with tolerance/roundoff clearance. Positive weights then
 /// exclude ambiguous interior occurrences of the edge endpoints. This is not a
-/// wire self-intersection certificate. Periodic or closed splines and B-spline
-/// face boundaries remain unsupported. Supports point-only acorns, and planar
+/// wire self-intersection certificate. Periodic or closed spline wires remain
+/// unsupported. The planar quadratic face subset is described below.
+/// Supports point-only acorns, and planar
 /// polygon faces with LINE edges, one outer loop and disjoint, nonnested
 /// polygonal and full-circle hole loops. Source loop order does not determine
 /// the outer loop. Planar faces also support one-edge full CIRCLE/ELLIPSE disks
@@ -140,7 +144,17 @@ struct StepDocument {
 /// Bounded generators, tilted/skew circle planes and other generators remain
 /// unsupported. Planar faces also support a single convex
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
-/// two-edge segments/lenses. Convex LINE/CIRCLE outer contours also support
+/// two-edge segments/lenses. A hole-free convex contour may additionally use
+/// polynomial quadratic B_CURVE edges, each selecting one Bezier section.
+/// All three controls must lie in the face plane within length tolerance;
+/// their convex hull certifies the whole selected curve. Nonnegative tangent
+/// turning shorter than pi excludes derivative reversals. Existing convex
+/// corners and one-full-revolution checks remain in force. Polynomial area is
+/// integrated analytically; no control polygon replaces the source curve.
+/// Partial/unclamped source axes use exact knot insertion and cropping; edge
+/// endpoint certificates and source vertex tolerances still apply. Rational,
+/// cubic and multi-piece spline face bounds and spline holes are unsupported.
+/// Convex LINE/CIRCLE outer contours also support
 /// polygonal and complete circular holes. Circles and polygon vertices are
 /// checked against all supporting tangent half-planes, with two tolerances of
 /// clearance. Convexity contains entire polygon edges and interiors. Shared
