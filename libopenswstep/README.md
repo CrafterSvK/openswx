@@ -349,6 +349,14 @@ STEP retains the original circular arcs and analytic source-curve area.
 Concave elliptic contours and nonconvex curved contours with holes remain
 unsupported.
 
+The minor-arc fallback is selected only for at least three `LINE`/`CIRCLE`
+edges. If an ellipse or spline excludes that route, the original convex-loop
+diagnostic is retained together with the first ineligible source curve's node,
+resolved basis type and edge node. A fallback type restriction is not evidence
+that the original contour is invalid, and does not replace the original
+curvature, corner or spline restriction. The body still fails as a whole;
+neither tolerances nor source geometry are changed.
+
 Complete cylindrical bands use two circular cut loops at distinct axial
 levels. Their radii, axis alignment, centre positions and opposite winding are
 checked analytically, including whole-circle axial variation beyond the binding

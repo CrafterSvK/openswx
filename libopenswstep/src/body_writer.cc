@@ -7,6 +7,7 @@
 #include <numbers>
 #include <optional>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -634,10 +635,29 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   auto boundary =
       ValidateConvexPlanarLoop(curves, *face.plane, face.natural_sense,
                                options_.tolerance, polygon_checks_remaining_);
-  if (!boundary.ok() && boundary.error().code == ErrorCode::kUnsupportedFormat)
-    boundary = ValidateMinorArcPlanarLoop(
-        curves, *face.plane, face.natural_sense, options_.tolerance,
-        polygon_checks_remaining_);
+  if (!boundary.ok() && boundary.error().code == ErrorCode::kUnsupportedFormat) {
+    // The minor-arc certificate cannot validate ellipses or splines. Keep the
+    // original failure instead of replacing it with an inapplicable route's
+    // type restriction, and identify the source curve for further inspection.
+    for (std::size_t i = 0; i < curves.size(); ++i) {
+      const auto& geometry = *curves[i].geometry;
+      if (std::holds_alternative<LineGeometry>(geometry) ||
+          std::holds_alternative<CircleGeometry>(geometry))
+        continue;
+      const auto& fin = face.source->loops[outer_index].fins[i];
+      const auto message =
+          boundary.error().message +
+          "; minor-arc fallback unavailable for source curve " +
+          std::to_string(fin.curve.value) + " (" + GeometryName(geometry) +
+          "), edge " + std::to_string(fin.use.edge.value);
+      return Result<bool>::Err(Error(face.source->face, boundary.error().code,
+                                     message.c_str()));
+    }
+    if (curves.size() >= 3)
+      boundary = ValidateMinorArcPlanarLoop(
+          curves, *face.plane, face.natural_sense, options_.tolerance,
+          polygon_checks_remaining_);
+  }
   if (!boundary.ok())
     return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                    boundary.error().message.c_str()));

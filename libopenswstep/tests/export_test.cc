@@ -549,6 +549,16 @@ TEST(OpenSwStep, RejectsRationalAndHigherDegreeSplineFaceBounds) {
     const auto result = ExportBody(model.value(), NodeId{1}, Options());
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    EXPECT_NE(result.error().message.find(
+                  "Planar spline bounds require polynomial quadratic or cubic "
+                  "B_CURVE sections"),
+              std::string::npos);
+    EXPECT_NE(result.error().message.find(
+                  "source curve 4001 (nurbs_curve), edge 101"),
+              std::string::npos);
+    EXPECT_EQ(result.error().message.find(
+                  "Minor-arc boundary requires LINE/CIRCLE bases"),
+              std::string::npos);
   }
 }
 TEST(OpenSwStep, ExportsExactPolynomialAndRationalSplineWires) {
@@ -3539,6 +3549,32 @@ TEST(OpenSwStep, BoundsConvexCornerChecksAndRejectsConcaveOrRepeatedTurns) {
   const auto repeated = Export(test::SplitCircle(true));
   ASSERT_FALSE(repeated.ok());
   EXPECT_EQ(repeated.error().code, ErrorCode::kInvalidRecord);
+}
+TEST(OpenSwStep, RetainsConvexFailureForIneligibleEllipticFallback) {
+  const auto fixture = test::EllipticProfile(test::ConcaveArcFace());
+  uint64_t checks = 1000;
+  const auto convex = ValidateSplineFace(fixture, checks);
+  ASSERT_FALSE(convex.ok());
+  ASSERT_EQ(convex.error().code, ErrorCode::kUnsupportedFormat);
+  const auto result = Export(fixture);
+  ASSERT_FALSE(result.ok());
+  EXPECT_EQ(result.error().code, convex.error().code);
+  EXPECT_EQ(result.error().message.find("STEP node 300: " +
+                                      convex.error().message),
+            0);
+  EXPECT_NE(result.error().message.find(
+                "source curve 4004 (ellipse), edge 104"),
+            std::string::npos);
+  EXPECT_EQ(result.error().message.find(
+                "Minor-arc boundary requires LINE/CIRCLE bases"),
+            std::string::npos);
+  const auto binary = test::Serialize(fixture);
+  const auto parsed =
+      ExportParasolid(binary.bytes, NodeId{1}, Options(), &binary.catalog);
+  ASSERT_FALSE(parsed.ok());
+  EXPECT_EQ(parsed.error().code, result.error().code);
+  EXPECT_EQ(parsed.error().message, result.error().message);
+  EXPECT_GT(parsed.error().offset, 0);
 }
 TEST(OpenSwStep, HandlesConvexArcsOnTranslatedAndNegativelySensedPlanes) {
   auto negative = test::RoundedRectangle();
