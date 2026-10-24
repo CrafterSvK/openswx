@@ -176,7 +176,10 @@ struct FinGeometryEvaluation {
 /// ordered by fin sense, even for closed/vertex-free edges. Stored trim points
 /// must match curve samples. With solver settings, direct intersections use
 /// stored chart matches or bounded chord-plane parameter recovery, verified by
-/// solved 3D curve membership. Closed/missing endpoints and ambiguous or
+/// solved 3D curve membership. A shared H limit and complete chart returning
+/// once to that help seam establish a closed accurate intersection's period;
+/// known curve/fin senses determine direction. A single endpoint vertex must
+/// coincide with that seam. Other closed/missing endpoints and ambiguous or
 /// unrecoverable parameters require explicit intervals.
 /// Accurate edge orientation must agree with curve sense. Fin trims require
 /// unambiguous vertex correspondence. Conics select one directed arc, or a full

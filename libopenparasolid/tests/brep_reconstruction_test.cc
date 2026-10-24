@@ -336,6 +336,104 @@ TEST(ParasolidChartFinIntervals,
     EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
   }
 }
+ModelFixture HelpClosedIntersectionFace(bool vertex_free, bool negative_basis,
+                                        bool reverse_fin) {
+  constexpr std::size_t kSegments = 16;
+  std::vector<Vector3> points;
+  for (std::size_t i = 0; i < kSegments; ++i) {
+    const double angle = 2 * std::numbers::pi * static_cast<double>(i) /
+                         static_cast<double>(kSegments);
+    points.push_back({std::cos(angle), std::sin(angle), 0});
+  }
+  points.push_back(points.front());
+  auto f = IntersectionFace(false, true, points);
+  Set(f, 401, "end", 403);
+  Set(f, 403, "type", 'H');
+  Set(f, 401, "sense", negative_basis ? '-' : '+');
+  Set(f, 10, "sense", reverse_fin ? '-' : '+');
+  Set(f, 11, "sense", reverse_fin ? '+' : '-');
+  Set(f, 2, "halfedge", reverse_fin ? 11 : 10);
+  Set(f, 10, "vertex", vertex_free ? 0 : 100);
+  Set(f, 11, "vertex", vertex_free ? 0 : 100);
+  Set(f, 10, "forward", 10);
+  Set(f, 10, "backward", 10);
+  Set(f, 11, "loop", 0);
+  Set(f, 11, "forward", 0);
+  Set(f, 11, "backward", 0);
+  for (auto& node : f.report.nodes) {
+    if (node.index != 402) continue;
+    const auto& fields = f.report.schemas[node.schema_index].definition.fields;
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+      if (fields[i].name == "base_parameter") node.fields[i].values[0] = 5.25;
+      if (fields[i].name == "base_scale") node.fields[i].values[0] = 2.4;
+    }
+  }
+  return f;
+}
+TEST(ParasolidChartFinIntervals, BindsCompleteHelpClosedChartInSourceUnits) {
+  for (bool vertex_free : {false, true}) {
+    for (bool negative : {false, true}) {
+      for (bool reverse : {false, true}) {
+        const auto fixture =
+            HelpClosedIntersectionFace(vertex_free, negative, reverse);
+        const auto model = ModelBuilder::Build(fixture.report);
+        ASSERT_TRUE(model.ok()) << model.error().message;
+        const auto result =
+            BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                             IntersectionEvaluationOptions{1e-12, 1e-12});
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        const auto& fin = result.value().loops[0].fins[0];
+        const double start = 5.25;
+        const double end =
+            start + 16 * 2 * std::sin(std::numbers::pi / 16) * 2.4;
+        const bool increasing = negative == reverse;
+        EXPECT_NEAR(fin.start, increasing ? start : end, 1e-12);
+        EXPECT_NEAR(fin.end, increasing ? end : start, 1e-12);
+        for (double fraction : {0., .25, .5, .75, 1.}) {
+          const auto sample =
+              EvaluateBoundFin(model.value(), fin, fraction, 1e-12);
+          ASSERT_TRUE(sample.ok()) << sample.error().message;
+          const double angle =
+              (increasing ? 1 : -1) * 2 * std::numbers::pi * fraction;
+          EXPECT_NEAR(sample.value().curve.position.x, std::cos(angle), 1e-12);
+          EXPECT_NEAR(sample.value().curve.position.y, std::sin(angle), 1e-12);
+          EXPECT_NEAR(sample.value().curve.position.z, 0, 1e-12);
+        }
+      }
+    }
+  }
+}
+TEST(ParasolidChartFinIntervals, RejectsUnprovenClosedChartPeriods) {
+  for (int mode = 0; mode < 7; ++mode) {
+    auto fixture = HelpClosedIntersectionFace(true, false, false);
+    if (mode == 0) Set(fixture, 401, "end", 404);
+    if (mode == 1) Set(fixture, 403, "type", 'L');
+    if (mode == 2) Set(fixture, 401, "sense", '?');
+    if (mode == 3) Set(fixture, 10, "curve", 401);
+    for (auto& node : fixture.report.nodes) {
+      if (node.index != 402) continue;
+      const auto& fields =
+          fixture.report.schemas[node.schema_index].definition.fields;
+      for (std::size_t i = 0; i < fields.size(); ++i) {
+        if (fields[i].name != "positions") continue;
+        auto& field = node.fields[i];
+        if (mode == 4) field.values[field.values.size() - 3] = .99;
+        if (mode == 5) {
+          field.values[3] = 1.;
+          field.values[4] = 0.;
+          field.values[5] = 0.;
+        }
+        if (mode == 6) field.values[2] = .01;
+      }
+    }
+    const auto model = ModelBuilder::Build(fixture.report);
+    ASSERT_TRUE(model.ok()) << model.error().message;
+    const auto result =
+        BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                         IntersectionEvaluationOptions{1e-12, 1e-12});
+    ASSERT_FALSE(result.ok()) << mode;
+  }
+}
 TEST(ParasolidChordFinIntervals,
      RecoversCurvedInteriorPointsInOriginalChartUnits) {
   auto f = IntersectionFace(false, true);

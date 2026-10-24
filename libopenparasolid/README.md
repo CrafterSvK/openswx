@@ -3155,3 +3155,13 @@ The small center-on-axis classification threshold supplies only an initial
 guess, not a relaxed acceptance tolerance. General horn/spindle rings, unbounded
 spherical profiles, non-polar half-turns and repeated meridians remain unsupported.
 The evaluator's auxiliary nullable `scale`/frame metadata is not reinterpreted.
+
+### Complete closed intersection charts
+
+Accurate, vertex-free or single-seam-vertex INTERSECTION edges can infer one full
+source-chart interval when both limits reference the same `H` help point and
+the complete chart returns to that seam exactly once. Chart surface membership,
+natural parameter recurrence, seam tangent agreement, optional seam vertex and
+known edge/curve/fin direction are checked. No normalized parameter range or
+conic period is substituted for the source chart. Unknown limits, partial charts,
+repeated help seams and tolerant fin curves still require explicit intervals.

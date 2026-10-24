@@ -798,3 +798,17 @@ closed B-reps and analytic cap volumes. No proprietary CAD fixture is stored.
 A private body that previously failed spherical SPUN binding now binds fully;
 its later cone/intersection boundary restriction is separate and still rejects
 the complete export rather than producing a partial body.
+
+### Closed sphere/plane intersection rings
+
+Complete accurate INTERSECTION rings on a plane and a sphere, including a
+certified spherical SPUN support, can export as analytic CIRCLE edges. The
+sphere/plane equation determines the circle; chart positions are not fitted.
+The two paired face uses must cover the complete shared-help chart period.
+Writer-local angular intervals preserve their directions while leaving the
+source model and its native chart parameters unchanged. Existing spherical cut,
+face winding, manifold and positive-volume checks remain in force. Recognition
+shares the boundary comparison budget and does not widen STEP uncertainty.
+Other surface intersections and partial/ambiguous chart branches remain unsupported.
+This does not establish which SolidWorks feature payload is current or implement
+partition/delta reconstruction.

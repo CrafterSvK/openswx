@@ -18,6 +18,7 @@
 #include "curved_hole.h"
 #include "cylinder_band.h"
 #include "cylinder_patch.h"
+#include "intersection_circle.h"
 #include "nurbs_wire.h"
 #include "planar_boundary.h"
 #include "sphere_boundary.h"
@@ -119,12 +120,17 @@ class BodyWriter {
  public:
   BodyWriter(const Model& model, const BodyGeometryBinding& body,
              const ExportOptions& options,
-             std::span<const CircularEdgeRecovery> recoveries, uint64_t checks)
+             std::span<const CircularEdgeRecovery> recoveries, uint64_t checks,
+             std::span<const IntersectionCircleRecovery> intersections = {})
       : model_(model),
         body_(body),
         options_(options),
         writer_(options),
         polygon_checks_remaining_(checks) {
+    for (const auto& recovery : intersections)
+      recovered_curves_.emplace(
+          recovery.edge.value,
+          GeometryObject{recovery.edge, '+', recovery.circle});
     for (const auto& recovery : recoveries) {
       recovered_curves_.emplace(
           recovery.curve.value,
@@ -1400,9 +1406,27 @@ Result<StepDocument> BuildBody(const Model& model,
       RecoverTolerantCircles(model, body, options.tolerance,
                              options.use_source_edge_tolerances, remaining);
   if (!recovered.ok()) return Result<StepDocument>::Err(recovered.error());
-  if (recovered.value().empty())
+  const auto intersections =
+      RecoverIntersectionCircles(model, body, options.tolerance, remaining);
+  if (!intersections.ok())
+    return Result<StepDocument>::Err(intersections.error());
+  if (recovered.value().empty() && intersections.value().empty())
     return BodyWriter(model, body, options, {}, remaining).Build();
   auto normalized = body;
+  std::map<uint32_t, std::pair<NodeId, const FinParameterInterval*>>
+      intersection_uses;
+  for (const auto& edge : intersections.value())
+    for (const auto& use : edge.uses)
+      intersection_uses.emplace(use.fin.value, std::pair{edge.edge, &use});
+  for (auto& face : normalized.faces)
+    for (auto& loop : face.loops)
+      for (auto& fin : loop.fins) {
+        const auto found = intersection_uses.find(fin.use.fin.value);
+        if (found == intersection_uses.end()) continue;
+        fin.curve = found->second.first;
+        fin.start = found->second.second->start;
+        fin.end = found->second.second->end;
+      }
   std::map<uint32_t, std::pair<NodeId, const CircularEdgeRecovery::Use*>> uses;
   for (const auto& edge : recovered.value())
     for (const auto& use : edge.uses)
@@ -1417,7 +1441,8 @@ Result<StepDocument> BuildBody(const Model& model,
         fin.end = found->second.second->last;
         fin.use.fin_curve = {};
       }
-  return BodyWriter(model, normalized, options, recovered.value(), remaining)
+  return BodyWriter(model, normalized, options, recovered.value(), remaining,
+                    intersections.value())
       .Build();
 }
 }  // namespace openswstep::internal

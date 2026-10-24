@@ -233,6 +233,61 @@ Result<double> RecoverChartParameter(
               ErrorCode::kUnsupportedFormat));
   return Result<double>::Ok(*match);
 }
+Result<FinParameterInterval> ClosedChartInterval(
+    const Model& model, const GeometryObject& curve, const FinUse& use,
+    double tolerance, const IntersectionEvaluationOptions& options) {
+  const auto& intersection = std::get<IntersectionCurveGeometry>(curve.payload);
+  const auto& positions = intersection.chart.positions;
+  // XT 5.2.1.5: a shared H limit locates a closed intersection branch. Only a
+  // complete chart returning to that help point establishes its full period.
+  // Do not infer a period from endpoint coincidence or from a fitted curve.
+  if (use.fin_curve.value || !curve.sense ||
+      (*curve.sense != '+' && *curve.sense != '-') ||
+      intersection.start.type != 'H' || intersection.end.type != 'H' ||
+      intersection.start.source != intersection.end.source ||
+      intersection.start.positions.size() != 1 ||
+      intersection.end.positions.size() != 1 || positions.size() < 4 ||
+      bool(use.start_vertex.value) != bool(use.end_vertex.value))
+    return Result<FinParameterInterval>::Err(
+        Error("Closed or vertex-free intersection needs an explicit interval",
+              0, ErrorCode::kUnsupportedFormat));
+  const double seam_tolerance = std::min(tolerance, options.chart_tolerance);
+  const auto seam = intersection.start.positions.front();
+  if (Distance(positions.front(), seam) > seam_tolerance ||
+      Distance(positions.back(), seam) > seam_tolerance ||
+      Distance(intersection.end.positions.front(), seam) > seam_tolerance)
+    return Result<FinParameterInterval>::Err(
+        Error("Closed intersection chart does not cover its help seam", 0,
+              ErrorCode::kUnsupportedFormat));
+  for (std::size_t i = 1; i + 1 < positions.size(); ++i)
+    if (Distance(positions[i], seam) <= seam_tolerance)
+      return Result<FinParameterInterval>::Err(
+          Error("Closed intersection chart repeats its help seam", 0,
+                ErrorCode::kUnsupportedFormat));
+  if (use.start_vertex.value) {
+    const auto vertex = Point(model, use.start_vertex);
+    if (!vertex.ok()) return Result<FinParameterInterval>::Err(vertex.error());
+    if (Distance(vertex.value(), seam) > seam_tolerance)
+      return Result<FinParameterInterval>::Err(
+          Error("Closed intersection vertex is outside the chart help seam", 0,
+                ErrorCode::kUnsupportedFormat));
+  }
+  const auto chart =
+      EvaluateIntersectionChart(model, curve.source, options.chart_tolerance);
+  if (!chart.ok()) return Result<FinParameterInterval>::Err(chart.error());
+  constexpr double kSeamTangentTolerance = 1e-8;
+  if (Distance(chart.value().tangents.front(), chart.value().tangents.back()) >
+      kSeamTangentTolerance)
+    return Result<FinParameterInterval>::Err(
+        Error("Closed intersection chart has incompatible seam tangents", 0,
+              ErrorCode::kUnsupportedFormat));
+  const auto& parameters = chart.value().parameterization.parameters;
+  const bool increasing =
+      (*curve.sense == '+') == (use.sense == TopologySense::kForward);
+  return Result<FinParameterInterval>::Ok(
+      {use.fin, increasing ? parameters.front() : parameters.back(),
+       increasing ? parameters.back() : parameters.front()});
+}
 Result<FinParameterInterval> ChartInterval(
     const Model& model, const GeometryObject& curve, const FinUse& use,
     double tolerance,
@@ -243,9 +298,7 @@ Result<FinParameterInterval> ChartInterval(
               ErrorCode::kUnsupportedFormat));
   if (!use.start_vertex.value || !use.end_vertex.value ||
       use.start_vertex == use.end_vertex)
-    return Result<FinParameterInterval>::Err(
-        Error("Closed or vertex-free intersection needs an explicit interval",
-              0, ErrorCode::kUnsupportedFormat));
+    return ClosedChartInterval(model, curve, use, tolerance, *intersection);
   if (!use.fin_curve.value &&
       (!curve.sense || (*curve.sense != '+' && *curve.sense != '-')))
     return Result<FinParameterInterval>::Err(

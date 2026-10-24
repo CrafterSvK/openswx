@@ -3187,6 +3187,87 @@ TEST(OpenSwStep, PreservesSphericalCapSenseAxisAndAnalyticVolume) {
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message.find("signed volume"), std::string::npos);
 }
+// Keep chart parameters deliberately different from circle angles.
+test::ModelFixture IntersectionSphericalCap(bool spun, bool swapped) {
+  auto fixture = spun ? test::SpunSphericalCap() : test::SphericalCap();
+  test::RemoveNode(fixture, 4000);
+  fixture.Add(
+      38, 4000,
+      {{{"surface", FieldType::kPointer, 1006, 2, true},
+        swapped ? std::vector<ScalarValue>{uint64_t{701}, uint64_t{700}}
+                : std::vector<ScalarValue>{uint64_t{700}, uint64_t{701}}},
+       test::Pointer("chart", 9100, 40),
+       test::Pointer("start", 9101, 41),
+       test::Pointer("end", 9101, 41),
+       test::ByteValue("sense", swapped ? '-' : '+', FieldType::kCharacter)});
+  constexpr std::size_t kSegments = 16;
+  std::vector<ScalarValue> points;
+  for (std::size_t i = 0; i <= kSegments; ++i) {
+    const double angle = (swapped ? -1 : 1) * 2 * std::numbers::pi *
+                         static_cast<double>(i) /
+                         static_cast<double>(kSegments);
+    points.emplace_back(i == kSegments ? 4. : 4 * std::cos(angle));
+    points.emplace_back(i == kSegments ? 0. : 4 * std::sin(angle));
+    points.emplace_back(3.);
+  }
+  fixture.Add(40, 9100,
+              {test::Numbers("base_parameter", {7}),
+               test::Numbers("base_scale", {2.5}),
+               test::Integer("chart_count", kSegments + 1),
+               test::Numbers("chordal_error", {.1}),
+               test::Numbers("angular_error", {1}),
+               {{"parameter_error", FieldType::kDouble, 0, 2, true},
+                {std::monostate{}, std::monostate{}}},
+               test::Array("positions", FieldType::kIntersectionPoint,
+                           std::move(points))});
+  fixture.Add(
+      41, 9101,
+      {test::ByteValue("type", 'H', FieldType::kCharacter),
+       test::Array("positions", FieldType::kIntersectionPoint, {4., 0., 3.})});
+  return fixture;
+}
+TEST(OpenSwStep,
+     ExportsClosedSpherePlaneIntersectionsWithoutFittingOrSourceChanges) {
+  for (bool spun : {false, true})
+    for (bool swapped : {false, true}) {
+      const auto fixture = IntersectionSphericalCap(spun, swapped);
+      const auto model = ModelBuilder::Build(fixture.report);
+      ASSERT_TRUE(model.ok()) << model.error().message;
+      auto options = Options();
+      options.binding.intersection = IntersectionEvaluationOptions{1e-7, 1e-9};
+      const auto result = ExportBody(model.value(), NodeId{1}, options);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.solids, 1);
+      EXPECT_EQ(result.value().statistics.faces, 2);
+      EXPECT_EQ(result.value().statistics.edges, 1);
+      EXPECT_NE(result.value().text.find("=CIRCLE("), std::string::npos);
+      EXPECT_EQ(result.value().text.find("=B_SPLINE_CURVE"), std::string::npos);
+      EXPECT_DOUBLE_EQ(result.value().statistics.length_uncertainty,
+                       options.tolerance);
+      const auto* original = model.value().FindNode(NodeId{4000});
+      ASSERT_NE(original, nullptr);
+      ASSERT_TRUE(original->geometry.has_value());
+      EXPECT_TRUE(std::holds_alternative<IntersectionCurveGeometry>(
+          model.value().geometry()[*original->geometry].payload));
+      CheckReferences(result.value());
+    }
+}
+TEST(OpenSwStep,
+     ClosedIntersectionRecognitionRetainsBudgetsAndRejectsInvalidCharts) {
+  auto options = Options();
+  options.binding.intersection = IntersectionEvaluationOptions{1e-7, 1e-9};
+  options.max_polygon_checks = 1;
+  const auto limited = Export(IntersectionSphericalCap(false, false), options);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  options.max_polygon_checks = 1000000;
+  auto incomplete = IntersectionSphericalCap(false, false);
+  test::Set(incomplete, 9101, "type", 'L');
+  EXPECT_FALSE(Export(incomplete, options).ok());
+  auto wrong_sense = IntersectionSphericalCap(false, false);
+  test::Set(wrong_sense, 4000, "sense", '-');
+  EXPECT_FALSE(Export(wrong_sense, options).ok());
+}
 TEST(OpenSwStep, ParsesSphericalCapsAndRetainsCutValidation) {
   auto options = Options();
   options.max_polygon_checks = 1;
