@@ -98,6 +98,54 @@ protected:
   }
 };
 
+TEST_F(ParasolidCliTest, ResolvesSavedGeometryWithoutCertifyingCurrentBodies) {
+  const std::string xml =
+      "<Keywords><Configuration Name='Target' id='9' "
+      "SourceIndex='7'/></Keywords>";
+  auto file = openswx::test::MakeModernChunkFile(
+      "swXmlContents/KeyWords",
+      std::span<const uint8_t>(reinterpret_cast<const uint8_t *>(xml.data()),
+                               xml.size()));
+  std::vector<uint8_t> bytes;
+  AppendWrapper(bytes, Payload("(partition) "));
+  AppendWrapper(bytes, Payload("(deltas) "));
+  const auto partition =
+      openswx::test::MakeModernChunkFile("Config-7-Partition", bytes);
+  file.insert(file.end(), partition.begin() + 12, partition.end());
+  WriteBytes(root / "input.SLDPRT", file);
+  const auto run = [&](const std::string &arguments) {
+    return std::system((arguments + " " + ShellQuote(root / "input.SLDPRT") +
+                        " > " + ShellQuote(root / "resolved.json") + " 2> " +
+                        ShellQuote(root / "stderr.txt"))
+                           .c_str());
+  };
+  const auto executable = ShellQuote(SWX_DUMP_EXECUTABLE);
+  ASSERT_EQ(run(executable + " --resolve-saved-geometry Target"), 0);
+  const auto read_report = [&] {
+    std::ifstream input(root / "resolved.json");
+    return json::parse(input);
+  };
+  auto report = read_report();
+  EXPECT_EQ(report["configuration_status"], "resolved");
+  EXPECT_EQ(report["partition_status"], "resolved");
+  EXPECT_EQ(report["state_status"], "unsupported");
+  EXPECT_EQ(report["body_membership_status"], "unresolved");
+  EXPECT_EQ(report["partition_index"], 7);
+  EXPECT_EQ(report["resolved_features_index"], 9);
+  EXPECT_TRUE(report["candidates"][0]["selected_partition"]);
+  EXPECT_FALSE(report["candidates"][1]["selected_partition"]);
+  ASSERT_EQ(run("SWX_DUMP_RESOLVE_SAVED_GEOMETRY=Target " + executable), 0);
+  EXPECT_EQ(read_report()["partition_index"], 7);
+  ASSERT_EQ(run("SWX_DUMP_RESOLVE_SAVED_GEOMETRY=Missing " + executable +
+                " --resolve-saved-geometry Target"),
+            0);
+  EXPECT_EQ(read_report()["configuration"], "Target");
+  ASSERT_EQ(run(executable + " --resolve-saved-geometry Missing"), 0);
+  EXPECT_EQ(read_report()["partition_status"], "unresolved");
+  EXPECT_NE(run(executable + " --resolve-saved-geometry Target --list-streams"),
+            0);
+}
+
 TEST_F(ParasolidCliTest, ExportsSeparatedPayloadsAndExactProvenance) {
   const auto partition = Payload("(partition) ");
   const auto delta = Payload("(deltas) ");

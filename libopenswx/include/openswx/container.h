@@ -122,6 +122,7 @@ enum class ParasolidPayloadKind { kTransmit, kPartition, kDeltas, kUnknown };
 struct ParasolidPayload {
   std::string source_stream;
   uint64_t container_marker_offset = 0;
+  /// Numeric stream slot, not a cross-family configuration/state identity.
   std::optional<uint32_t> configuration_index;
   bool ghost_partition = false;
   ParasolidPayloadKind kind = ParasolidPayloadKind::kUnknown;

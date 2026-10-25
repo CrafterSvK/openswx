@@ -1,0 +1,287 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 openswx contributors
+#include "openswx/saved_geometry.h"
+
+#include <gtest/gtest.h>
+
+#include <algorithm>
+#include <array>
+#include <string>
+#include <vector>
+
+#include "test_helpers.h"
+
+namespace openswx {
+namespace {
+using Status = GeometryResolutionStatus;
+StreamInfo Xml(std::string name, std::string_view value) {
+  StreamInfo s;
+  s.name = std::move(name);
+  s.status = StreamDecodeStatus::kDecoded;
+  s.selected_as_primary = true;
+  s.marker_offset = 120;
+  s.decoded_data.assign(value.begin(), value.end());
+  return s;
+}
+std::vector<uint8_t> Payload(std::string_view kind) {
+  std::vector<uint8_t> data{'P', 'S'};
+  for (const std::string text : {": TRANSMIT FILE (" + std::string(kind) +
+                                     ") created by modeller version 1234567",
+                                 std::string("SCH_1234567_12345_12345")}) {
+    const auto n = static_cast<uint32_t>(text.size());
+    for (const int shift : {24, 16, 8, 0})
+      data.push_back(static_cast<uint8_t>(n >> shift));
+    data.insert(data.end(), text.begin(), text.end());
+  }
+  data.insert(data.end(), {0, 1, 2, 3});
+  return data;
+}
+void AppendPayload(StreamInfo& stream, std::string_view kind) {
+  const std::array<uint8_t, 16> marker{0x23, 0x1d, 0xd5, 0x71, 0xda, 0x81,
+                                       0x48, 0xa2, 0xa8, 0x58, 0x98, 0xb2,
+                                       0x1b, 0x89, 0xef, 0x99};
+  const auto payload = Payload(kind), compressed = test::DeflateZlib(payload);
+  auto& bytes = stream.decoded_data;
+  bytes.insert(bytes.end(), marker.begin(), marker.end());
+  test::AppendU32Le(&bytes, static_cast<uint32_t>(payload.size()));
+  test::AppendU32Le(&bytes, static_cast<uint32_t>(compressed.size()));
+  bytes.insert(bytes.end(), compressed.begin(), compressed.end());
+}
+StreamInfo Partition(std::string name = "Contents/Config-5-Partition") {
+  auto stream = Xml(std::move(name), "");
+  AppendPayload(stream, "partition");
+  return stream;
+}
+StreamInfo Keyword(std::string_view attributes = "id='9' SourceIndex='5'",
+                   std::string_view name = "Target") {
+  return Xml("swXmlContents/KeyWords",
+             "<Keywords><Configuration Name='" + std::string(name) + "' " +
+                 std::string(attributes) + "/></Keywords>");
+}
+StreamInfo Manifest(uint32_t index = 5, bool active = true,
+                    bool rebuild = false) {
+  return Xml(
+      "swXmlContents/Features",
+      "<s:swSolidWorks xmlns:s='http://www.solidworks.com/sw2003/schema'>"
+      "<s:swModelList><s:swModel id='model' swConfigurationName='Target' "
+      "swConfigurationId='" +
+          std::to_string(index) +
+          "'/></s:swModelList>"
+          "<s:swConfigurationList><s:swConfiguration id='24' swName='Target' "
+          "swID='" +
+          std::to_string(index) +
+          "' swModelRef='model' swMostRecentConfiguration='" +
+          (active ? "YES" : "NO") + "' swConfigurationNeedsUpdate='" +
+          (rebuild ? "YES" : "NO") +
+          "'/></s:swConfigurationList></s:swSolidWorks>");
+}
+std::size_t Selected(const SavedGeometryResolution& result) {
+  return static_cast<std::size_t>(
+      std::count_if(result.candidates.begin(), result.candidates.end(),
+                    [](const auto& c) { return c.selected_partition; }));
+}
+TEST(SavedGeometry, SeparatesSelectorsFromFeatureSlotsAndStateProof) {
+  ContainerInspection input;
+  input.streams = {Keyword(), Manifest(), Partition(),
+                   Partition("Config-9-FeatureBodies/LocalBodies"),
+                   Partition("Contents/Config-5-GhostPartition")};
+  const auto result = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(result.ok()) << result.error();
+  const auto& r = result.value();
+  EXPECT_EQ(r.configuration_status, Status::kResolved);
+  EXPECT_EQ(r.partition_status, Status::kResolved);
+  EXPECT_EQ(r.partition_index, 5u);
+  EXPECT_EQ(r.resolved_features_index, 9u);
+  EXPECT_EQ(r.was_last_active, true);
+  EXPECT_EQ(r.needs_rebuild, false);
+  EXPECT_EQ(r.state_status, Status::kUnresolved);
+  EXPECT_EQ(r.body_membership_status, Status::kUnresolved);
+  EXPECT_EQ(Selected(r), 1u);
+  ASSERT_EQ(r.candidates.size(), 3u);
+  EXPECT_EQ(r.candidates[1].role, GeometrySourceRole::kInternalFeature);
+  EXPECT_EQ(r.candidates[1].stream_index, 9u);
+  EXPECT_EQ(r.candidates[2].role, GeometrySourceRole::kGhost);
+  EXPECT_FALSE(r.candidates[0].decoded_complete);
+  EXPECT_TRUE(r.candidates[0].bodies.empty());
+  EXPECT_FALSE(r.candidates[0].decode_issue.empty());
+  EXPECT_FALSE(r.evidence.empty());
+}
+TEST(SavedGeometry,
+     ResolvesInactiveConfigurationIndependentlyOfActiveSelection) {
+  auto manifest = Manifest(7, false, true);
+  std::string text(manifest.decoded_data.begin(), manifest.decoded_data.end());
+  const auto at = text.find("</s:swConfigurationList>");
+  text.insert(at,
+              "<s:swConfiguration swName='Other' swID='3' swModelRef='another' "
+              "swMostRecentConfiguration='YES'/>");
+  manifest.decoded_data.assign(text.begin(), text.end());
+  ContainerInspection input;
+  input.streams = {manifest, Partition("Config-7-Partition"),
+                   Partition("Config-3-Partition")};
+  const auto result = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().partition_index, 7u);
+  EXPECT_EQ(result.value().was_last_active, false);
+  EXPECT_EQ(result.value().needs_rebuild, true);
+  EXPECT_EQ(result.value().partition_status, Status::kResolved);
+  EXPECT_EQ(Selected(result.value()), 1u);
+}
+TEST(SavedGeometry, ConflictingSelectorsNeverPickByPriorityOrPhysicalOrder) {
+  ContainerInspection input;
+  input.streams = {Keyword(), Manifest(7), Partition(),
+                   Partition("Config-7-Partition")};
+  for (bool reverse : {false, true}) {
+    if (reverse) std::reverse(input.streams.begin(), input.streams.end());
+    const auto r = ResolveSavedGeometry(input, "Target");
+    ASSERT_TRUE(r.ok());
+    EXPECT_EQ(r.value().configuration_status, Status::kUnresolved);
+    EXPECT_FALSE(r.value().partition_index);
+    EXPECT_EQ(Selected(r.value()), 0u);
+  }
+}
+TEST(SavedGeometry, SolePartitionIsOnlyAHeuristicForAKnownConfiguration) {
+  ContainerInspection input;
+  input.streams = {Keyword("id='9'"), Partition()};
+  auto result = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(result.value().partition_status, Status::kHeuristic);
+  EXPECT_EQ(result.value().configuration_status, Status::kUnresolved);
+  EXPECT_EQ(result.value().state_status, Status::kUnresolved);
+  result = ResolveSavedGeometry(input, "Missing");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(Selected(result.value()), 0u);
+  input.streams = {Keyword(), Partition("Config-7-Partition")};
+  result = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(result.ok());
+  EXPECT_EQ(Selected(result.value()), 0u);
+}
+TEST(SavedGeometry,
+     LocalBodiesResolvedFeaturesAndGhostsCannotReplaceAPartition) {
+  ContainerInspection input;
+  input.streams = {Keyword("id='0' SourceIndex='0'")};
+  for (int i = 0; i < 7; ++i)
+    input.streams.push_back(Partition("Config-0-FeatureBodies/LocalBodies"));
+  input.streams.push_back(Partition("Contents/Config-0-ResolvedFeatures"));
+  input.streams.push_back(Partition("Config-0-GhostPartition"));
+  const auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.value().configuration_status, Status::kResolved);
+  EXPECT_EQ(r.value().partition_status, Status::kUnresolved);
+  EXPECT_EQ(Selected(r.value()), 0u);
+  EXPECT_EQ(r.value().candidates.size(), 9u);
+}
+TEST(SavedGeometry, DeltaCandidatesRequireAnExplicitUnsupportedHistoryStage) {
+  ContainerInspection input;
+  auto partition = Partition();
+  AppendPayload(partition, "deltas");
+  input.streams = {Keyword(), partition};
+  const auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.value().partition_status, Status::kResolved);
+  EXPECT_EQ(r.value().state_status, Status::kUnsupported);
+  EXPECT_EQ(r.value().body_membership_status, Status::kUnresolved);
+  EXPECT_EQ(r.value().candidates[1].kind, ParasolidPayloadKind::kDeltas);
+  EXPECT_FALSE(r.value().candidates[1].selected_partition);
+}
+TEST(SavedGeometry, DoesNotAssociateDeltasAcrossStreamSlotNamespaces) {
+  ContainerInspection input;
+  auto internal = Partition("Config-5-FeatureBodies/LocalBodies");
+  internal.decoded_data.clear();
+  AppendPayload(internal, "deltas");
+  input.streams = {Keyword(), Partition(), internal};
+  auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.value().partition_status, Status::kResolved);
+  EXPECT_EQ(r.value().state_status, Status::kUnresolved);
+  input.streams.back() = Partition("Contents/Config-6-Partition");
+  AppendPayload(input.streams.back(), "deltas");
+  r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.value().state_status, Status::kUnresolved);
+}
+TEST(SavedGeometry, DuplicatePartitionsDoNotUseThePrimaryChunkAsAuthority) {
+  ContainerInspection input;
+  auto duplicate = Partition();
+  duplicate.selected_as_primary = false;
+  input.streams = {Keyword(), Partition(), duplicate};
+  auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(Selected(r.value()), 0u);
+  input.streams.back() = Partition("Config-5-Partition");
+  r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(Selected(r.value()), 0u);
+}
+TEST(SavedGeometry, RejectsInvalidAndDuplicateConfigurationSelectors) {
+  for (const std::string value : {"-1", "4294967296", "5suffix", ""}) {
+    ContainerInspection input;
+    input.streams = {Keyword("SourceIndex='" + value + "'"), Manifest(),
+                     Partition()};
+    const auto r = ResolveSavedGeometry(input, "Target");
+    ASSERT_TRUE(r.ok());
+    EXPECT_EQ(Selected(r.value()), 0u);
+  }
+  ContainerInspection input;
+  input.streams = {Keyword(), Keyword(), Partition()};
+  const auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(Selected(r.value()), 0u);
+}
+TEST(SavedGeometry,
+     MalformedWrongNamespaceAndAmbiguousModelLinksStayUnresolved) {
+  for (int kind = 0; kind < 4; ++kind) {
+    auto manifest = Manifest();
+    std::string text(manifest.decoded_data.begin(),
+                     manifest.decoded_data.end());
+    if (kind == 0) text = "<broken";
+    if (kind == 1)
+      text.replace(
+          text.find("http://www.solidworks.com/sw2003/schema"),
+          std::string("http://www.solidworks.com/sw2003/schema").size(),
+          "http://example.invalid/foreign");
+    if (kind == 2)
+      text.replace(text.find("swModelRef='model'"),
+                   std::string("swModelRef='model'").size(),
+                   "swModelRef='absent'");
+    if (kind == 3)
+      text.insert(text.find("</s:swModelList>"),
+                  "<s:swModel id='model' swConfigurationName='Target' "
+                  "swConfigurationId='5'/>");
+    manifest.decoded_data.assign(text.begin(), text.end());
+    ContainerInspection input;
+    input.streams = {Keyword(), manifest, Partition()};
+    const auto r = ResolveSavedGeometry(input, "Target");
+    ASSERT_TRUE(r.ok());
+    EXPECT_EQ(Selected(r.value()), 0u);
+  }
+}
+TEST(SavedGeometry, NativeKeywordPrefixAndUnicodeNamesArePreserved) {
+  auto keyword = Keyword("id='9' SourceIndex='5'", "Zwei &amp; Körper");
+  keyword.decoded_data.insert(keyword.decoded_data.begin(), 0x86);
+  ContainerInspection input;
+  input.streams = {keyword, Partition()};
+  const auto r = ResolveSavedGeometry(input, "Zwei & Körper");
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.value().configuration_status, Status::kResolved);
+  EXPECT_EQ(Selected(r.value()), 1u);
+}
+TEST(SavedGeometry, EnforcesResourceCapsAndExplicitConfiguration) {
+  ContainerInspection input;
+  input.streams = {Keyword(), Manifest(), Partition()};
+  EXPECT_FALSE(ResolveSavedGeometry(input, "").ok());
+  for (int kind = 0; kind < 5; ++kind) {
+    SavedGeometryOptions options;
+    if (kind == 0) options.max_streams = 1;
+    if (kind == 1) options.max_decoded_bytes = 1;
+    if (kind == 2) options.max_xml_bytes = 1;
+    if (kind == 3) options.max_xml_nodes = 1;
+    if (kind == 4) options.max_nodes_per_payload = 0;
+    EXPECT_FALSE(ResolveSavedGeometry(input, "Target", options).ok());
+  }
+  input.streams.push_back(Partition("Config-6-Partition"));
+  SavedGeometryOptions options;
+  options.max_payloads = 1;
+  EXPECT_FALSE(ResolveSavedGeometry(input, "Target", options).ok());
+}
+}  // namespace
+}  // namespace openswx

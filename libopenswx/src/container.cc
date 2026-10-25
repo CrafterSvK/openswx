@@ -253,7 +253,8 @@ bool ReadParasolidHeader(ParasolidPayload &result) {
 }
 
 std::optional<uint32_t> ConfigurationIndex(std::string_view name) {
-  constexpr std::string_view prefix = "Contents/Config-";
+  if (name.starts_with("Contents/")) name.remove_prefix(9);
+  constexpr std::string_view prefix = "Config-";
   if (!name.starts_with(prefix))
     return std::nullopt;
   name.remove_prefix(prefix.size());

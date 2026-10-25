@@ -18,22 +18,23 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <nlohmann/json.hpp>
 #include <optional>
 #include <span>
 #include <string>
-#include <vector>
 #include <unordered_map>
-
-#include <nlohmann/json.hpp>
+#include <vector>
 
 #include "openswx/container.h"
 #include "openswx/document.h"
 #include "openswx/drawing_geometry.h"
 #include "openswx/drawing_probe.h"
+#include "openswx/saved_geometry.h"
 #include "openswx/svg_writer.h"
 
 namespace {
@@ -745,9 +746,60 @@ json ProbeDrawingStreams(const openswx::ContainerInspection& inspection) {
   return streams;
 }
 
+json SavedGeometryJson(const openswx::SavedGeometryResolution& result) {
+  const auto source_json = [](const openswx::GeometrySource& source) {
+    return json{{"stream", source.stream},
+                {"container_offset", source.container_offset},
+                {"payload_offset", source.payload_offset}};
+  };
+  json report{
+      {"schema_version", 1},
+      {"configuration", result.configuration},
+      {"configuration_status", openswx::ToString(result.configuration_status)},
+      {"partition_status", openswx::ToString(result.partition_status)},
+      {"state_status", openswx::ToString(result.state_status)},
+      {"body_membership_status",
+       openswx::ToString(result.body_membership_status)},
+      {"partition_index",
+       result.partition_index ? json(*result.partition_index) : json(nullptr)},
+      {"resolved_features_index", result.resolved_features_index
+                                      ? json(*result.resolved_features_index)
+                                      : json(nullptr)},
+      {"was_last_active",
+       result.was_last_active ? json(*result.was_last_active) : json(nullptr)},
+      {"needs_rebuild",
+       result.needs_rebuild ? json(*result.needs_rebuild) : json(nullptr)},
+      {"limitations", result.limitations},
+      {"evidence", json::array()},
+      {"candidates", json::array()}};
+  for (const auto& evidence : result.evidence)
+    report["evidence"].push_back({{"source", source_json(evidence.source)},
+                                  {"field", evidence.field},
+                                  {"value", evidence.value}});
+  for (const auto& candidate : result.candidates) {
+    json row{
+        {"payload_index", candidate.payload_index},
+        {"source", source_json(candidate.source)},
+        {"role", openswx::ToString(candidate.role)},
+        {"kind", openswx::ToString(candidate.kind)},
+        {"stream_index", candidate.stream_index ? json(*candidate.stream_index)
+                                                : json(nullptr)},
+        {"selected_partition", candidate.selected_partition},
+        {"decoded_complete", candidate.decoded_complete},
+        {"decode_issue", candidate.decode_issue},
+        {"body_candidates", json::array()}};
+    for (const auto& body : candidate.bodies)
+      row["body_candidates"].push_back(
+          {{"body_id", body.body_id}, {"kind", openswx::ToString(body.kind)}});
+    report["candidates"].push_back(std::move(row));
+  }
+  return report;
+}
+
 struct Options {
   std::filesystem::path input;
   bool list_streams = false;
+  std::optional<std::string> resolve_saved_geometry;
   std::optional<std::filesystem::path> extract_parasolid;
   std::optional<std::filesystem::path> dump_streams;
   std::optional<std::filesystem::path> dump_unknown;
@@ -762,10 +814,16 @@ struct Options {
 
 std::optional<Options> ParseOptions(int argc, char* argv[]) {
   Options options;
+  if (const char* value = std::getenv("SWX_DUMP_RESOLVE_SAVED_GEOMETRY");
+      value && *value)
+    options.resolve_saved_geometry = value;
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
     if (argument == "--list-streams") {
       options.list_streams = true;
+    } else if (argument == "--resolve-saved-geometry") {
+      if (++i >= argc || std::string_view(argv[i]).empty()) return std::nullopt;
+      options.resolve_saved_geometry = argv[i];
     } else if (argument == "--extract-parasolid") {
       if (++i >= argc)
         return std::nullopt;
@@ -805,7 +863,8 @@ std::optional<Options> ParseOptions(int argc, char* argv[]) {
     }
   }
   if (options.input.empty()) return std::nullopt;
-  const int exclusive_actions = (options.extract_parasolid ? 1 : 0) +
+  const int exclusive_actions = (options.resolve_saved_geometry ? 1 : 0) +
+                                (options.extract_parasolid ? 1 : 0) +
                                 (options.export_tables_svg ? 1 : 0) +
                                 (options.export_view_svg ? 1 : 0) +
                                 (options.export_sheet_svg ? 1 : 0) +
@@ -831,6 +890,7 @@ int main(int argc, char* argv[]) {
   if (!options) {
     std::cerr << "Usage: swx_dump [--list-streams] [--dump-streams DIR] "
                  "[--dump-unknown DIR] [--extract-parasolid DIR] "
+                 "[--resolve-saved-geometry CONFIG] "
                  "[--export-tables-svg FILE "
                  "[--sheet NAME]] [--export-view-svg FILE [--view NAME]] "
                  "[--export-sheet-svg FILE [--sheet NAME]] "
@@ -838,6 +898,19 @@ int main(int argc, char* argv[]) {
                  "[--sheet NAME]] [--probe-drawing-geometry] "
                  "<SolidWorks file>\n";
     return 1;
+  }
+
+  if (options->resolve_saved_geometry) {
+    const auto result = openswx::ResolveSavedGeometry(
+        options->input, *options->resolve_saved_geometry);
+    if (!result.ok()) {
+      std::cerr << "Error: " << result.error() << "\n";
+      return 1;
+    }
+    auto report = SavedGeometryJson(result.value());
+    report["source_file"] = options->input.string();
+    std::cout << report.dump(2) << "\n";
+    return 0;
   }
 
   if (options->extract_parasolid) {

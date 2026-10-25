@@ -156,6 +156,21 @@ unsupported by these commands.
 The modern parser checks each inline stream's decoded size and CRC before
 accepting it. Invalid candidates are skipped and reported by container inspection.
 
+Inspect configuration/partition identities without assuming a current model:
+
+```bash
+swx_dump --resolve-saved-geometry "Standard" /files/example.SLDPRT
+# Equivalent default; the explicit CLI option takes precedence:
+SWX_DUMP_RESOLVE_SAVED_GEOMETRY=Standard swx_dump /files/example.SLDPRT
+```
+
+The report separates configuration and partition identity from saved-state and
+final-body membership. It records selector evidence, source offsets, cache flags
+and per-payload BODY candidates, including sheet bodies. Automatic delta
+reconstruction and final/helper-body classification remain unsupported or
+unresolved. Exit zero means the report was produced, not that the model is
+current or complete. See the [API and selection contract](libopenswx/SAVED_GEOMETRY.md).
+
 Extract embedded binary Parasolid from a modern part, assembly or drawing:
 
 ```bash
@@ -176,7 +191,9 @@ This extracts existing binary data; it does not generate text `.x_t` files.
 container marker offset, wrapper offset within the decoded stream, compressed
 and uncompressed sizes, configuration index/name when available, payload kind,
 Parasolid description/schema and decoding issues. Configuration names come from
-document metadata; an unavailable name or index is `null`.
+document metadata; an unavailable name or index is `null`. These legacy fields
+are stream-slot lookups, not a cross-family configuration/state certificate;
+use `--resolve-saved-geometry` for evidence and independent status fields.
 
 Length-prefixed sections can contain several compressed frames. The exporter
 concatenates every frame into one complete payload and rejects the section if
