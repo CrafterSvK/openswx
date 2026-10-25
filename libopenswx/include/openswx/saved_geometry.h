@@ -114,7 +114,13 @@ struct SavedGeometryOptions {
   uint64_t max_payloads = 256;
   /// Per candidate; also caps delta packet/entry counts. Total work is
   /// additionally bounded by max_payloads/bytes.
-  uint64_t max_nodes_per_payload = 10000;
+  uint64_t max_nodes_per_payload = 100000;
+  /// Applied to catalog, resolved and decoded fields separately by the schema
+  /// parser, then to decoded fields by ModelBuilder (XT 2.1.1: Schema, p. 12).
+  uint64_t max_fields_per_payload = 1000000;
+  /// Caps decoded scalar values and model geometry copies separately; also
+  /// bounds model pointer references. All caps remain finite and independent.
+  uint64_t max_values_per_payload = 1000000;
 };
 /// Results for an explicitly named configuration, including inactive ones.
 /// Configuration identity, history resolution and final-body membership are

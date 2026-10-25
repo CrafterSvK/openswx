@@ -93,6 +93,25 @@ and SolidWorks final-body membership remain open work. XT PARTITION/PMARK metada
 and WORLD body roots describe kernel state (XT 1.1.2, p. 8; 5.3.1, pp. 83-84);
 they do not alone prove SolidWorks final/helper body roles.
 
+## Resource budgets
+
+The resolver defaults to 100,000 nodes, 1,000,000 field groups and 1,000,000
+scalar values per payload. `SavedGeometryOptions.max_nodes_per_payload`,
+`max_fields_per_payload` and `max_values_per_payload` are positive independent
+caps, forwarded consistently to schema parsing and model construction. Fields
+are capped separately for catalog, resolved schema and decoded node storage;
+model values and copied geometry values are bounded separately. Model pointer
+references share the configured scalar-value cap. The node cap also bounds
+delta packets and entries. Input bytes and payload count remain bounded by
+their existing separate caps.
+
+A resource limit remains a failed resolution, rather than permission to omit
+geometry or silently choose another candidate. Explicit smaller budgets remain
+supported. The default profile admits ordinary partitions larger than the
+previous 10,000-node/65,536-field limits, without disabling limits or certifying
+saved-state currency. Runtime-generated synthetic point partitions cross both
+former limits and verify that lowering each cap still fails explicitly.
+
 ## Baseline and target evidence
 
 Each fully decoded ordinary candidate exposes its unique WORLD `current_id`

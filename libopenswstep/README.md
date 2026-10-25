@@ -18,6 +18,8 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Planar polygon faces bounded by LINE edges, with polygonal and/or full circular holes | `ADVANCED_FACE`, one `FACE_OUTER_BOUND`, interior `FACE_BOUND` instances, `EDGE_LOOP` and source-oriented edges |
 | Single convex planar contour containing LINE/CIRCLE/ELLIPSE edges | Exact source `EDGE_CURVE` instances, including rounded profiles, circular/elliptic sectors, two-edge segments/lenses and split conics |
 | Single convex planar contour additionally containing polynomial quadratic/cubic B_CURVE edges, including smooth multi-span bounds | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
+| Certified simple, possibly concave planar LINE/CIRCLE/ELLIPSE and quadratic/cubic polynomial B_CURVE contours with unnested holes | Exact source edges; bounded control-hull certificates and analytic area preserve topology |
+| Rectangular SWEPT_SURF patches with matching open clamped polynomial B_CURVE profiles and straight generators | Exact degree-(p,1) B-spline surfaces, original profile knots, signed sweep parameters and analytic surface flux |
 | Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
 | Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE and polynomial quadratic/cubic B_CURVE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
@@ -293,12 +295,13 @@ knots, multiplicities, parameter intervals and edge identity remain intact;
 validation never converts a spline into polygon edges. Multiple spline holes,
 including mixtures with polygonal and full circular holes, are supported in
 either face sense and any source loop order. Rational and degree-above-three
-spline holes remain unsupported. Spline outer contours still require a single
-hole-free loop.
+spline holes remain unsupported. More general simple spline outer contours
+and curved holes use the independent control-hull certificate below.
 
 For nearly tangent contours at large world coordinates, explicit source fin
 intervals avoid ambiguity from re-inferring parameters at rounded endpoints.
-The same strict convexity, planarity and area checks still apply.
+Planarity, area and full-loop simplicity remain required; a failed convex
+certificate may instead use the independent simple-loop certificate.
 
 Envelopes are used only for validation. They are never serialized and their
 areas are never subtracted from the face: net area uses each original curved
@@ -348,16 +351,58 @@ cones separate adjacent curves outside the join tolerance; sagitta envelopes
 separate nonadjacent curves. Ambiguous envelopes return unsupported-format,
 including some valid close contours. These chords are validation aids only:
 STEP retains the original circular arcs and analytic source-curve area.
-Concave elliptic contours and nonconvex curved contours with holes remain
+The minor-arc method remains an inexpensive analytic certificate. The general
+control-hull path can additionally certify concave elliptic/spline contours,
+curved outer bounds with curved holes, inflections and C0 spline joins. Exactly
+one loop must have positive winding relative to the face normal. All holes
+must be oppositely wound, strictly contained and unnested, regardless of source
+loop order.
+
+The general path restricts polynomial quadratic/cubic spline spans to exact
+Bezier pieces and represents conic arcs by positive-weight rational quadratic
+hulls. Subdivision is bounded to 24 levels and consumes the shared work budget.
+A monotone control projection certifies each piece's injectivity. Separating
+axes certify unrelated hulls; collinear lines also use tangential axes. Adjacent
+source pieces may meet only inside their admitted endpoint tolerance balls or
+where a strict separating plane proves disjoint interiors. Proofs on a parent
+piece remain valid for its subdivisions. This handles tangent joins without
+requiring an artificial gap at their common source vertex.
+
+Across distinct loops, complete hulls must be separated by the source length
+tolerance. Replacing each piece by its chord is then a homotopy avoiding every
+other loop, so chord winding gives certified containment. Exact polynomial and
+analytic conic integrals give net face area. Validation pieces never become
+STEP edges: source knots, edge counts and topology are retained. Unsupported
+rational/higher-degree spline bounds identify the source curve and edge.
+No tolerance is enlarged, and an unproven certificate rejects the whole body.
+
+## Polynomial sweep patches
+
+A supported `SWEPT_SURF` has one four-edge, non-isolated loop alternating two
+polynomial B_CURVE profiles and two LINE generators. Profiles must share the
+source section's degree, knot basis and selected interval. Complete restricted
+control arrays prove constant translations along the stored sweep; this is not
+an endpoint-only recognition. The reader's transverse projection certificate
+excludes folded/singular support. All four corners must identify one oriented
+parameter rectangle, with height greater than the source length tolerance.
+Tolerant fin pcurves, general rational profiles and other trim layouts remain
 unsupported.
 
-The minor-arc fallback is selected only for at least three `LINE`/`CIRCLE`
-edges. If an ellipse or spline excludes that route, the original convex-loop
-diagnostic is retained together with the first ineligible source curve's node,
-resolved basis type and edge node. A fallback type restriction is not evidence
-that the original contour is invalid, and does not replace the original
-curvature, corner or spline restriction. The body still fails as a whole;
-neither tolerances nor source geometry are changed.
+Each face emits its own finite `B_SPLINE_SURFACE_WITH_KNOTS` of degree `(p,1)`.
+Its U knots and signed V displacement bounds remain in source parameters.
+Distinct trims sharing a source support do not reuse another patch's finite
+domain. Original boundary curves and vertices stay shared. The exact integral
+of `(C-origin) cross C'` gives signed sweep flux and participates in the closed
+solid volume check. Neither the surface nor the volume uses tessellation or
+numerical area quadrature (XT 5.2.2.10, p. 67; B_CURVE 5.2.1.4, p. 38;
+B_SURFACE 5.2.2.9, p. 63).
+
+Two original MIT native SolidWorks fixtures in the sibling testdata repository
+verify single-span and nonuniform multi-span cubic prisms against native STEP,
+including material normals and bidirectional solid differences. Synthetic
+independent OCCT regressions cover concave spline notches, mixed/curved holes,
+inflections, C0 joins, tangent cusps and close conic contours. Private source
+models and derived comparisons remain outside the repositories.
 
 Complete cylindrical bands use two circular cut loops at distinct axial
 levels. Their radii, axis alignment, centre positions and opposite winding are
@@ -607,6 +652,16 @@ Independent inputs can be exported concurrently.
 `fin_intervals` and `wire_intervals` provide partial explicit interval overrides;
 unspecified entities retain the source library's automatic inference. Overrides
 do not enable unsupported output geometry or bypass validation.
+
+The shared source-boundary validation budget defaults to 10,000,000 checks,
+matching the larger finite read profile. Explicit smaller budgets still fail
+with `kResourceLimit`; no automatic retry or unlimited mode is used.
+The default source `SchemaLimits` and `ModelOptions` both allow 100,000 nodes
+and 1,000,000 fields, with the existing 1,000,000-scalar-value cap. These are
+independent finite read budgets, configured through `ExportOptions.parsing`
+and `ExportOptions.model`. Explicit smaller limits remain enforced; raising
+only the parser budget does not bypass the model budget. These limits do not
+imply that every decoded surface family is exportable.
 
 Positive entity, output byte and polygon comparison budgets bound serialization
 and polygon checks. The shared polygon budget counts nonadjacent segments within

@@ -16,7 +16,7 @@ endif()
 set(OPENSWSTEP_GENERATED_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated_include)
 configure_file(include/openswstep/version.h.in
   ${OPENSWSTEP_GENERATED_INCLUDE_DIR}/openswstep/version.h @ONLY)
-add_library(openswstep STATIC src/export.cc src/intersection_circle.cc src/step_writer.cc src/planar_boundary.cc src/convex_boundary.cc src/curved_hole.cc src/conic_boundary.cc src/torus_boundary.cc src/spun_torus.cc src/spun_sphere.cc src/tolerant_circle.cc src/sphere_boundary.cc src/cylinder_patch.cc src/cylinder_band.cc src/cone_patch.cc src/annular_boundary.cc src/nurbs_wire.cc src/body_writer.cc src/source.cc)
+add_library(openswstep STATIC src/export.cc src/intersection_circle.cc src/step_writer.cc src/planar_boundary.cc src/convex_boundary.cc src/simple_boundary.cc src/spline_sweep.cc src/curved_hole.cc src/conic_boundary.cc src/torus_boundary.cc src/spun_torus.cc src/spun_sphere.cc src/tolerant_circle.cc src/sphere_boundary.cc src/cylinder_patch.cc src/cylinder_band.cc src/cone_patch.cc src/annular_boundary.cc src/nurbs_wire.cc src/body_writer.cc src/source.cc)
 target_compile_features(openswstep PUBLIC cxx_std_20)
 target_include_directories(openswstep PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -32,7 +32,7 @@ if(BUILD_TESTING)
   if(NOT TARGET GTest::gtest_main)
     find_package(GTest REQUIRED)
   endif()
-  add_executable(libopenswstep_tests tests/export_test.cc)
+  add_executable(libopenswstep_tests tests/export_test.cc tests/spline_boundary_test.cc)
   target_link_libraries(libopenswstep_tests PRIVATE openswstep GTest::gtest_main ZLIB::ZLIB)
   include(GoogleTest)
   gtest_discover_tests(libopenswstep_tests)

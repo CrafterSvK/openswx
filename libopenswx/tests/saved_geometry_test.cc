@@ -378,17 +378,52 @@ TEST(SavedGeometry, DifferentIdentifiersDoNotApplyDeltaImages) {
   options.max_nodes_per_payload = 1;
   EXPECT_FALSE(ResolveSavedGeometry(input, "Target", options).ok());
 }
+TEST(SavedGeometry, LargeOrdinaryPartitionsUseConsistentFiniteReadBudgets) {
+  // 11,000 independent points cross both former limits (10,000 nodes and
+  // 65,536 fields), without relying on any private SolidWorks geometry.
+  auto data = Header("partition");
+  for (uint16_t i = 1; i <= 11000; ++i) {
+    Be16(data, 29);
+    if (i == 1) data.push_back(255);
+    Be16(data, i + 1);
+    Be32(data, i);
+    for (int j = 0; j < 4; ++j) Be16(data, 1);
+    for (int j = 0; j < 6; ++j) Be32(data, 0);
+  }
+  End(data);
+  auto stream = Xml("Config-5-Partition", "");
+  AppendBytes(stream, data);
+  ContainerInspection input;
+  input.streams = {Keyword(), stream};
+  const auto result = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().candidates.size(), 1u);
+  EXPECT_TRUE(result.value().candidates[0].decoded_complete)
+      << result.value().candidates[0].decode_issue;
+  EXPECT_TRUE(result.value().candidates[0].decode_issue.empty());
+  EXPECT_TRUE(result.value().candidates[0].bodies.empty());
+  EXPECT_EQ(result.value().body_membership_status, Status::kUnresolved);
+  for (int kind = 0; kind < 3; ++kind) {
+    SavedGeometryOptions options;
+    if (kind == 0) options.max_nodes_per_payload = 10000;
+    if (kind == 1) options.max_fields_per_payload = 65536;
+    if (kind == 2) options.max_values_per_payload = 100;
+    EXPECT_FALSE(ResolveSavedGeometry(input, "Target", options).ok());
+  }
+}
 TEST(SavedGeometry, EnforcesResourceCapsAndExplicitConfiguration) {
   ContainerInspection input;
   input.streams = {Keyword(), Manifest(), Partition()};
   EXPECT_FALSE(ResolveSavedGeometry(input, "").ok());
-  for (int kind = 0; kind < 5; ++kind) {
+  for (int kind = 0; kind < 7; ++kind) {
     SavedGeometryOptions options;
     if (kind == 0) options.max_streams = 1;
     if (kind == 1) options.max_decoded_bytes = 1;
     if (kind == 2) options.max_xml_bytes = 1;
     if (kind == 3) options.max_xml_nodes = 1;
     if (kind == 4) options.max_nodes_per_payload = 0;
+    if (kind == 5) options.max_fields_per_payload = 0;
+    if (kind == 6) options.max_values_per_payload = 0;
     EXPECT_FALSE(ResolveSavedGeometry(input, "Target", options).ok());
   }
   input.streams.push_back(Partition("Config-6-Partition"));

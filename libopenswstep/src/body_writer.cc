@@ -21,7 +21,9 @@
 #include "intersection_circle.h"
 #include "nurbs_wire.h"
 #include "planar_boundary.h"
+#include "simple_boundary.h"
 #include "sphere_boundary.h"
+#include "spline_sweep.h"
 #include "spun_sphere.h"
 #include "spun_torus.h"
 #include "step_writer.h"
@@ -107,6 +109,7 @@ struct FaceData {
   std::optional<CylinderBand> cylinder_band;
   std::optional<ConePatch> cone_patch;
   std::optional<std::size_t> apex_loop;
+  std::optional<SplineSweepPatch> spline_sweep;
 };
 struct EdgeUse {
   std::size_t face;
@@ -160,9 +163,11 @@ class BodyWriter {
                   double first, double last);
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
+  Result<bool> PrepareSplineSweepFace(FaceData& face);
   Result<bool> PrepareConicFace(FaceData& face);
   Result<bool> PrepareConeApexFace(FaceData& face);
   Result<bool> PrepareCurvedPlanarFace(FaceData& face);
+  Result<bool> PrepareSimplePlanarFace(FaceData& face);
   Result<bool> PrepareRuledPatchFace(FaceData& face);
   Result<bool> PrepareCylinderBandFace(FaceData& face);
   Result<ConicBoundary> ReadConicLoop(NodeId face, const FaceTrimLoop& loop);
@@ -531,6 +536,53 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
               "Conic face area is nonpositive or unrepresentable"));
   return Result<bool>::Ok(true);
 }
+Result<bool> BodyWriter::PrepareSimplePlanarFace(FaceData& face) {
+  std::vector<std::vector<PlanarCurve>> loops;
+  for (const auto& source : face.source->loops) {
+    if (source.isolated_vertex || source.fins.empty())
+      return Result<bool>::Err(
+          Error(face.source->face, ErrorCode::kUnsupportedFormat,
+                "Simple planar loops require non-isolated fins"));
+    std::vector<PlanarCurve> curves;
+    for (const auto& fin : source.fins) {
+      if (fin.use.fin_curve.value)
+        return Result<bool>::Err(Error(
+            fin.use.fin, ErrorCode::kUnsupportedFormat,
+            "Simple planar tolerant fins need an explicit pcurve mapping"));
+      const auto basis = Basis(fin.curve);
+      if (!basis.ok()) return Result<bool>::Err(basis.error());
+      const auto* spline =
+          std::get_if<NurbsCurveGeometry>(&basis.value()->payload);
+      if (spline && (spline->controls.rational ||
+                     (spline->axis.degree != 2 && spline->axis.degree != 3))) {
+        const auto message =
+            std::string(
+                "Planar spline bounds require polynomial quadratic or cubic "
+                "B_CURVE sections; ") +
+            "simple-loop fallback unavailable for source curve " +
+            std::to_string(fin.curve.value) + " (nurbs_curve), edge " +
+            std::to_string(fin.use.edge.value);
+        return Result<bool>::Err(Error(
+            face.source->face, ErrorCode::kUnsupportedFormat, message.c_str()));
+      }
+      curves.push_back({&basis.value()->payload, fin.start, fin.end});
+    }
+    loops.push_back(std::move(curves));
+  }
+  const auto region =
+      ValidateSimplePlanarRegion(loops, *face.plane, face.natural_sense,
+                                 options_.tolerance, polygon_checks_remaining_);
+  if (!region.ok())
+    return Result<bool>::Err(Error(face.source->face, region.error().code,
+                                   region.error().message.c_str()));
+  face.outer_loop = region.value().outer_loop;
+  face.planar_area = region.value().area;
+  const auto first = EvaluateCurve(*loops.front().front().geometry,
+                                   loops.front().front().start);
+  if (!first.ok()) return Result<bool>::Err(first.error());
+  face.reference_point = first.value().position;
+  return Result<bool>::Ok(true);
+}
 Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   std::vector<std::size_t> circle_indices, polygon_indices, curved_indices;
   std::vector<std::vector<PlanarCurve>> curved_loops;
@@ -616,17 +668,16 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
         polygons.empty() ? holes.front().center : polygons.front().front();
     return Result<bool>::Ok(true);
   }
-  if (curved_loops.size() != 1)
-    return Result<bool>::Err(Error(face.source->face,
-                                   ErrorCode::kUnsupportedFormat,
-                                   "Curved planar faces require one curved "
-                                   "outer contour or convex curved holes"));
+  if (curved_loops.size() != 1) return PrepareSimplePlanarFace(face);
   const auto outer_index = curved_indices.front();
   const auto& curves = curved_loops.front();
   if (!holes.empty() || !polygons.empty()) {
     const auto boundary = ValidateConvexPlanarHoles(
         curves, polygons, holes, *face.plane, face.natural_sense,
         options_.tolerance, polygon_checks_remaining_);
+    if (!boundary.ok() &&
+        boundary.error().code == ErrorCode::kUnsupportedFormat)
+      return PrepareSimplePlanarFace(face);
     if (!boundary.ok())
       return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                      boundary.error().message.c_str()));
@@ -661,29 +712,26 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
   auto boundary =
       ValidateConvexPlanarLoop(curves, *face.plane, face.natural_sense,
                                options_.tolerance, polygon_checks_remaining_);
+  if (!boundary.ok() &&
+      boundary.error().code == ErrorCode::kUnsupportedFormat && spline)
+    return PrepareSimplePlanarFace(face);
   if (!boundary.ok() && boundary.error().code == ErrorCode::kUnsupportedFormat) {
-    // The minor-arc certificate cannot validate ellipses or splines. Keep the
-    // original failure instead of replacing it with an inapplicable route's
-    // type restriction, and identify the source curve for further inspection.
+    // Keep the inexpensive minor-arc certificate for its analytic subset.
+    // Other supported bases use the general control-hull certificate.
     for (std::size_t i = 0; i < curves.size(); ++i) {
       const auto& geometry = *curves[i].geometry;
       if (std::holds_alternative<LineGeometry>(geometry) ||
           std::holds_alternative<CircleGeometry>(geometry))
         continue;
-      const auto& fin = face.source->loops[outer_index].fins[i];
-      const auto message =
-          boundary.error().message +
-          "; minor-arc fallback unavailable for source curve " +
-          std::to_string(fin.curve.value) + " (" + GeometryName(geometry) +
-          "), edge " + std::to_string(fin.use.edge.value);
-      return Result<bool>::Err(Error(face.source->face, boundary.error().code,
-                                     message.c_str()));
+      return PrepareSimplePlanarFace(face);
     }
     if (curves.size() >= 3)
       boundary = ValidateMinorArcPlanarLoop(
           curves, *face.plane, face.natural_sense, options_.tolerance,
           polygon_checks_remaining_);
   }
+  if (!boundary.ok() && boundary.error().code == ErrorCode::kUnsupportedFormat)
+    return PrepareSimplePlanarFace(face);
   if (!boundary.ok())
     return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                    boundary.error().message.c_str()));
@@ -816,6 +864,38 @@ Result<bool> BodyWriter::PrepareConeApexFace(FaceData& face) {
   face.reference_point = band.value().lower_center;
   return Result<bool>::Ok(true);
 }
+Result<bool> BodyWriter::PrepareSplineSweepFace(FaceData& face) {
+  if (face.source->loops.size() != 1 ||
+      face.source->loops.front().isolated_vertex)
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kUnsupportedFormat,
+              "Spline sweep patches require one non-isolated loop"));
+  std::vector<PlanarCurve> curves;
+  for (const auto& fin : face.source->loops.front().fins) {
+    if (fin.use.fin_curve.value)
+      return Result<bool>::Err(Error(
+          fin.use.fin, ErrorCode::kUnsupportedFormat,
+          "Spline sweep tolerant fins require an explicit pcurve mapping"));
+    const auto basis = Basis(fin.curve);
+    if (!basis.ok()) return Result<bool>::Err(basis.error());
+    curves.push_back({&basis.value()->payload, fin.start, fin.end});
+    uses_[fin.use.edge.value].push_back(
+        {faces_.size(), fin.use.sense == TopologySense::kForward});
+  }
+  auto patch = RecognizeSplineSweepPatch(model_, face.source->surface, curves,
+                                         face.natural_sense, options_.tolerance,
+                                         polygon_checks_remaining_);
+  if (!patch.ok())
+    return Result<bool>::Err(Error(face.source->face, patch.error().code,
+                                   patch.error().message.c_str()));
+  face.spline_sweep = std::move(patch).value();
+  const auto point = EvaluateSurface(
+      model_, face.source->surface,
+      face.spline_sweep->profile.axis.knots.front(), face.spline_sweep->lower);
+  if (!point.ok()) return Result<bool>::Err(point.error());
+  face.reference_point = point.value().position;
+  return Result<bool>::Ok(true);
+}
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
     if (source.loops.empty())
@@ -829,6 +909,8 @@ Result<bool> BodyWriter::PrepareFaces() {
     const auto* cone = std::get_if<ConeGeometry>(&surface.value()->payload);
     const auto* torus = std::get_if<TorusGeometry>(&surface.value()->payload);
     const auto* sphere = std::get_if<SphereGeometry>(&surface.value()->payload);
+    const auto* swept =
+        std::get_if<SweptSurfaceGeometry>(&surface.value()->payload);
     std::optional<SpunTorus> spun_torus;
     std::optional<SpunSphere> spun_sphere;
     if (const auto* spun =
@@ -861,11 +943,11 @@ Result<bool> BodyWriter::PrepareFaces() {
       }
     }
     if (!plane && !cylinder && !cone && !torus && !sphere && !spun_torus &&
-        !spun_sphere)
-      return Result<bool>::Err(
-          Error(source.face, ErrorCode::kUnsupportedFormat,
-                "Face export requires PLANE/CYLINDER/CONE/SPHERE "
-                "or ring TORUS surfaces"));
+        !spun_sphere && !swept)
+      return Result<bool>::Err(Error(
+          source.face, ErrorCode::kUnsupportedFormat,
+          "Face export requires PLANE/CYLINDER/CONE/SPHERE "
+          "or ring TORUS surfaces, or supported spline SWEPT_SURF patches"));
     if (!source.face_sense ||
         (*source.face_sense != '+' && *source.face_sense != '-') ||
         !surface.value()->sense ||
@@ -889,6 +971,12 @@ Result<bool> BodyWriter::PrepareFaces() {
       face.natural_sense = !face.natural_sense;
     if (spun_torus && !spun_torus->same_normal)
       face.natural_sense = !face.natural_sense;
+    if (swept) {
+      const auto prepared = PrepareSplineSweepFace(face);
+      if (!prepared.ok()) return prepared;
+      faces_.push_back(std::move(face));
+      continue;
+    }
     if (cone && std::any_of(source.loops.begin(), source.loops.end(),
                             [](const auto& loop) {
                               return loop.isolated_vertex.has_value();
@@ -1168,9 +1256,16 @@ Result<bool> BodyWriter::CheckSolid() {
   for (std::size_t i = 0; i < faces_.size(); ++i) {
     const auto& face = faces_[i];
     if (face.cylinder || face.cone || face.torus || face.sphere ||
-        face.planar_area > 0) {
+        face.planar_area > 0 || face.spline_sweep) {
       const auto sign = face.natural_sense != reversed_[i] ? 1.L : -1.L;
-      if (face.sphere) {
+      if (face.spline_sweep) {
+        const auto flux = SplineSweepVolume6(*face.spline_sweep, origin,
+                                             polygon_checks_remaining_);
+        if (!flux.ok())
+          return Result<bool>::Err(Error(face.source->face, flux.error().code,
+                                         flux.error().message.c_str()));
+        volume6 += sign * flux.value();
+      } else if (face.sphere) {
         volume6 +=
             sign * SphereBandVolume6(*face.sphere, *face.sphere_band, origin);
       } else if (face.torus) {
@@ -1243,6 +1338,45 @@ Result<bool> BodyWriter::CheckSolid() {
   return Result<bool>::Ok(true);
 }
 Id BodyWriter::Surface(const FaceData& face) {
+  if (face.spline_sweep) {
+    // A source support can be shared by several disjoint trims. Each certified
+    // finite patch owns its surface domain; do not reuse another trim's extent.
+    const auto& patch = *face.spline_sweep;
+    const auto& profile = patch.profile;
+    std::string rows = "(";
+    for (std::size_t i = 0; i < profile.axis.control_count; ++i) {
+      if (i) rows += ',';
+      std::array<Id, 2> points;
+      for (std::size_t j = 0; j < 2; ++j) {
+        const long double v = j ? patch.upper : patch.lower;
+        points[j] = writer_.Point(
+            {static_cast<double>(
+                 std::fma(v, patch.sweep.x, profile.controls.values[3 * i])),
+             static_cast<double>(std::fma(v, patch.sweep.y,
+                                          profile.controls.values[3 * i + 1])),
+             static_cast<double>(std::fma(
+                 v, patch.sweep.z, profile.controls.values[3 * i + 2]))});
+      }
+      rows += References(points);
+    }
+    rows += ')';
+    std::string knots = "(", multiplicities = "(";
+    for (std::size_t i = 0; i < profile.axis.knots.size(); ++i) {
+      if (i) {
+        knots += ',';
+        multiplicities += ',';
+      }
+      knots += writer_.Number(profile.axis.knots[i]);
+      multiplicities += std::to_string(profile.axis.multiplicities[i]);
+    }
+    knots += ')';
+    multiplicities += ')';
+    return writer_.Add("B_SPLINE_SURFACE_WITH_KNOTS(''," +
+                       std::to_string(profile.axis.degree) + ",1," + rows +
+                       ",.UNSPECIFIED.,.F.,.F.,.F.," + multiplicities +
+                       ",(2,2)," + knots + ",(" + writer_.Number(patch.lower) +
+                       ',' + writer_.Number(patch.upper) + "),.UNSPECIFIED.)");
+  }
   if (const auto found = surfaces_.find(face.source->surface.value);
       found != surfaces_.end())
     return found->second;

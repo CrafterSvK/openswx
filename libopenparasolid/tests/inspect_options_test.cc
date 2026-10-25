@@ -65,7 +65,7 @@ TEST(ParasolidInspectOptions, DefaultsAndExplicitBooleanOverridesAreStable) {
   EXPECT_FALSE(result.value().nodes);
   EXPECT_EQ(result.value().limits.max_nodes, 10000);
   EXPECT_EQ(result.value().limits.max_values, 1000000);
-  EXPECT_EQ(result.value().limits.max_total_fields, 65536);
+  EXPECT_EQ(result.value().limits.max_total_fields, 1000000);
 }
 TEST(ParasolidInspectOptions,
      BodyBindingEnablesModelAndRetainsExplicitTolerances) {

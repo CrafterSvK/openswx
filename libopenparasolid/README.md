@@ -1397,8 +1397,9 @@ displacement and checks the full 3D residual with the caller's tolerance.
 Work is capped at 32,000,000 estimated units; exhaustion returns
 `kResourceLimit`. Rational, closed, periodic, unclamped and uncertified
 projections remain unsupported. Finite seeds do not alter the unique branch.
-General closest-point projection remains unsupported. This reader capability
-does not add a swept-surface STEP writer.
+General closest-point projection remains unsupported. The sibling
+`libopenswstep` can serialize certified polynomial rectangular sweep patches;
+its supported trim subset is separate from reader inversion.
 The local intersection solver accepts the supported sweep sections. The
 payload-only overload still requires model context for sweeps.
 
@@ -2694,12 +2695,12 @@ and unique. The terminator is type 1, index 0, at the exact end of the stream.
 
 The schema-mode JSON report includes a `limits` object with all effective
 `SchemaLimits` values, also in summary reports. Positive integer options can
-adjust the following bounds; their defaults remain unchanged:
+adjust the following bounds:
 
 | Option | Default | Scope in schema mode |
 |---|---:|---|
 | `--max-records N` | 10,000 | Ordinary nodes plus delta node occurrences |
-| `--max-fields N` | 65,536 | Field groups, applied separately to the catalog, resolved schemas and decoded nodes |
+| `--max-fields N` | 1,000,000 | Field groups, applied separately to the catalog, resolved schemas and decoded nodes |
 | `--max-values N` | 1,000,000 | Scalar values, including composite components and pointers; status bytes are excluded |
 | `--max-delta-entries N` | 100,000 | Reference-map entries plus historical mark occurrences |
 
@@ -2791,9 +2792,15 @@ prefix plus a diagnostic, the failing node's offset and the uninterpreted tail
 `complete: true` and CLI status 0 require the valid final terminator; they do
 not validate reference targets, topology, geometric consistency or delta state.
 `--summary` omits schema and node arrays. `--max-records` sets the positive
-node limit in this mode. Defaults bound nodes to 10,000, resolved types to 1,024,
-fields per type to 4,096, catalog/resolved/decoded fields each to 65,536, scalar
-values to 1,000,000 and input to 128 MiB; C++ callers can set `SchemaLimits`.
+node limit in this mode (CLI default 10,000). The C++ `SchemaLimits` and
+`ModelOptions` defaults allow 100,000 nodes and 1,000,000 fields, so larger
+ordinary partitions can pass both decoding and model construction with the
+same finite budgets. `SchemaLimits` additionally bounds resolved types to
+1,024, fields per type to 4,096, scalar values to 1,000,000 and input to
+128 MiB. Field limits apply separately to catalog, resolved and decoded
+fields. Explicit smaller limits are still enforced; no automatic retry or
+unbounded fallback is used. The CLI's `--max-records` overrides the C++ node
+default in both inspection modes.
 Byte accounting is:
 
 ```text

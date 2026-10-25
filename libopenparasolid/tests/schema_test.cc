@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include "openparasolid/model.h"
 #include "test_helpers.h"
 
 namespace openparasolid {
@@ -64,6 +65,48 @@ std::vector<uint8_t> Complete() {
   U32(b, 42);
   End(b);
   return b;
+}
+TEST(ParasolidSchema, DefaultSchemaAndModelBudgetsAcceptLargerOrdinaryStreams) {
+  auto bytes = Header("(partition) ");
+  for (uint32_t i = 1; i <= 11000; ++i) {
+    U16(bytes, 29);
+    if (i == 1) bytes.push_back(255);
+    Index(bytes, i);
+    U32(bytes, i);
+    for (int j = 0; j < 4; ++j) Index(bytes, 0);
+    for (int j = 0; j < 3; ++j) F64(bytes, static_cast<double>(i));
+  }
+  End(bytes);
+  const auto parsed = SchemaParser::Parse(bytes);
+  ASSERT_TRUE(parsed.ok());
+  ASSERT_TRUE(parsed.value().complete)
+      << (parsed.value().diagnostics.empty()
+              ? "no diagnostic"
+              : parsed.value().diagnostics.front().error.message);
+  EXPECT_EQ(parsed.value().nodes.size(), 11000u);
+  const auto model = ModelBuilder::Build(parsed.value());
+  ASSERT_TRUE(model.ok()) << model.error().message;
+  EXPECT_EQ(model.value().nodes().size(), 11000u);
+  EXPECT_EQ(model.value().geometry().size(), 11000u);
+  EXPECT_TRUE(model.value().references_verified());
+  EXPECT_TRUE(model.value().typed_geometry_complete());
+  for (int kind = 0; kind < 2; ++kind) {
+    SchemaLimits limits;
+    if (kind == 0) limits.max_nodes = 10000;
+    if (kind == 1) limits.max_total_fields = 65536;
+    const auto stopped = SchemaParser::Parse(bytes, nullptr, limits);
+    ASSERT_TRUE(stopped.ok());
+    EXPECT_FALSE(stopped.value().complete);
+    ASSERT_FALSE(stopped.value().diagnostics.empty());
+    EXPECT_EQ(stopped.value().diagnostics.front().error.code,
+              ErrorCode::kResourceLimit);
+    ModelOptions options;
+    if (kind == 0) options.max_nodes = 10000;
+    if (kind == 1) options.max_fields = 65536;
+    const auto rejected = ModelBuilder::Build(parsed.value(), options);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kResourceLimit);
+  }
 }
 TEST(ParasolidSchema, FullDefinitionAndSequentialNodes) {
   auto catalog = Catalog();

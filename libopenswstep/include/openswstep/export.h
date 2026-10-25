@@ -68,7 +68,7 @@ struct ExportOptions {
   /// serialization share this budget, including restriction work in both stages
   /// and the existing corner checks. Spline-hole envelopes additionally charge
   /// one check per retained control and their own interval restriction work.
-  uint64_t max_polygon_checks = 1000000;
+  uint64_t max_polygon_checks = 10000000;
   /// Limits for sequential decoding of an extracted binary payload.
   openparasolid::SchemaLimits parsing;
   /// Limits for building the source model graph.
@@ -122,6 +122,21 @@ struct StepDocument {
 /// exclude ambiguous interior occurrences of the edge endpoints. This is not a
 /// wire self-intersection certificate. Periodic or closed spline wires remain
 /// unsupported. The planar polynomial face subset is described below.
+/// Open clamped polynomial SWEPT_SURF patches with two matching B_CURVE profiles and two
+/// straight generators are serialized as exact degree-(p,1) B-spline surfaces.
+/// The source degree, knots and sweep displacement units are preserved. Complete
+/// control comparisons certify translated profiles; the oriented parameter
+/// rectangle and an injective transverse projection certify the patch. Signed
+/// solid volume uses analytic polynomial surface flux, without tessellation.
+/// Supports simple concave planar LINE/CIRCLE/ELLIPSE and polynomial quadratic
+/// or cubic B_CURVE loops, with disjoint unnested holes. Bounded Bezier control
+/// hull subdivision is used only for validation; source edges stay unsplit.
+/// Geometry inside an admitted endpoint tolerance ball is treated consistently
+/// with source topology joins. Other nonadjacent source pieces require strict
+/// separation. Positive-weight rational conic hulls cover exact arcs; general
+/// rational spline boundaries remain unsupported.
+/// @see openparasolid::InvertSurface, XT 5.2.2.10 SWEPT_SURF (p. 67),
+/// 5.2.1.4 B_CURVE (p. 38), 5.2.2.9 B_SURFACE (p. 63).
 /// Supports point-only acorns, and planar
 /// polygon faces with LINE edges, one outer loop and disjoint, nonnested
 /// polygonal and full-circle hole loops. Source loop order does not determine
@@ -157,7 +172,7 @@ struct StepDocument {
 /// be oblique to the source spin axis; the equivalent sphere frame aligns with
 /// the cut, retaining exact source edges. Other bounded generators, tilted/skew
 /// circle planes and other generators remain unsupported.
-/// Planar faces also support a single convex
+/// The inexpensive convex path supports a single
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
 /// two-edge segments/lenses. A hole-free convex contour may additionally use
 /// polynomial quadratic/cubic B_CURVE edges, including smooth multi-span
@@ -177,14 +192,16 @@ struct StepDocument {
 /// prove C1 continuity; rounded piece tangents must agree with the shared
 /// source derivative within the length tolerance/perimeter ratio divided across
 /// pieces. Its signed roundoff correction changes no source geometry or STEP
-/// uncertainty. Speeds may differ; genuine internal kinks fail explicitly.
+/// uncertainty. Speeds may differ; genuine internal kinks leave this convex
+/// path and require the independent simple-loop certificate.
 /// Source traversal order determines accumulated area and tangent turning. The
 /// selected spline is serialized once per source edge, preserving interior
 /// knots and multiplicities; validation pieces do not change output topology.
 /// Partial/unclamped source axes use exact knot insertion and cropping; edge
 /// endpoint certificates and source vertex tolerances still apply. Rational
-/// spline face bounds, polynomial degrees above three, internal kinks and
-/// holes inside spline outer contours are unsupported. Convex LINE/CIRCLE outer
+/// spline face bounds and polynomial degrees above three remain unsupported.
+/// Simple internal kinks and curved holes can use the general certificate
+/// described above. Convex LINE/CIRCLE outer
 /// contours also support polygonal and complete circular holes. Circles and
 /// polygon vertices are checked against all supporting tangent half-planes,
 /// with two tolerances of clearance. Convexity contains entire polygon edges
@@ -207,12 +224,12 @@ struct StepDocument {
 /// concave corners when chord simplicity, adjacent departure cones and
 /// nonadjacent sagitta envelopes certify separation. These checks can reject
 /// valid close contours; exported curves and areas remain exact source
-/// geometry. Other nonconvex planar curved contours, holes in
-/// elliptic/nonconvex curved contours, curved outer contours with multi-edge
-/// curved holes, nonconvex curved holes, uncertified envelopes, other
+/// geometry. The independent control-hull path extends the certified subset
+/// to simple nonconvex curves and mixed holes. Uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, uncertified apex loops,
-/// explicit seam fins, horn/apple/lemon tori and single-edge elliptical holes remain
-/// unsupported. Paired tolerant edges without a recorded 3D curve can use an
+/// explicit seam fins and horn/apple/lemon tori remain unsupported. Specialized
+/// planar paths retain their narrower hole subsets; elliptic holes can use
+/// the general curved-region path. Paired tolerant edges without a recorded 3D curve can use an
 /// exact constant-profile circular SP_CURVE on a recognized spun torus and a
 /// quadratic polynomial planar SP_CURVE. Whole-span Bernstein bounds certify
 /// radial agreement, monotone azimuth and branch selection. STEP SURFACE_CURVE

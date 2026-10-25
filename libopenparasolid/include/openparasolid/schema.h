@@ -202,13 +202,13 @@ struct SchemaLimits {
   /// Upper bound on input bytes.
   uint64_t max_input_bytes = 128u * 1024u * 1024u;
   /// Upper bound on node occurrences.
-  uint64_t max_nodes = 10000;
+  uint64_t max_nodes = 100000;
   /// Upper bound on resolved schema types.
   uint64_t max_types = 1024;
   /// Upper bound on fields in one schema type.
   uint64_t max_fields_per_type = 4096;
   /// Applied separately to catalog fields, resolved fields and decoded fields.
-  uint64_t max_total_fields = 65536;
+  uint64_t max_total_fields = 1000000;
   /// Upper bound on decoded scalar values.
   uint64_t max_values = 1000000;
   /// Upper bound on internal delta packets.

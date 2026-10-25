@@ -486,9 +486,9 @@ struct ModelStatistics {
 /// @see @ref xt_schema "XT 2.1.1: Schema (p. 12)"
 struct ModelOptions {
   /// Upper bound on node occurrences.
-  uint64_t max_nodes = 10000;
+  uint64_t max_nodes = 100000;
   /// Upper bound on decoded fields.
-  uint64_t max_fields = 65536;
+  uint64_t max_fields = 1000000;
   /// Upper bound on decoded pointer references.
   uint64_t max_references = 1000000;
   /// Bounds decoded input values and copied geometry scalars separately.

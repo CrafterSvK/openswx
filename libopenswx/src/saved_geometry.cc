@@ -273,6 +273,8 @@ std::optional<std::string> DecodeBodies(const ParasolidPayload& payload,
   openparasolid::SchemaLimits limits;
   limits.max_input_bytes = options.max_decoded_bytes;
   limits.max_nodes = options.max_nodes_per_payload;
+  limits.max_total_fields = options.max_fields_per_payload;
+  limits.max_values = options.max_values_per_payload;
   limits.max_delta_entries = options.max_nodes_per_payload;
   limits.max_delta_packets = options.max_nodes_per_payload;
   auto parsed =
@@ -328,6 +330,9 @@ std::optional<std::string> DecodeBodies(const ParasolidPayload& payload,
   }
   openparasolid::ModelOptions model_options;
   model_options.max_nodes = options.max_nodes_per_payload;
+  model_options.max_fields = options.max_fields_per_payload;
+  model_options.max_values = options.max_values_per_payload;
+  model_options.max_references = options.max_values_per_payload;
   auto model =
       openparasolid::ModelBuilder::Build(parsed.value(), model_options);
   if (!model.ok()) {
@@ -366,7 +371,8 @@ Result<SavedGeometryResolution> ResolveSavedGeometry(
   if (configuration.empty() || !options.max_streams ||
       !options.max_decoded_bytes || !options.max_xml_bytes ||
       !options.max_xml_nodes || !options.max_payloads ||
-      !options.max_nodes_per_payload)
+      !options.max_nodes_per_payload || !options.max_fields_per_payload ||
+      !options.max_values_per_payload)
     return Return::Err(
         "Saved geometry requires a configuration and positive resource limits");
   if (inspection.streams.size() > options.max_streams)

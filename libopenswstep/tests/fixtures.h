@@ -2740,6 +2740,84 @@ inline ModelFixture WithSplineHole(ModelFixture donor,
   }
   return f;
 }
+// Original nonconvex regression profiles; no private CAD data is used.
+inline ModelFixture SimpleNotchSplineFace(bool cusp = false) {
+  auto f = cusp ? PlanarFace({{0, 0, 0}, {1, 0, 0}, {1, 1, 0}}, {{0, 1, 2}})
+                : PlanarFace({{0, 0, 0},
+                              {4, 0, 0},
+                              {4, 4, 0},
+                              {3, 4, 0},
+                              {3, 1, 0},
+                              {1, 1, 0},
+                              {1, 4, 0},
+                              {0, 4, 0}},
+                             {{0, 1, 2, 3, 4, 5, 6, 7}});
+  const uint32_t curve_id = cusp ? 4002 : 4004;
+  RemoveNode(f, curve_id);
+  f.Add(134, curve_id,
+        {Pointer("nurbs", 8000, 136),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  f.Add(136, 8000,
+        {Integer("degree", cusp ? 2 : 3, FieldType::kShort),
+         Integer("n_vertices", cusp ? 3 : 4),
+         Integer("vertex_dim", 3, FieldType::kShort), Integer("n_knots", 2),
+         ByteValue("knot_type", 0), Logical("periodic", false),
+         Logical("closed", false), Logical("rational", false),
+         ByteValue("curve_form", 0), Pointer("bspline_vertices", 8001, 45),
+         Pointer("knots", 8002, 128), Pointer("knot_mult", 8003, 127)});
+  f.Add(
+      45, 8001,
+      {Array("vertices", FieldType::kDouble,
+             cusp ? std::vector<ScalarValue>{0., 0., 0., .5, 0., 0., 1., 1., 0.}
+                  : std::vector<ScalarValue>{3., 1., 0., 2.5, .5, 0., 1.5, 1.5,
+                                             0., 1., 1., 0.})});
+  f.Add(128, 8002, {Array("knots", FieldType::kDouble, {2., 5.})});
+  const int64_t multiplicity = cusp ? 3 : 4;
+  f.Add(127, 8003,
+        {Array("multiplicities", FieldType::kShort,
+               {multiplicity, multiplicity})});
+  return f;
+}
+inline ModelFixture InflectedCubicFace() {
+  auto f = CubicSplineFace();
+  for (auto& node : f.report.nodes)
+    if (node.index == 8001) {
+      node.fields[0].values[3] = -.8;
+      node.fields[0].values[4] = 2.;
+      node.fields[0].values[6] = .8;
+      node.fields[0].values[7] = 1.;
+    }
+  return f;
+}
+inline ModelFixture KinkedQuadraticFace(double height) {
+  auto f = MultiSpanQuadraticSplineFace();
+  for (auto& node : f.report.nodes)
+    if (node.index == 8001) node.fields[0].values[4] = height;
+  return f;
+}
+inline ModelFixture CurvedSplineRegion() {
+  auto f = CubicSplineFace();
+  auto hole = QuadraticSplineFace();
+  for (auto& node : hole.report.nodes) {
+    if (node.node_type == 29 || node.node_type == 30)
+      for (auto& v : node.fields[0].values) std::get<double>(v) *= .1;
+    if (node.node_type == 45)
+      for (auto& v : node.fields[0].values) std::get<double>(v) *= .1;
+  }
+  hole = ClockwiseHole(TranslateSplineFace(std::move(hole), {0, .4, 0}));
+  AppendFaceLoops(f, hole, 300, true, 10000);
+  return f;
+}
+inline ModelFixture StadiumEllipticHole() {
+  auto f = Stadium();
+  ConicLoopSpec hole;
+  hole.ellipse = true;
+  hole.major = .25;
+  hole.minor = .2;
+  hole.reverse_fin = true;
+  AddConicFaceLoops(f, 300, {hole});
+  return f;
+}
 struct Serialized {
   std::vector<uint8_t> bytes;
   SchemaCatalog catalog;

@@ -31,6 +31,23 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "simple-stadium-ellipse-hole": (5,5,1,0,"area",4+.95*math.pi),
+    "simple-annular-circle-hole": (5,5,1,0,"area",1.99*math.pi),
+    "simple-notch-spline": (8,8,1,0,"area",10),
+    "simple-notch-spline-oblique": (8,8,1,0,"area",10),
+    "simple-notch-spline-inward": (8,8,1,0,"area",10),
+    "simple-notch-spline-hole": (12,12,1,0,"area",98),
+    "simple-tangential-cusp": (3,3,1,0,"area",1/3),
+    "simple-concave-circle": (8,8,1,0,"area",12-math.pi/2),
+    "simple-concave-ellipse": (8,8,1,0,"area",24-math.pi),
+    "simple-concave-minor-close": (8,8,1,0,"area",4.8-MINOR_ARC_SEGMENT),
+    "simple-half-ellipse-hole": (3,3,1,0,"area",.99*math.pi),
+    "simple-quadratic-hole": (3,3,1,0,"area",4/3-.01*math.pi),
+    "simple-inflected-cubic": (2,2,1,0,"area",.99),
+    "simple-kinked-quadratic-low": (2,2,1,0,"area",1.25),
+    "simple-kinked-quadratic-high": (2,2,1,0,"area",17/12),
+    "simple-curved-spline-region": (4,4,1,0,"area",63/40-1/75),
+
     # OCCT reconstructs an apex vertex, seam generator and degenerate pole edge.
     "cone-apex": (2, 3, 2, 1, "volume", 6 * math.pi),
     "cone-apex-seam": (2, 3, 2, 1, "volume", 6 * math.pi),

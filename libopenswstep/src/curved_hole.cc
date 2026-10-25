@@ -10,6 +10,7 @@
 
 #include "nurbs_wire.h"
 #include "openparasolid/evaluate.h"
+#include "simple_boundary.h"
 
 namespace openswstep::internal {
 namespace {
@@ -48,8 +49,11 @@ Result<Envelope> ReadEnvelope(std::span<const PlanarCurve> curves,
       return Return::Err({ErrorCode::kUnsupportedFormat, 0,
                           "Convex curved holes require LINE/CIRCLE/ELLIPSE or "
                           "supported polynomial B_CURVE bases"});
-  const auto valid = ValidateConvexPlanarLoop(curves, plane, !natural_sense,
-                                              tolerance, remaining);
+  auto valid = ValidateConvexPlanarLoop(curves, plane, !natural_sense,
+                                        tolerance, remaining);
+  if (!valid.ok() && valid.error().code == ErrorCode::kUnsupportedFormat)
+    valid = ValidateSimplePlanarLoop(curves, plane, !natural_sense, tolerance,
+                                     remaining);
   if (!valid.ok()) return Return::Err(valid.error());
   const auto origin = valid.value().reference_point;
   const auto n = Unit(plane.normal);

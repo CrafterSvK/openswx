@@ -332,10 +332,10 @@ TEST(OpenSwStep, CertifiesCubicDerivativeConesBeyondEndpointTurning) {
     EXPECT_NE(certified.error().message.find("tangent cone"),
               std::string::npos);
     const auto result = Export(fixture);
-    ASSERT_FALSE(result.ok());
+    EXPECT_EQ(result.ok(), !reversal);
   }
 }
-TEST(OpenSwStep, RejectsKinksBetweenPolynomialSplinePieces) {
+TEST(OpenSwStep, RetainsConvexKinkChecksAndExportsSimpleKinkedSplines) {
   for (double height : {.75, 1.25}) {
     auto fixture = test::MultiSpanQuadraticSplineFace();
     for (auto& node : fixture.report.nodes)
@@ -347,8 +347,7 @@ TEST(OpenSwStep, RejectsKinksBetweenPolynomialSplinePieces) {
     EXPECT_NE(certified.error().message.find("continuous tangent"),
               std::string::npos);
     const auto result = Export(fixture);
-    ASSERT_FALSE(result.ok());
-    EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    ASSERT_TRUE(result.ok()) << result.error().message;
   }
   for (double height : {1.2, 1.3}) {
     auto fixture = test::CubicSplineFace(false, false, false, false, 3);
@@ -380,7 +379,7 @@ TEST(OpenSwStep, BoundsQuadraticSplineFaceChecksAcrossPreparationAndWriting) {
     EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
   }
 }
-TEST(OpenSwStep, RejectsUncertifiedQuadraticSplineFacesAndHoleMixtures) {
+TEST(OpenSwStep, RejectsDegenerateQuadraticBoundsAndExportsCircularHoles) {
   for (int change = 0; change < 4; ++change) {
     auto fixture = test::QuadraticSplineFace();
     for (auto& node : fixture.report.nodes)
@@ -399,8 +398,7 @@ TEST(OpenSwStep, RejectsUncertifiedQuadraticSplineFacesAndHoleMixtures) {
   }
   const auto holes = Export(
       test::WithCircularHole(test::QuadraticSplineFace(), {0, .5, 0}, .1));
-  ASSERT_FALSE(holes.ok());
-  EXPECT_EQ(holes.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(holes.ok()) << holes.error().message;
 }
 TEST(OpenSwStep, ExportsPolynomialSplineHolesWithOriginalSourceTopology) {
   for (unsigned kind : {0u, 1u, 2u, 3u})
@@ -2283,7 +2281,7 @@ TEST(OpenSwStep, ExportsExactAnnularSectorsAndClosedRingSectors) {
     ASSERT_TRUE(result.ok()) << result.error().message;
   }
 }
-TEST(OpenSwStep, BoundsAnnularChecksAndRejectsUnimplementedContours) {
+TEST(OpenSwStep, BoundsAnnularChecksAndRejectsInconsistentRadialGeometry) {
   auto options = Options();
   options.max_polygon_checks = 5;
   ASSERT_TRUE(Export(test::AnnularSector(), options).ok());
@@ -2303,7 +2301,7 @@ TEST(OpenSwStep, BoundsAnnularChecksAndRejectsUnimplementedContours) {
   ASSERT_FALSE(twisted.ok());
   EXPECT_EQ(twisted.error().code, ErrorCode::kUnsupportedFormat);
   EXPECT_NE(twisted.error().message.find("radial"), std::string::npos);
-  EXPECT_FALSE(Export(test::ConcaveArcFace()).ok());
+  EXPECT_TRUE(Export(test::ConcaveArcFace()).ok());
   EXPECT_FALSE(Export(test::AnnularSector(1.5e-7)).ok());
   EXPECT_FALSE(
       Export(test::AnnularSector(std::numbers::pi / 2, false, 0, 0, 3 - 1e-7))
@@ -2505,16 +2503,15 @@ TEST(OpenSwStep, ExportsCertifiedConcaveMinorArcContoursWithExactSourceArea) {
   const auto limited = Export(test::ConcaveMinorArcFace(), options);
   ASSERT_FALSE(limited.ok());
   EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
-  for (const double bottom : {1.8, 1.95}) {
+  ASSERT_TRUE(Export(test::ConcaveMinorArcFace(1.8)).ok());
+  for (const double bottom : {1.95}) {
     const auto rejected = Export(test::ConcaveMinorArcFace(bottom));
     ASSERT_FALSE(rejected.ok());
     EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
-    EXPECT_NE(rejected.error().message.find("envelopes cannot certify"),
-              std::string::npos);
+    EXPECT_NE(rejected.error().message.find("certificate"), std::string::npos);
   }
   const auto cones = Export(test::ConcaveMinorArcFace(0, 1));
-  ASSERT_FALSE(cones.ok());
-  EXPECT_EQ(cones.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(cones.ok()) << cones.error().message;
 }
 TEST(OpenSwStep, ExportsEllipticCurvedHolesWithOriginalFramesAndMixedLoops) {
   for (const bool mixed : {false, true})
@@ -2625,8 +2622,7 @@ TEST(OpenSwStep, RetainsEllipseHoleProfileValidationAndWorkLimits) {
       test::ClockwiseHole(test::EllipticProfile(test::ConcaveArcFace())), 300,
       false, 10000);
   const auto rejected = Export(nonconvex);
-  ASSERT_FALSE(rejected.ok());
-  EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(rejected.ok()) << rejected.error().message;
 }
 TEST(OpenSwStep, ExportsConvexCurvedHolesWithPolygonalAndCircularOuterBounds) {
   for (const bool two : {false, true})
@@ -2961,7 +2957,7 @@ TEST(OpenSwStep, RejectsOverlappingNestedOrIncorrectlyWoundCurvedHoles) {
   ASSERT_FALSE(result.ok());
   EXPECT_NE(result.error().message.find("correctly wound"), std::string::npos);
 }
-TEST(OpenSwStep, BoundsCurvedHoleChecksAndRejectsUnsupportedHoleContours) {
+TEST(OpenSwStep, BoundsCurvedHoleChecksAndExportsGeneralConicHoles) {
   auto options = Options();
   options.max_polygon_checks = 8;
   const auto fixture = test::WithCircularHole(test::Stadium(), {0, 0, 0});
@@ -2979,8 +2975,7 @@ TEST(OpenSwStep, BoundsCurvedHoleChecksAndRejectsUnsupportedHoleContours) {
   EXPECT_EQ(paired.error().code, ErrorCode::kResourceLimit);
   const auto elliptic_outer =
       Export(test::WithCircularHole(test::HalfEllipse(), {0, .5, 0}, .1));
-  ASSERT_FALSE(elliptic_outer.ok());
-  EXPECT_EQ(elliptic_outer.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(elliptic_outer.ok()) << elliptic_outer.error().message;
   auto elliptic_hole = test::Stadium();
   test::ConicLoopSpec hole;
   hole.ellipse = true;
@@ -2988,13 +2983,11 @@ TEST(OpenSwStep, BoundsCurvedHoleChecksAndRejectsUnsupportedHoleContours) {
   hole.minor = .2;
   hole.reverse_fin = true;
   test::AddConicFaceLoops(elliptic_hole, 300, {hole});
-  const auto unsupported = Export(elliptic_hole);
-  ASSERT_FALSE(unsupported.ok());
-  EXPECT_EQ(unsupported.error().code, ErrorCode::kUnsupportedFormat);
+  const auto elliptic = Export(elliptic_hole);
+  ASSERT_TRUE(elliptic.ok()) << elliptic.error().message;
   const auto nonconvex =
       Export(test::WithCircularHole(test::AnnularSector(), {1.5, 1.5, 0}, .1));
-  ASSERT_FALSE(nonconvex.ok());
-  EXPECT_EQ(nonconvex.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(nonconvex.ok()) << nonconvex.error().message;
 }
 TEST(OpenSwStep, ExportsExactConePatchesAndClosedSectors) {
   for (const double slope : {1., -0.25}) {
@@ -3755,7 +3748,7 @@ TEST(OpenSwStep, ExportsConvexLineArcAndSplitCircleBoundariesExactly) {
   EXPECT_EQ(half.value().statistics.vertices, 2);
   EXPECT_EQ(half.value().statistics.edges, 2);
 }
-TEST(OpenSwStep, BoundsConvexCornerChecksAndRejectsConcaveOrRepeatedTurns) {
+TEST(OpenSwStep, BoundsCornerChecksAndExportsCertifiedConcaveContours) {
   auto options = Options();
   options.max_polygon_checks = 8;
   const auto exact = Export(test::RoundedRectangle(), options);
@@ -3765,37 +3758,24 @@ TEST(OpenSwStep, BoundsConvexCornerChecksAndRejectsConcaveOrRepeatedTurns) {
   ASSERT_FALSE(limited.ok());
   EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
   const auto concave = Export(test::ConcaveArcFace());
-  ASSERT_FALSE(concave.ok());
-  EXPECT_EQ(concave.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(concave.ok()) << concave.error().message;
   const auto repeated = Export(test::SplitCircle(true));
   ASSERT_FALSE(repeated.ok());
   EXPECT_EQ(repeated.error().code, ErrorCode::kInvalidRecord);
 }
-TEST(OpenSwStep, RetainsConvexFailureForIneligibleEllipticFallback) {
+TEST(OpenSwStep, UsesGeneralCertificateForSimpleConcaveEllipticBounds) {
   const auto fixture = test::EllipticProfile(test::ConcaveArcFace());
   uint64_t checks = 1000;
   const auto convex = ValidateSplineFace(fixture, checks);
   ASSERT_FALSE(convex.ok());
   ASSERT_EQ(convex.error().code, ErrorCode::kUnsupportedFormat);
   const auto result = Export(fixture);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, convex.error().code);
-  EXPECT_EQ(result.error().message.find("STEP node 300: " +
-                                      convex.error().message),
-            0);
-  EXPECT_NE(result.error().message.find(
-                "source curve 4004 (ellipse), edge 104"),
-            std::string::npos);
-  EXPECT_EQ(result.error().message.find(
-                "Minor-arc boundary requires LINE/CIRCLE bases"),
-            std::string::npos);
+  ASSERT_TRUE(result.ok()) << result.error().message;
   const auto binary = test::Serialize(fixture);
   const auto parsed =
       ExportParasolid(binary.bytes, NodeId{1}, Options(), &binary.catalog);
-  ASSERT_FALSE(parsed.ok());
-  EXPECT_EQ(parsed.error().code, result.error().code);
-  EXPECT_EQ(parsed.error().message, result.error().message);
-  EXPECT_GT(parsed.error().offset, 0);
+  ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+  EXPECT_EQ(parsed.value().text, result.value().text);
 }
 TEST(OpenSwStep, HandlesConvexArcsOnTranslatedAndNegativelySensedPlanes) {
   auto negative = test::RoundedRectangle();
@@ -3827,8 +3807,7 @@ TEST(OpenSwStep, ExportsConvexEllipseArcsWithoutApproximation) {
 }
 TEST(OpenSwStep, ValidatesEllipseCurvaturePlaneAndSharedCornerBudget) {
   const auto concave = Export(test::EllipticProfile(test::ConcaveArcFace()));
-  ASSERT_FALSE(concave.ok());
-  EXPECT_EQ(concave.error().code, ErrorCode::kUnsupportedFormat);
+  ASSERT_TRUE(concave.ok()) << concave.error().message;
   const auto repeated = Export(test::EllipticProfile(test::SplitCircle(true)));
   ASSERT_FALSE(repeated.ok());
   EXPECT_EQ(repeated.error().code, ErrorCode::kInvalidRecord);
