@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <limits>
 #include <map>
 #include <pugixml.hpp>
 #include <set>
@@ -11,6 +12,7 @@
 
 #include "openparasolid/model.h"
 #include "openparasolid/schema.h"
+#include "saved_geometry_history.h"
 
 namespace openswx {
 namespace {
@@ -266,16 +268,13 @@ GeometrySourceRole Role(const ParasolidPayload& payload,
 }
 std::optional<std::string> DecodeBodies(const ParasolidPayload& payload,
                                         SavedGeometryCandidate& candidate,
+                                        internal::SavedHistoryData& history,
                                         const SavedGeometryOptions& options) {
-  if (payload.kind == ParasolidPayloadKind::kDeltas) {
-    candidate.decode_issue =
-        "Delta decoding/application requires a separately resolved history "
-        "plan";
-    return {};
-  }
   openparasolid::SchemaLimits limits;
   limits.max_input_bytes = options.max_decoded_bytes;
   limits.max_nodes = options.max_nodes_per_payload;
+  limits.max_delta_entries = options.max_nodes_per_payload;
+  limits.max_delta_packets = options.max_nodes_per_payload;
   auto parsed =
       openparasolid::SchemaParser::Parse(payload.payload.data, nullptr, limits);
   if (!parsed.ok()) {
@@ -290,6 +289,42 @@ std::optional<std::string> DecodeBodies(const ParasolidPayload& payload,
   if (!parsed.value().complete || !parsed.value().diagnostics.empty()) {
     candidate.decode_issue = "Incomplete schema decoding; BODY list withheld";
     return {};
+  }
+  if (payload.kind == ParasolidPayloadKind::kDeltas) {
+    candidate.decoded_complete = true;
+    history.complete = true;
+    history.prefix = parsed.value().delta_prefix;
+    for (const auto& packet : parsed.value().delta_packets)
+      for (const auto& occurrence : packet.marks)
+        history.marks.push_back(occurrence.mark);
+    return {};
+  }
+  // WORLD current_id is a signed wire word in the generic schema report.
+  // Preserve its 32 bits; an unset sentinel is not an identifier.
+  const openparasolid::DecodedNode* world = nullptr;
+  bool multiple_worlds = false;
+  for (const auto& node : parsed.value().nodes)
+    if (node.node_type == 101) {
+      if (world) multiple_worlds = true;
+      world = &node;
+    }
+  if (world && !multiple_worlds) {
+    const auto& definition =
+        parsed.value().schemas[world->schema_index].definition;
+    std::size_t current_fields = 0;
+    for (const auto& field : world->fields) {
+      const auto& field_definition = definition.fields[field.definition_index];
+      if (field_definition.name != "current_id") continue;
+      ++current_fields;
+      if (field_definition.type == openparasolid::FieldType::kInteger &&
+          field_definition.elements == 0 && field.values.size() == 1) {
+        const auto* value = std::get_if<int64_t>(&field.values.front());
+        if (value && *value >= std::numeric_limits<int32_t>::min() &&
+            *value <= std::numeric_limits<int32_t>::max())
+          candidate.world_current_id = static_cast<uint32_t>(*value);
+      }
+    }
+    if (current_fields != 1) candidate.world_current_id.reset();
   }
   openparasolid::ModelOptions model_options;
   model_options.max_nodes = options.max_nodes_per_payload;
@@ -369,6 +404,7 @@ Result<SavedGeometryResolution> ResolveSavedGeometry(
         "Payload extraction has issues; complete saved state cannot be "
         "established");
   std::vector<std::size_t> matching, partitions;
+  std::vector<internal::SavedHistoryData> histories(extraction.payloads.size());
   for (std::size_t i = 0; i < extraction.payloads.size(); ++i) {
     const auto& payload = extraction.payloads[i];
     SavedGeometryCandidate candidate;
@@ -383,7 +419,8 @@ Result<SavedGeometryResolution> ResolveSavedGeometry(
           candidate.stream_index == result.partition_index)
         matching.push_back(i);
     }
-    if (const auto error = DecodeBodies(payload, candidate, options))
+    if (const auto error =
+            DecodeBodies(payload, candidate, histories[i], options))
       return Return::Err(*error);
     result.candidates.push_back(std::move(candidate));
   }
@@ -450,6 +487,12 @@ Result<SavedGeometryResolution> ResolveSavedGeometry(
   if (result.needs_rebuild.value_or(false))
     result.limitations.push_back(
         "Selected configuration cache is marked as needing rebuild");
+  internal::InspectSavedState(result, histories);
+  if (result.state_evidence.relation ==
+      SavedStateRelation::kMatchingIdentifiers)
+    result.limitations.push_back(
+        "Baseline WORLD and delta target identifiers match; delta presence "
+        "alone does not require replay or certify final-body membership");
   return Return::Ok(std::move(result));
 }
 Result<SavedGeometryResolution> ResolveSavedGeometry(
@@ -502,5 +545,16 @@ const char* ToString(SavedBodyKind value) noexcept {
       return "unknown";
   }
   return "unknown";
+}
+const char* ToString(SavedStateRelation value) noexcept {
+  switch (value) {
+    case SavedStateRelation::kUnavailable:
+      return "unavailable";
+    case SavedStateRelation::kMatchingIdentifiers:
+      return "matching_identifiers";
+    case SavedStateRelation::kDifferentIdentifiers:
+      return "different_identifiers";
+  }
+  return "unavailable";
 }
 }  // namespace openswx

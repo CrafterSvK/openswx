@@ -166,7 +166,10 @@ SWX_DUMP_RESOLVE_SAVED_GEOMETRY=Standard swx_dump /files/example.SLDPRT
 
 The report separates configuration and partition identity from saved-state and
 final-body membership. It records selector evidence, source offsets, cache flags
-and per-payload BODY candidates, including sheet bodies. Automatic delta
+and per-payload BODY candidates, including sheet bodies. `state_evidence`
+compares WORLD/current-PMARK identifiers and validates a bounded structural
+history path. Matching identifiers do not by themselves require delta replay and do not
+certify final body membership. Automatic delta
 reconstruction and final/helper-body classification remain unsupported or
 unresolved. Exit zero means the report was produced, not that the model is
 current or complete. See the [API and selection contract](libopenswx/SAVED_GEOMETRY.md).

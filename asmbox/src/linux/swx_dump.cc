@@ -769,6 +769,28 @@ json SavedGeometryJson(const openswx::SavedGeometryResolution& result) {
        result.was_last_active ? json(*result.was_last_active) : json(nullptr)},
       {"needs_rebuild",
        result.needs_rebuild ? json(*result.needs_rebuild) : json(nullptr)},
+      {"state_evidence",
+       {{"baseline_payload_index",
+         result.state_evidence.baseline_payload_index
+             ? json(*result.state_evidence.baseline_payload_index)
+             : json(nullptr)},
+        {"delta_payload_index",
+         result.state_evidence.delta_payload_index
+             ? json(*result.state_evidence.delta_payload_index)
+             : json(nullptr)},
+        {"baseline_current_id",
+         result.state_evidence.baseline_current_id
+             ? json(*result.state_evidence.baseline_current_id)
+             : json(nullptr)},
+        {"target_identifier",
+         result.state_evidence.target_identifier
+             ? json(*result.state_evidence.target_identifier)
+             : json(nullptr)},
+        {"relation", openswx::ToString(result.state_evidence.relation)},
+        {"history_path_status",
+         openswx::ToString(result.state_evidence.history_path_status)},
+        {"mark_path", result.state_evidence.mark_path},
+        {"issue", result.state_evidence.issue}}},
       {"limitations", result.limitations},
       {"evidence", json::array()},
       {"candidates", json::array()}};
@@ -786,6 +808,9 @@ json SavedGeometryJson(const openswx::SavedGeometryResolution& result) {
                                                 : json(nullptr)},
         {"selected_partition", candidate.selected_partition},
         {"decoded_complete", candidate.decoded_complete},
+        {"world_current_id", candidate.world_current_id
+                                 ? json(*candidate.world_current_id)
+                                 : json(nullptr)},
         {"decode_issue", candidate.decode_issue},
         {"body_candidates", json::array()}};
     for (const auto& body : candidate.bodies)

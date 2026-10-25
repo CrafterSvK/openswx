@@ -36,16 +36,74 @@ std::vector<uint8_t> Payload(std::string_view kind) {
   data.insert(data.end(), {0, 1, 2, 3});
   return data;
 }
-void AppendPayload(StreamInfo& stream, std::string_view kind) {
+void AppendBytes(StreamInfo& stream, const std::vector<uint8_t>& payload) {
   const std::array<uint8_t, 16> marker{0x23, 0x1d, 0xd5, 0x71, 0xda, 0x81,
                                        0x48, 0xa2, 0xa8, 0x58, 0x98, 0xb2,
                                        0x1b, 0x89, 0xef, 0x99};
-  const auto payload = Payload(kind), compressed = test::DeflateZlib(payload);
+  const auto compressed = test::DeflateZlib(payload);
   auto& bytes = stream.decoded_data;
   bytes.insert(bytes.end(), marker.begin(), marker.end());
   test::AppendU32Le(&bytes, static_cast<uint32_t>(payload.size()));
   test::AppendU32Le(&bytes, static_cast<uint32_t>(compressed.size()));
   bytes.insert(bytes.end(), compressed.begin(), compressed.end());
+}
+void AppendPayload(StreamInfo& stream, std::string_view kind) {
+  AppendBytes(stream, Payload(kind));
+}
+void Be16(std::vector<uint8_t>& data, uint16_t value) {
+  data.push_back(static_cast<uint8_t>(value >> 8));
+  data.push_back(static_cast<uint8_t>(value));
+}
+void Be32(std::vector<uint8_t>& data, uint32_t value) {
+  for (int shift : {24, 16, 8, 0})
+    data.push_back(static_cast<uint8_t>(value >> shift));
+}
+std::vector<uint8_t> Header(std::string_view kind) {
+  std::vector<uint8_t> data{'P', 'S', 0, 0};
+  const std::string description = ": TRANSMIT FILE (" + std::string(kind) +
+                                  ") created by modeller version 1234567";
+  Be16(data, static_cast<uint16_t>(description.size()));
+  data.insert(data.end(), description.begin(), description.end());
+  const std::string schema = "SCH_1234567_12345_13006";
+  data.push_back(static_cast<uint8_t>(schema.size()));
+  data.insert(data.end(), schema.begin(), schema.end());
+  Be16(data, 204);
+  Be32(data, 0);
+  return data;
+}
+void End(std::vector<uint8_t>& data) {
+  Be16(data, 1);
+  Be16(data, 1);
+}
+std::vector<uint8_t> World(uint32_t current) {
+  auto data = Header("partition");
+  Be16(data, 101);
+  data.push_back(255);
+  Be16(data, 2);  // WORLD index 1.
+  for (int i = 0; i < 7; ++i) Be16(data, 1);
+  data.push_back(1);  // Alive.
+  Be16(data, 1);
+  Be32(data, 123456789);  // Deliberately unrelated allocation counter.
+  Be32(data, current);
+  End(data);
+  return data;
+}
+std::vector<uint8_t> Delta(uint32_t current) {
+  auto data = Header("deltas");
+  Be16(data, 3);
+  data.push_back(255);
+  Be16(data, 3);  // PARTITION index 2.
+  Be16(data, 4);  // Current PMARK index 3.
+  Be32(data, current);
+  Be16(data, 4);
+  data.push_back(255);
+  Be16(data, 4);
+  for (int i = 0; i < 4; ++i) Be16(data, 1);
+  for (int i = 0; i < 4; ++i) Be32(data, 0);
+  data.push_back(0);
+  Be32(data, current);
+  End(data);
+  return data;
 }
 StreamInfo Partition(std::string name = "Contents/Config-5-Partition") {
   auto stream = Xml(std::move(name), "");
@@ -264,6 +322,61 @@ TEST(SavedGeometry, NativeKeywordPrefixAndUnicodeNamesArePreserved) {
   ASSERT_TRUE(r.ok());
   EXPECT_EQ(r.value().configuration_status, Status::kResolved);
   EXPECT_EQ(Selected(r.value()), 1u);
+}
+TEST(SavedGeometry, MatchingStateIdentifiersDoNotCertifyEmptyBodyMembership) {
+  for (uint32_t identifier : {0u, 300u, 0xffffffffu}) {
+    auto stream = Xml("Config-5-Partition", "");
+    AppendBytes(stream, World(identifier));
+    AppendBytes(stream, Delta(identifier));
+    ContainerInspection input;
+    input.streams = {Keyword(), stream};
+    const auto r = ResolveSavedGeometry(input, "Target");
+    ASSERT_TRUE(r.ok()) << r.error();
+    ASSERT_EQ(r.value().candidates.size(), 2u);
+    EXPECT_TRUE(r.value().candidates[0].decoded_complete);
+    EXPECT_TRUE(r.value().candidates[1].decoded_complete);
+    EXPECT_TRUE(r.value().candidates[0].bodies.empty());
+    EXPECT_TRUE(r.value().candidates[1].bodies.empty());
+    EXPECT_EQ(r.value().candidates[0].world_current_id, identifier);
+    const auto& e = r.value().state_evidence;
+    EXPECT_EQ(e.baseline_current_id, identifier);
+    EXPECT_EQ(e.target_identifier, identifier);
+    EXPECT_EQ(e.relation, SavedStateRelation::kMatchingIdentifiers);
+    EXPECT_EQ(e.history_path_status, Status::kResolved);
+    EXPECT_EQ(e.mark_path, (std::vector<uint32_t>{3}));
+    EXPECT_EQ(r.value().state_status, Status::kUnsupported);
+    EXPECT_EQ(r.value().body_membership_status, Status::kUnresolved);
+  }
+}
+TEST(SavedGeometry, UnsetWorldIdentifierIsNotTakenFromAllocationCounter) {
+  auto stream = Xml("Config-5-Partition", "");
+  AppendBytes(stream, World(0xffff8004u));  // XT unset integer sentinel.
+  AppendBytes(stream, Delta(300));
+  ContainerInspection input;
+  input.streams = {Keyword(), stream};
+  const auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  EXPECT_FALSE(r.value().candidates[0].world_current_id);
+  EXPECT_EQ(r.value().state_evidence.relation,
+            SavedStateRelation::kUnavailable);
+}
+TEST(SavedGeometry, DifferentIdentifiersDoNotApplyDeltaImages) {
+  auto stream = Xml("Config-5-Partition", "");
+  AppendBytes(stream, World(100));
+  AppendBytes(stream, Delta(300));
+  ContainerInspection input;
+  input.streams = {Keyword(), stream};
+  const auto r = ResolveSavedGeometry(input, "Target");
+  ASSERT_TRUE(r.ok());
+  const auto& e = r.value().state_evidence;
+  EXPECT_EQ(e.relation, SavedStateRelation::kDifferentIdentifiers);
+  EXPECT_EQ(e.history_path_status, Status::kUnresolved);
+  EXPECT_TRUE(e.mark_path.empty());
+  EXPECT_EQ(r.value().candidates[0].world_current_id, 100u);
+  EXPECT_EQ(r.value().state_status, Status::kUnsupported);
+  SavedGeometryOptions options;
+  options.max_nodes_per_payload = 1;
+  EXPECT_FALSE(ResolveSavedGeometry(input, "Target", options).ok());
 }
 TEST(SavedGeometry, EnforcesResourceCapsAndExplicitConfiguration) {
   ContainerInspection input;

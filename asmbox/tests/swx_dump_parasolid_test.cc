@@ -130,6 +130,11 @@ TEST_F(ParasolidCliTest, ResolvesSavedGeometryWithoutCertifyingCurrentBodies) {
   EXPECT_EQ(report["partition_status"], "resolved");
   EXPECT_EQ(report["state_status"], "unsupported");
   EXPECT_EQ(report["body_membership_status"], "unresolved");
+  EXPECT_EQ(report["state_evidence"]["relation"], "unavailable");
+  EXPECT_EQ(report["state_evidence"]["history_path_status"], "unresolved");
+  EXPECT_TRUE(report["state_evidence"]["mark_path"].empty());
+  EXPECT_TRUE(report["state_evidence"]["baseline_current_id"].is_null());
+  EXPECT_TRUE(report["candidates"][0]["world_current_id"].is_null());
   EXPECT_EQ(report["partition_index"], 7);
   EXPECT_EQ(report["resolved_features_index"], 9);
   EXPECT_TRUE(report["candidates"][0]["selected_partition"]);

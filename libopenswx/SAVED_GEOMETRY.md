@@ -88,10 +88,59 @@ application order. Equal numeric indices across unrelated stream families do
 not associate a delta. No delta is applied by this resolver.
 
 The separate `openparasolid/delta.h` API can apply a caller-resolved plan.
-Automatic PMARK graph traversal, wire-status/operation interpretation and
-SolidWorks final-body membership remain open work. XT PARTITION/PMARK metadata
+Automatic wire-status/operation interpretation, partial-image reconstruction
+and SolidWorks final-body membership remain open work. XT PARTITION/PMARK metadata
 and WORLD body roots describe kernel state (XT 1.1.2, p. 8; 5.3.1, pp. 83-84);
 they do not alone prove SolidWorks final/helper body roles.
+
+## Baseline and target evidence
+
+Each fully decoded ordinary candidate exposes its unique WORLD `current_id`
+as `world_current_id`, when the field is a scalar 32-bit integer. The wire bits
+are retained, including signed integer representations; an unset value remains
+absent. No identifier is taken from `highest_id`, BODY IDs or serialization
+order. Delta candidates are now schema-decoded too, under the same input/node
+limits; `max_nodes_per_payload` additionally bounds delta packet and entry
+counts. Their `decoded_complete` is framing evidence only, and their `bodies`
+remain empty: transmitted delta images are not standalone bodies.
+
+`state_evidence` compares the selected baseline with exactly one delta in the
+same source stream record. It names both payload indices and retains
+`baseline_current_id` and the current PMARK's persistent `target_identifier`.
+The relation is `unavailable`, `matching_identifiers` or `different_identifiers`.
+Multiple delta candidates do not select a target, even if their identifiers
+happen to agree. An incomplete base or delta does not establish a comparison.
+
+`history_path_status` refers only to the stored PMARK graph. The check requires
+one initial mark, unique persistent identifiers, complete predecessor and
+child/sibling links, reciprocal sibling relationships and no cycles, including
+disconnected cycles. Identical repeated mark occurrences may share one graph
+identity; conflicting occurrences leave the path unresolved. Graph checking is
+bounded and nonrecursive. Packet order is irrelevant.
+
+If the baseline identifier belongs to the current mark's ancestry, `mark_path`
+contains the XMT mark indices from that baseline mark to the current mark,
+inclusive. Matching identifiers therefore give a one-element path: no mark
+transition is needed on that path. A different identifier that is absent or on
+another branch does not trigger an inferred reverse or sibling-branch replay.
+The diagnostic `issue` explains unavailable comparisons or unresolved paths.
+
+A `resolved` history path is neither a resolved operation plan nor proof that
+the selected baseline owns all geometry for the SolidWorks configuration. No
+delta is applied, and `state_status` and `body_membership_status` retain their
+conservative meanings. In particular, delta presence alone never requires
+replay, and matching identifiers never certifies final body membership.
+
+The independent synthetic `saved-state-002` corpus demonstrates both limits.
+A revolved profile with a bevel is rounded, suppressed and restored, producing
+one solid with four/five/four/five faces after save/reopen. Helper sketches and
+an auxiliary sheet add stored geometry. The auxiliary sheet's active and
+suppressed snapshots both have baseline/current-PMARK identifier 13, the same
+one-solid baseline inventory and an internal sheet candidate. Native SolidWorks
+reports two bodies (`solid`, `sheet`) in the active snapshot and one solid in
+the suppressed snapshot. Even a structurally valid one-mark path cannot decide
+the sheet's final membership. These are original MIT fixtures, not copies or
+derived geometry from a private model.
 
 ## CLI and verification
 
@@ -161,7 +210,9 @@ Remaining stages, in dependency order:
    links, repeated occurrences and direction against that base and target.
    Detect missing, contradictory and cyclic history rather than selecting a
    branch by packet order. Reading the complete history bytes is already
-   supported for these fixtures; constructing a verified replay path is not.
+   supported for these fixtures. Structural predecessor paths are now checked
+   by `state_evidence`; selecting and validating actual replay operations is
+   still unsupported.
 3. **Automatic operation planning.** Establish wire-reference/status namespaces,
    persistent identities, create/replace/delete operations and any inherited
    fields. `ApplyDelta` already checks an explicit whole-node plan transactionally;

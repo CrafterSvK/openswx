@@ -28,6 +28,7 @@ add_library(openswx STATIC
   src/container.cc
   src/document.cc
   src/saved_geometry.cc
+  src/saved_geometry_history.cc
   src/drawing_appearance.cc
   src/drawing_balloon_geometry.cc
   src/drawing_display_list_geometry.cc
@@ -79,6 +80,7 @@ if(BUILD_TESTING)
   add_executable(libopenswx_tests
     tests/container_test.cc
     tests/saved_geometry_test.cc
+    tests/saved_geometry_history_test.cc
     tests/cmgrhdr_reader_test.cc
     tests/decompressor_test.cc
     tests/document_test.cc
@@ -96,6 +98,7 @@ if(BUILD_TESTING)
   )
   target_link_libraries(libopenswx_tests PRIVATE
     openswx
+    openparasolid
     GTest::gtest_main
     ZLIB::ZLIB
   )
