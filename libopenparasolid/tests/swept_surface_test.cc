@@ -48,6 +48,128 @@ void Conic(ModelFixture& f, bool ellipse, double radius = 2) {
   }
   f.Add(ellipse ? 32 : 31, 1, std::move(fields));
 }
+void Spline(ModelFixture& f, std::vector<ScalarValue> controls,
+            std::vector<ScalarValue> knots = {2., 5.},
+            std::vector<ScalarValue> multiplicities = {int64_t{4},
+                                                       int64_t{4}}) {
+  const auto count = static_cast<int64_t>(controls.size() / 3);
+  const auto knot_count = static_cast<int64_t>(knots.size());
+  f.Curve();
+  f.Add(136, 2,
+        {Integer("degree", 3, FieldType::kShort), Integer("n_vertices", count),
+         Integer("vertex_dim", 3, FieldType::kShort),
+         Integer("n_knots", knot_count), ByteValue("knot_type", 2),
+         Logical("periodic", false), Logical("closed", false),
+         Logical("rational", false), ByteValue("curve_form", 1),
+         Pointer("bspline_vertices", 3, 45), Pointer("knots", 4, 128),
+         Pointer("knot_mult", 5, 127)});
+  f.Add(45, 3, {Array("vertices", FieldType::kDouble, std::move(controls))});
+  f.Add(128, 4, {Array("knots", FieldType::kDouble, std::move(knots))});
+  f.Add(
+      127, 5,
+      {Array("multiplicities", FieldType::kShort, std::move(multiplicities))});
+}
+TEST(ParasolidSweptSurface, InvertsClampedCubicInSourceKnotUnits) {
+  ModelFixture f;
+  Swept(f, 1, {1, 0, 0}, true);
+  Spline(f,
+         {-.008, 0., 0., -.008, .004, 0., -.008, .008, 0., -.008, .012, .009});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (double t : {0., .01, .3, .75, .999, 1.}) {
+    for (double v : {-.3, 0., .008, 3.}) {
+      const double u = 2 + 3 * t;
+      // Independently constructed analytic cubic, including both endpoints.
+      const Vector3 point{-.008 + v, .012 * t, .009 * t * t * t};
+      const auto inverse =
+          InvertSurface(model.value(), NodeId{20}, point, 1e-13, {4, 100});
+      ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+      EXPECT_NEAR(inverse.value().u, u, 1e-12);
+      EXPECT_NEAR(inverse.value().v, v, 1e-13);
+      EXPECT_LE(inverse.value().residual, 1e-13);
+    }
+  }
+}
+TEST(ParasolidSweptSurface, InvertsNonplanarObliqueMultiSpanSection) {
+  ModelFixture f;
+  Swept(f, 1, {.6, 0, .8});
+  Spline(
+      f,
+      {0., 0., 0., 1., 1., 0., 0., 2., 1., 2., 3., 2., 0., 4., 3., 3., 5., 4.},
+      {2., 2.9, 4.25, 5.}, {int64_t{4}, int64_t{1}, int64_t{1}, int64_t{4}});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (double u : {2., 2.4, 2.9, 3.7, 4.25, 4.8, 5.}) {
+    const auto sample = EvaluateSurface(model.value(), NodeId{20}, u, -3);
+    ASSERT_TRUE(sample.ok());
+    const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                       sample.value().position, 1e-12);
+    ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+    EXPECT_NEAR(inverse.value().u, u, 1e-12);
+    EXPECT_NEAR(inverse.value().v, -3, 1e-12);
+  }
+}
+TEST(ParasolidSweptSurface, SplineMembershipDoesNotExpandToleranceOrDomain) {
+  ModelFixture f;
+  Swept(f, 1, {1, 0, 0});
+  Spline(f, {0., 0., 0., 0., 1., 0., 0., 2., 0., 0., 3., 0.});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  EXPECT_TRUE(InvertSurface(model.value(), NodeId{20}, {4, 0, 0}, 0).ok());
+  EXPECT_TRUE(InvertSurface(model.value(), NodeId{20}, {4, 3, 0}, 0).ok());
+  EXPECT_FALSE(InvertSurface(model.value(), NodeId{20}, {4, -1, 0}, 1e-5).ok());
+  EXPECT_FALSE(InvertSurface(model.value(), NodeId{20}, {4, 4, 0}, 1e-5).ok());
+  EXPECT_FALSE(
+      InvertSurface(model.value(), NodeId{20}, {4, 1.5, 1e-4}, 1e-5).ok());
+  const auto accepted =
+      InvertSurface(model.value(), NodeId{20}, {4, 1.5, 1e-4}, 1e-3);
+  ASSERT_TRUE(accepted.ok());
+  EXPECT_DOUBLE_EQ(accepted.value().residual, 1e-4);
+}
+TEST(ParasolidSweptSurface, SplineRejectsUncertifiedOrSingularProjections) {
+  for (auto controls : {std::vector<ScalarValue>{0., 0., 0., 0., 2., 0., 0.,
+                                                 -1., 0., 0., 1., 0.},
+                        std::vector<ScalarValue>{0., 0., 0., 0., 0., 0., 0., 1.,
+                                                 0., 0., 2., 0.},
+                        std::vector<ScalarValue>{0., 0., 0., 1., 0., 0., 2., 0.,
+                                                 0., 3., 0., 0.}}) {
+    ModelFixture f;
+    Swept(f, 1, {1, 0, 0});
+    Spline(f, std::move(controls));
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto inverse = InvertSurface(model.value(), NodeId{20}, {}, 1e-6);
+    ASSERT_FALSE(inverse.ok());
+    EXPECT_EQ(inverse.error().code, ErrorCode::kUnsupportedFormat);
+  }
+}
+TEST(ParasolidSweptSurface, SplineInversionPreservesSmallAndLargeSourceUnits) {
+  for (double scale : {1e-150, 1e150}) {
+    ModelFixture f;
+    Swept(f, 1, {-1, 0, 0});
+    Spline(f, {0., 0., 0., 0., scale, 0., 0., 2 * scale, 0., 0., 3 * scale,
+               scale});
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    const auto inverse =
+        InvertSurface(model.value(), NodeId{20},
+                      {-2 * scale, 1.5 * scale, .125 * scale}, scale * 1e-12);
+    ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+    EXPECT_NEAR(inverse.value().u, 3.5, 1e-12);
+    EXPECT_NEAR(inverse.value().v / scale, 2, 1e-12);
+  }
+}
+TEST(ParasolidSweptSurface, SplineInversionHasAnExplicitSearchBudget) {
+  ModelFixture f;
+  Swept(f, 1, {1, 0, 0});
+  Spline(f, {0., 0., 0., 0., 1., 0., 0., 2., 0., 0., 3., 0.}, {0., 1.});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto inverse =
+      InvertSurface(model.value(), NodeId{20}, {0, 1e-200, 0}, 0);
+  ASSERT_FALSE(inverse.ok());
+  EXPECT_EQ(inverse.error().code, ErrorCode::kResourceLimit);
+}
 TEST(ParasolidSweptSurface, InvertsAnalyticSectionsInOriginalCoordinates) {
   for (int kind = 0; kind < 3; ++kind) {
     ModelFixture f;
@@ -159,7 +281,7 @@ TEST(ParasolidSweptSurface,
     Swept(f, bad == 3 ? 99 : 1, bad == 4 ? Vector3{0, 0, 2} : Vector3{1, 0, 0});
     if (bad == 0 || bad == 3 || bad == 4) Line(f);
     if (bad == 1) Conic(f, false);
-    if (bad == 2) f.Spline();
+    if (bad == 2) f.Spline(true);
     const auto model = ModelBuilder::Build(f.report);
     ASSERT_TRUE(model.ok());
     const auto inverse =

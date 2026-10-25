@@ -241,10 +241,21 @@ struct SurfaceParameterSeed {
 /// conics require a sweep transverse to the section plane. Conic u uses atan2's
 /// principal branch, and v is signed source sweep displacement. At most two
 /// model surface evaluations validate (0,0) and the recovered point, with no
-/// implicit tolerance. Other swept profiles remain unsupported.
+/// implicit tolerance. Open nonrational clamped 3D B_CURVE sections are also
+/// supported when their control polygon has a strictly increasing projection
+/// perpendicular to the sweep. This certifies a unique u on the source knot
+/// domain, including nonplanar sections and repeated interior knots. At most
+/// 130 curve samples and two surface samples are used, with a 32,000,000
+/// estimated work-unit limit; exhausted budgets return kResourceLimit.
+/// Rational, closed, periodic and uncertified sections remain unsupported.
+/// Finite seeds do not change this unique branch. The final 3D membership
+/// residual uses the caller's unchanged tolerance; no closest-point claim is
+/// made. Other swept profiles remain unsupported.
 ///
 /// @see @ref xt_surfaces "XT 5.2.2: Surfaces (p. 53)", @ref xt_spun
-/// "XT 5.2.2.11: Spun_surf (p. 68)"
+/// "XT 5.2.2.11: Spun_surf (p. 68)", @ref xt_swept
+/// "XT 5.2.2.10: Swept_surf (p. 67)", @ref xt_bcurve
+/// "XT 5.2.1.4: B_CURVE (B-spline curve) (p. 38)"
 ///
 /// @param model Source model providing stream-local identities and typed
 /// geometry.
@@ -346,7 +357,7 @@ struct IntersectionChartEvaluation {
 
 /// Reconstructs a directly referenced INTERSECTION's chart from the model.
 /// Both targets must have known senses and support analytic, NURBS, circular
-/// spun ring/sphere, analytic-section swept or supported analytic-offset inversion.
+/// spun ring/sphere, supported swept-section or analytic-offset inversion.
 /// The previous UV supplies the next hint;
 /// local NURBS roots and periodic seam continuity are not certified.
 /// Each stored chart position must invert onto both surfaces within the finite
@@ -424,7 +435,7 @@ struct IntersectionEvaluationOptions {
     const IntersectionEvaluationOptions& options);
 
 /// Evaluates a directly referenced INTERSECTION with analytic, NURBS, supported
-/// circular spun ring/sphere, analytic-section swept or analytic-offset surfaces
+/// circular spun ring/sphere, supported swept-section or analytic-offset surfaces
 /// within its chart.
 /// Requires a finite parameter and explicit finite chart/solve tolerances in
 /// source units. Optional endpoint tolerance uses original parameter units.
@@ -438,8 +449,9 @@ struct IntersectionEvaluationOptions {
 /// Model surface evaluation retains spun profile bounds. Spin angles and
 /// unbounded circular profile angles use local periodic interpolation; bounded
 /// profile parameters interpolate directly without extending their domain.
-/// Swept conic sections use local angular interpolation. Swept line parameters
-/// and sweep displacement retain linear units without angular wrapping.
+/// Swept conic sections use local angular interpolation. Swept B-spline
+/// parameters retain the source knot domain. Swept line parameters and signed
+/// sweep displacement retain linear units without angular wrapping.
 /// Analytic offsets inherit their resolved basis's angular/linear coordinates.
 /// Model-based offset checks, senses, cycle detection and the 64-layer limit
 /// apply during chart preparation, interpolation, sampling and normals.

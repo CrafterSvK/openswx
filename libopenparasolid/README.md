@@ -1387,14 +1387,32 @@ samples: validation at `(0,0)` and final membership at the recovered parameters.
 Both must be representable. Returned parameters must be finite doubles and
 the final 3D residual must meet the unchanged caller tolerance, including zero.
 Finite seeds are validated and retain the direct principal-branch formulas.
-NURBS sweep inversion and general closest-point projection remain unsupported.
-The local intersection solver accepts the supported analytic-section sweeps. The payload-only overload still requires model
-context for sweeps.
+
+Open nonrational clamped 3D B-spline sections now support inversion when the
+control polygon has a strictly monotone projection perpendicular to the sweep.
+This proves a unique profile parameter without requiring a planar section.
+The solver preserves the source knot domain, bisects using the original
+B-spline evaluator (at most 130 curve samples), then recovers signed sweep
+displacement and checks the full 3D residual with the caller's tolerance.
+Work is capped at 32,000,000 estimated units; exhaustion returns
+`kResourceLimit`. Rational, closed, periodic, unclamped and uncertified
+projections remain unsupported. Finite seeds do not alter the unique branch.
+General closest-point projection remains unsupported. This reader capability
+does not add a swept-surface STEP writer.
+The local intersection solver accepts the supported sweep sections. The
+payload-only overload still requires model context for sweeps.
 
 Synthetic tests cover all three sections, oblique extrusion, accepted source
 frame residuals, principal angles, radii from `1e-150` to `1e150`, exact and
 finite-tolerance membership, invalid/singular dependencies and body/fin binding
-on an extruded line. The separate 39-stream corpus contains no swept surfaces;
+on an extruded line. Spline tests add analytic cubic positions, nonzero knot
+domains, nonplanar oblique multi-span sections, original scales from `1e-150`
+to `1e150`, exact and finite membership, search exhaustion and folded/singular
+control rejection. Two original MIT native SolidWorks fixtures in
+`openswx-testdata/verification/bspline-sweep-001` verify complete body binding
+for single-span and nonuniform multi-span cubic sections against retained
+native evidence. Their STEP export still reports the separate unsupported
+surface writer. The separate 39-stream corpus contains no swept surfaces;
 it serves as regression coverage, retaining 56 of 57 successful body bindings.
 Private inputs and comparison programs remain outside the repository.
 
