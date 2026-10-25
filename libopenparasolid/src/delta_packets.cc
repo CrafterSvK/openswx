@@ -41,7 +41,10 @@ Result<DeltaPacket> Map(std::span<const uint8_t> data, uint64_t offset,
       const auto word_result = cursor.Read(2);
       if (!word_result.ok()) return Return::Err(word_result.error());
       const auto word = static_cast<uint16_t>(word_result.value());
-      if (word == 0)
+      // The native SolidWorks 2025 sheet capture also contains the empty form
+      // ending in zero. Retain the word without assigning state semantics;
+      // the entry-bearing zero form has not been established.
+      if (word == 0 && !result.references.empty())
         return Return::Err(
             {ErrorCode::kUnsupportedFormat, cursor.pos - 2,
              "Reference-map terminal form with a zero word is not supported"});

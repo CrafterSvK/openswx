@@ -123,5 +123,21 @@ TEST(ParasolidDeltaBoundary, EntryLimitCannotSelectHistoricalInterpretation) {
   EXPECT_EQ(r.value().decoded_end, DeltaPrefixBytes().size());
   EXPECT_EQ(r.value().diagnostics[0].error.code, ErrorCode::kResourceLimit);
 }
+TEST(ParasolidDeltaBoundary, EmptyZeroMapPreservesStreamTerminator) {
+  auto b = Stream({0, 1, 0, 1, 0, 1, 0, 0, 0, 0});
+  const auto boundary = b.size();
+  End(b);
+  const auto r = SchemaParser::Parse(b);
+  ASSERT_TRUE(r.ok());
+  EXPECT_TRUE(r.value().complete);
+  EXPECT_TRUE(r.value().diagnostics.empty());
+  EXPECT_EQ(r.value().uninterpreted_size, 0);
+  EXPECT_EQ(r.value().terminator_offset, boundary);
+  EXPECT_EQ(r.value().terminator_size, 4);
+  ASSERT_EQ(r.value().delta_packets.size(), 1);
+  EXPECT_EQ(r.value().delta_packets[0].size, 10);
+  EXPECT_EQ(r.value().delta_packets[0].terminal_word, 0);
+  EXPECT_TRUE(r.value().delta_nodes.empty());
+}
 }  // namespace
 }  // namespace openparasolid

@@ -333,7 +333,8 @@ struct DeltaPacket {
   uint64_t size = 0;
   /// Whether the supported packet terminal was consumed.
   bool has_terminal = false;
-  /// Raw map terminal word, or the supported historical terminal value 0/1.
+  /// Raw map terminal word (also zero for an empty map), or the supported
+  /// historical terminal value 0/1. No operation/state meaning is inferred.
   std::optional<uint16_t> terminal_word;
   /// Reference-map entries in source order.
   std::vector<DeltaReferenceEntry> references;

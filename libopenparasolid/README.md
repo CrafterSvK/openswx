@@ -2842,7 +2842,10 @@ Two forms are supported:
 
 - A self-delimiting reference/type map is `0001 0001`, zero or more
   `compact_reference, node_type:u16 BE` entries, then `0001 0000 word:u16 BE`.
-  Entry references are non-null and the terminal word is nonzero. Empty maps,
+  Entry references are non-null. The terminal word is nonzero for maps with
+  entries; empty maps also support zero, observed in the native SolidWorks
+  2025 SP5 `saved-geometry-001` sheet fixture. The terminal word is opaque,
+  including zero; it does not select a state or encode an operation. Empty maps,
   extended indices and repeated references are retained. Type labels are
   bounded by the header range and remain declared labels; their schema and
   target existence are not established by the map. Entries alone do not imply

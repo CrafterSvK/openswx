@@ -116,3 +116,78 @@ This demonstrates why an explicit partition identity cannot certify body
 completeness. The native oracle confirms these fixtures; the API still does not promote their unapplied deltas
 to a generic resolved saved state. Source-less FeatureBodies cases remain
 unresolved until a verified state/body-membership association is implemented.
+
+## Reconstruction gaps and native delta audit
+
+The original `saved-geometry-001` fixtures were also inspected independently
+with `parasolid_inspect --nodes` after extracting their Parasolid streams.
+An empty reference-map-shaped packet ending in the raw word zero previously
+stopped the sheet delta at offset 152. The reader now retains this bounded
+ten-byte packet, without assigning operation or state semantics to its word.
+Maps containing entries still require a nonzero terminal word.
+
+| Snapshot | Partition stream slot | Delta framing | Historical PMARK occurrences | Delta node images | BODY images |
+| --- | --- | --- | --- | --- | --- |
+| baseline | 0 | complete | 2 | 2 | 0 |
+| default-active | 0 | complete | 2 | 2 | 0 |
+| default-active | 1 | complete | 3 | 19 | 1 |
+| two-active | 0 | complete | 2 | 2 | 0 |
+| two-active | 1 | complete | 3 | 18 | 1 |
+| sheet | 0 | complete | 2 | 1 | 0 |
+
+Occurrences exclude the leading current PMARK. Node images exclude the leading
+PARTITION/current-PMARK administration nodes and are not applied operations.
+These are observations on these exact saved fixtures, not format guarantees.
+All six streams decode without diagnostics. Different image counts between
+the two multiconfiguration snapshots do not establish a change in native body
+membership: the reopened configuration queries still report one and two bodies.
+
+The sheet delta has one status-framed WORLD image, no BODY image, and two
+historical marks. Its selected base also has only WORLD. The native reopened
+document has one sheet, stored separately in internal feature geometry.
+Consequently this pair does not yet provide a demonstrated route to the sheet
+body. Blindly replaying all images, or adding every internal BODY, would not
+establish final membership. The missing SolidWorks association must be explained
+alongside kernel delta semantics.
+
+Remaining stages, in dependency order:
+
+1. **Saved target and baseline association.** Establish which saved kernel
+   mark belongs to the selected configuration and which base represents its
+   starting state. A same-stream delta is a candidate association, not proof
+   of that relationship. Neither the largest identifier nor serialization
+   order establishes the target.
+2. **History path validation.** Resolve PMARK predecessor/successor/sibling
+   links, repeated occurrences and direction against that base and target.
+   Detect missing, contradictory and cyclic history rather than selecting a
+   branch by packet order. Reading the complete history bytes is already
+   supported for these fixtures; constructing a verified replay path is not.
+3. **Automatic operation planning.** Establish wire-reference/status namespaces,
+   persistent identities, create/replace/delete operations and any inherited
+   fields. `ApplyDelta` already checks an explicit whole-node plan transactionally;
+   it does not derive that plan or reconstruct partial node images.
+4. **Final body membership.** Validate the reconstructed WORLD/BODY graph and
+   its SolidWorks ownership, including sheet, compound/child and helper bodies.
+   Explain the sheet fixture's separate geometry before accepting FeatureBodies
+   or ResolvedFeatures as final bodies. WORLD roots alone cannot establish
+   SolidWorks final/helper classification.
+5. **Independent native verification.** Compare complete body sets and geometry
+   after save/reopen, with creation, deletion, modification, suppression,
+   inactive configurations and sheet/solid transitions. A matching count or
+   successful STEP export alone cannot validate identity or currency.
+
+For a reproducible offline audit, run from the OpenSWX checkout with the corpus
+as a sibling. Repeat for each snapshot and each `kind: deltas` file named by
+the extraction manifest:
+
+```sh
+build/asmbox/swx_dump --extract-parasolid /tmp/sheet-state-audit \
+  ../openswx-testdata/verification/saved-geometry-001/sheet.sldprt
+build/libopenparasolid/parasolid_inspect --nodes \
+  /tmp/sheet-state-audit/deltas/payload-2-offset-277.bin
+```
+
+The displayed filename is specific to this hashed fixture, not a stable model
+identifier. This decoder improvement does not change resolver statuses:
+automatic state reconstruction remains `unsupported`, and final-body membership
+remains `unresolved`.

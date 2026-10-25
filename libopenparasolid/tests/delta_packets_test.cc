@@ -52,6 +52,27 @@ TEST(ParasolidDeltaPacket, AllowsEmptySelfDelimitedMapAtNonzeroOffset) {
   EXPECT_EQ(r.value().offset, 1);
   EXPECT_EQ(r.value().size, 10);
 }
+TEST(ParasolidDeltaPacket, EmptyZeroTerminalDoesNotConsumeFollowingHistory) {
+  // Observed before a separate historical packet in the original native
+  // saved-geometry-001 sheet capture. No operation meaning is assigned.
+  std::vector<uint8_t> b{99, 0, 1, 0, 1, 0, 1, 0, 0, 0, 0};
+  const auto boundary = b.size();
+  b.insert(b.end(), {0, 1, 0, 1});
+  Mark(b);
+  const auto r = DeltaPacketReader::Read(b, 1);
+  ASSERT_TRUE(r.ok());
+  EXPECT_EQ(r.value().kind, DeltaPacketKind::kReferenceMap);
+  EXPECT_TRUE(r.value().references.empty());
+  EXPECT_TRUE(r.value().has_terminal);
+  EXPECT_EQ(r.value().terminal_word, 0);
+  EXPECT_EQ(r.value().offset + r.value().size, boundary);
+  const auto next = DeltaPacketReader::Read(b, boundary);
+  ASSERT_TRUE(next.ok());
+  EXPECT_EQ(next.value().kind, DeltaPacketKind::kHistoricalMarks);
+  ASSERT_EQ(next.value().marks.size(), 1);
+  for (std::size_t n = 1; n < boundary; ++n)
+    EXPECT_FALSE(DeltaPacketReader::Read(std::span(b).first(n), 1).ok()) << n;
+}
 TEST(ParasolidDeltaPacket, MapRejectsEveryTruncationAndMalformedTerminal) {
   const auto b = Map();
   for (std::size_t n = 0; n < b.size(); ++n)
