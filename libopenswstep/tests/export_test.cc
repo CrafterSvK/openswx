@@ -16,6 +16,7 @@
 #include "../../libopenswx/tests/test_helpers.h"
 #include "../src/annular_boundary.h"
 #include "../src/cone_patch.h"
+#include "../src/conic_boundary.h"
 #include "../src/convex_boundary.h"
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
@@ -1550,6 +1551,97 @@ TEST(OpenSwStep, HandlesConicalSheetsAndReversedAxesAndLoops) {
                         test::ReversedFrustum(), test::ReversedFrustum(true),
                         test::FrustumAtApexOrigin(),
                         test::RotateAndTranslate(test::Frustum())}) {
+    const auto result = Export(f);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, ExportsCertifiedConeApicesLikeNativeStep) {
+  for (bool narrowing : {false, true})
+    for (bool seams : {false, true})
+      for (bool apex_first : {false, true}) {
+        const auto result =
+            Export(test::ApexCone(narrowing, seams, apex_first));
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.solids, 1);
+        EXPECT_EQ(result.value().statistics.faces, 2);
+        EXPECT_EQ(result.value().statistics.edges, 1);
+        EXPECT_EQ(result.value().statistics.vertices, 1);
+        EXPECT_EQ(result.value().text.find("VERTEX_LOOP"), std::string::npos);
+        EXPECT_EQ(result.value().text.find("EDGE_LOOP('',())"),
+                  std::string::npos);
+        CheckReferences(result.value());
+      }
+  ASSERT_TRUE(Export(test::RotateAndTranslate(test::ApexCone())).ok());
+}
+TEST(OpenSwStep, RejectsFalseConeApicesAndBoundsTheirWork) {
+  auto wrong = test::ApexCone();
+  for (auto& node : wrong.report.nodes)
+    if (node.index == 8000) node.fields[0].values = {0., 0., 1.};
+  EXPECT_FALSE(Export(wrong).ok());
+  auto options = Options();
+  options.max_polygon_checks = 1;
+  EXPECT_TRUE(Export(test::ApexCone(), options).ok());
+  options.max_polygon_checks = 0;
+  EXPECT_FALSE(Export(test::ApexCone(), options).ok());
+  for (bool seams : {false, true}) {
+    const auto fixture = test::Serialize(test::ApexCone(false, seams));
+    const auto binary =
+        ExportParasolid(fixture.bytes, NodeId{1}, Options(), &fixture.catalog);
+    ASSERT_TRUE(binary.ok()) << binary.error().message;
+    CheckReferences(binary.value());
+  }
+}
+TEST(OpenSwStep, ValidatesWholeConeApexBoundariesAndTheirWinding) {
+  const double q = std::sqrt(13.);
+  const ConeGeometry support{{0, 0, 2}, {0, 0, 1}, 3, 3 / q, 2 / q, {1, 0, 0}};
+  const internal::ConicBoundary cut{
+      {0, 0, 2}, {0, 0, 1}, {1, 0, 0}, 3, 3, 0, -2 * std::numbers::pi, true};
+  uint64_t checks = 1;
+  const auto valid =
+      internal::ValidateConeApex(cut, {}, support, true, 1e-7, checks);
+  ASSERT_TRUE(valid.ok()) << valid.error().message;
+  EXPECT_EQ(checks, 0);
+  EXPECT_NEAR(valid.value().height, 2, 1e-14);
+  EXPECT_EQ(valid.value().lower_radius, 0);
+  EXPECT_NEAR(valid.value().upper_radius, 3, 1e-14);
+  const auto exhausted =
+      internal::ValidateConeApex(cut, {}, support, true, 1e-7, checks);
+  ASSERT_FALSE(exhausted.ok());
+  EXPECT_EQ(exhausted.error().code, ErrorCode::kResourceLimit);
+  for (int bad = 0; bad < 10; ++bad) {
+    auto circle = cut;
+    auto cone = support;
+    Vector3 apex{};
+    if (bad == 0) apex.x = .1;
+    if (bad == 1) circle.center.z = 1;
+    if (bad == 2) circle.normal = {0, .6, .8};
+    if (bad == 3) circle.end = -std::numbers::pi;
+    if (bad == 4) circle.end = 2 * std::numbers::pi;
+    if (bad == 5) circle.circle = false;
+    if (bad == 6) cone.sin_half_angle = 0;
+    if (bad == 7) circle.center.z = -1;
+    if (bad == 8) circle.center.x = .1;
+    if (bad == 9) circle.major_radius = circle.minor_radius = 1e-8;
+    checks = 1;
+    EXPECT_FALSE(
+        internal::ValidateConeApex(circle, apex, cone, true, 1e-7, checks).ok())
+        << bad;
+  }
+}
+TEST(OpenSwStep, PreservesApexConeReferenceOriginsAndReversedAxes) {
+  for (bool at_apex : {false, true}) {
+    auto f = test::ApexCone();
+    for (auto& node : f.report.nodes)
+      if (node.index == 701) {
+        if (at_apex) {
+          node.fields[0].values = {0., 0., 0.};
+          node.fields[2].values = {0.};
+        } else {
+          node.fields[1].values = {0., 0., -1.};
+          node.fields[3].values = {-3 / std::sqrt(13.)};
+        }
+      }
     const auto result = Export(f);
     ASSERT_TRUE(result.ok()) << result.error().message;
     CheckReferences(result.value());

@@ -31,6 +31,11 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    # OCCT reconstructs an apex vertex, seam generator and degenerate pole edge.
+    "cone-apex": (2, 3, 2, 1, "volume", 6 * math.pi),
+    "cone-apex-seam": (2, 3, 2, 1, "volume", 6 * math.pi),
+    "cone-apex-narrowing": (2, 3, 2, 1, "volume", 6 * math.pi),
+    "cone-apex-oblique": (2, 3, 2, 1, "volume", 6 * math.pi),
     "hole-spline-quadratic": (6,6,1,0,"area",72-4/3),
     "hole-spline-quadratic-partial": (6,6,1,0,"area",72-256/375),
     "hole-spline-quadratic-reversed": (6,6,1,0,"area",72-4/3),

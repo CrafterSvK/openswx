@@ -48,5 +48,12 @@ struct CircularBand {
     std::span<const ConicBoundary> loops,
     const openparasolid::ConeGeometry& cone, bool natural_sense,
     double tolerance, uint64_t& remaining_checks);
+// Validates a complete cone cap: one full coaxial circle and an isolated
+// vertex at the actual apex. Returns a band with one exactly zero radius.
+// One shared check is consumed. The singular point needs no STEP edge loop.
+[[nodiscard]] openparasolid::Result<CircularBand> ValidateConeApex(
+    const ConicBoundary& circle, openparasolid::Vector3 apex,
+    const openparasolid::ConeGeometry& cone, bool natural_sense,
+    double tolerance, uint64_t& remaining_checks);
 }  // namespace openswstep::internal
 #endif  // OPENSWSTEP_SRC_CONIC_BOUNDARY_H_

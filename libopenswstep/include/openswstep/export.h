@@ -130,7 +130,13 @@ struct StepDocument {
 /// CYLINDER/CONE bands use two coaxial full-circle loops at distinct axial
 /// levels and positive cut radii. CYLINDER/CONE also support a single four-edge
 /// loop with two coaxial circular arcs and two straight LINE generators,
-/// spanning less than one full turn. Generators follow the respective
+/// spanning less than one full turn. A complete cone cap additionally supports
+/// one full circular cut and an isolated vertex at its certified apex. The
+/// singular point is implicit in the CONICAL_SURFACE; only the circular
+/// FACE_OUTER_BOUND is serialized, matching native SolidWorks AP214 output.
+/// No regular source edge or face is dropped. Additional loops, partial apex
+/// cuts and apices shared with other face boundaries remain unsupported.
+/// Generators follow the respective
 /// cylinder/cone profile. Full-azimuth CYLINDER bands also support monotone
 /// CIRCLE/ELLIPSE arc profiles with isolated axial LINE steps. Whole supporting
 /// conics must project onto the cylinder circle; complete profile axial ranges
@@ -204,8 +210,8 @@ struct StepDocument {
 /// geometry. Other nonconvex planar curved contours, holes in
 /// elliptic/nonconvex curved contours, curved outer contours with multi-edge
 /// curved holes, nonconvex curved holes, uncertified envelopes, other
-/// non-planar trimming contours, spherical pole cuts, apex loops, explicit seam
-/// fins, horn/apple/lemon tori and single-edge elliptical holes remain
+/// non-planar trimming contours, spherical pole cuts, uncertified apex loops,
+/// explicit seam fins, horn/apple/lemon tori and single-edge elliptical holes remain
 /// unsupported. Paired tolerant edges without a recorded 3D curve can use an
 /// exact constant-profile circular SP_CURVE on a recognized spun torus and a
 /// quadratic polynomial planar SP_CURVE. Whole-span Bernstein bounds certify

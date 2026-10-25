@@ -15,6 +15,10 @@ int main(int argc, char** argv) {
   using openparasolid::NodeId;
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
+          {"cone-apex", test::ApexCone()},
+          {"cone-apex-seam", test::ApexCone(false, true)},
+          {"cone-apex-narrowing", test::ApexCone(true)},
+          {"cone-apex-oblique", test::RotateAndTranslate(test::ApexCone())},
           {"hole-spline-quadratic",
            test::WithSplineHole(test::QuadraticSplineFace(), {})},
           {"hole-spline-quadratic-partial",

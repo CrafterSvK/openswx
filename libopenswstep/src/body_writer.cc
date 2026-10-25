@@ -106,6 +106,7 @@ struct FaceData {
   std::optional<CylinderPatch> cylinder_patch;
   std::optional<CylinderBand> cylinder_band;
   std::optional<ConePatch> cone_patch;
+  std::optional<std::size_t> apex_loop;
 };
 struct EdgeUse {
   std::size_t face;
@@ -138,6 +139,13 @@ class BodyWriter {
       recovered_edges_.emplace(recovery.curve.value, &recovery);
       writer_.IncludeSourceTolerance(recovery.tolerance);
     }
+    for (const auto& region : body_.topology.boundary.regions)
+      for (const auto& shell : region.shells)
+        for (const auto& face : shell.faces)
+          for (const auto& loop : face.loops)
+            if (loop.isolated_vertex)
+              isolated_loops_.emplace(loop.loop.value,
+                                      loop.isolated_vertex->vertex);
   }
   Result<StepDocument> Build();
 
@@ -153,6 +161,7 @@ class BodyWriter {
   Id Vertex(NodeId id);
   Result<bool> PrepareFaces();
   Result<bool> PrepareConicFace(FaceData& face);
+  Result<bool> PrepareConeApexFace(FaceData& face);
   Result<bool> PrepareCurvedPlanarFace(FaceData& face);
   Result<bool> PrepareRuledPatchFace(FaceData& face);
   Result<bool> PrepareCylinderBandFace(FaceData& face);
@@ -172,6 +181,8 @@ class BodyWriter {
   ExportStatistics statistics_;
   std::map<uint32_t, Vector3> points_;
   std::map<uint32_t, Id> vertices_;
+  std::set<uint32_t> singular_vertices_;
+  std::map<uint32_t, NodeId> isolated_loops_;
   std::map<uint32_t, Id> edges_;
   std::map<uint32_t, Id> curves_;
   std::map<uint32_t, Id> surfaces_;
@@ -766,6 +777,45 @@ Result<bool> BodyWriter::PrepareRuledPatchFace(FaceData& face) {
   face.outer_loop = 0;
   return Result<bool>::Ok(true);
 }
+Result<bool> BodyWriter::PrepareConeApexFace(FaceData& face) {
+  if (face.source->loops.size() != 2)
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kUnsupportedFormat,
+              "Cone apex face requires one point and one circle loop"));
+  const std::size_t apex_index = face.source->loops[0].isolated_vertex ? 0 : 1;
+  const auto& apex = face.source->loops[apex_index];
+  if (!apex.isolated_vertex || !apex.fins.empty())
+    return Result<bool>::Err(
+        Error(face.source->face, ErrorCode::kUnsupportedFormat,
+              "Cone apex face requires one isolated vertex loop"));
+  const auto isolated = isolated_loops_.find(apex.loop.value);
+  if (isolated == isolated_loops_.end())
+    return Result<bool>::Err(Error(apex.loop, ErrorCode::kInvalidRecord,
+                                   "Cone apex topology is unavailable"));
+  const auto vertex = isolated->second;
+  const auto point = points_.find(vertex.value);
+  if (point == points_.end())
+    return Result<bool>::Err(Error(vertex, ErrorCode::kInvalidRecord,
+                                   "Cone apex point is unavailable"));
+  const auto circle =
+      ReadConicLoop(face.source->face, face.source->loops[1 - apex_index]);
+  if (!circle.ok()) return Result<bool>::Err(circle.error());
+  const auto band = ValidateConeApex(circle.value(), point->second, *face.cone,
+                                     face.natural_sense, options_.tolerance,
+                                     polygon_checks_remaining_);
+  if (!band.ok())
+    return Result<bool>::Err(Error(face.source->face, band.error().code,
+                                   band.error().message.c_str()));
+  if (!singular_vertices_.insert(point->first).second)
+    return Result<bool>::Err(
+        Error(vertex, ErrorCode::kUnsupportedFormat,
+              "Cone apex vertex is shared by multiple faces"));
+  face.apex_loop = apex_index;
+  face.outer_loop = 1 - apex_index;
+  face.cone_band = band.value();
+  face.reference_point = band.value().lower_center;
+  return Result<bool>::Ok(true);
+}
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
     if (source.loops.empty())
@@ -839,6 +889,15 @@ Result<bool> BodyWriter::PrepareFaces() {
       face.natural_sense = !face.natural_sense;
     if (spun_torus && !spun_torus->same_normal)
       face.natural_sense = !face.natural_sense;
+    if (cone && std::any_of(source.loops.begin(), source.loops.end(),
+                            [](const auto& loop) {
+                              return loop.isolated_vertex.has_value();
+                            })) {
+      const auto apex = PrepareConeApexFace(face);
+      if (!apex.ok()) return apex;
+      faces_.push_back(std::move(face));
+      continue;
+    }
     const bool all_conic =
         std::all_of(source.loops.begin(), source.loops.end(),
                     [](const auto& loop) { return loop.fins.size() == 1; });
@@ -988,6 +1047,10 @@ Result<bool> BodyWriter::CheckVertexLinks() {
     }
   }
   for (const auto& [vertex, link] : links) {
+    if (singular_vertices_.contains(vertex))
+      return Result<bool>::Err(
+          Error(NodeId{vertex}, ErrorCode::kUnsupportedFormat,
+                "Cone apex vertex is also incident to another face boundary"));
     unsigned ends = 0;
     for (const auto& [edge, adjacent] : link) {
       (void)edge;
@@ -1258,6 +1321,10 @@ Result<Id> BodyWriter::Face(std::size_t index) {
   const auto& face = faces_[index];
   std::vector<Id> bounds;
   for (std::size_t i = 0; i < face.source->loops.size(); ++i) {
+    // A certified apex is the cone's singularity, not a regular STEP bound.
+    // Keep the exact conical support and its circular FACE_OUTER_BOUND, as in
+    // native SolidWorks AP214 output. No face or source edge is removed.
+    if (face.apex_loop && i == *face.apex_loop) continue;
     std::vector<Id> uses;
     for (const auto& fin : face.source->loops[i].fins) {
       const bool forward = fin.use.sense == TopologySense::kForward;
@@ -1313,7 +1380,7 @@ Result<StepDocument> BodyWriter::Faces() {
         References(faces) + ')'));
     ++statistics_.shells;
   }
-  if (vertices_.size() != points_.size())
+  if (vertices_.size() + singular_vertices_.size() != points_.size())
     return Result<StepDocument>::Err(
         Error(body_.topology.boundary.body, ErrorCode::kUnsupportedFormat,
               "Body contains vertices outside its exported face boundaries"));

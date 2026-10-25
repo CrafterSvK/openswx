@@ -230,4 +230,81 @@ Result<CircularBand> ValidateConeLoops(std::span<const ConicBoundary> loops,
   return ValidateCircularBand(loops, cone.origin, cone.axis, cone.radius, slope,
                               natural_sense, tolerance, remaining_checks);
 }
+Result<CircularBand> ValidateConeApex(const ConicBoundary& circle, Vector3 apex,
+                                      const openparasolid::ConeGeometry& cone,
+                                      bool natural_sense, double tolerance,
+                                      uint64_t& remaining_checks) {
+  using Return = Result<CircularBand>;
+  if (!std::isfinite(tolerance) || tolerance <= 0)
+    return Return::Err({ErrorCode::kInvalidOptions, 0,
+                        "Cone apex tolerance must be positive and finite"});
+  if (!circle.circle)
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Cone apex boundary requires a CIRCLE basis"});
+  constexpr double kFrameTolerance = 1e-10;
+  if (!std::isfinite(cone.radius) || cone.radius < 0 ||
+      !std::isfinite(cone.sin_half_angle) || cone.sin_half_angle == 0 ||
+      !std::isfinite(cone.cos_half_angle) || cone.cos_half_angle <= 0 ||
+      std::abs(std::hypot(cone.sin_half_angle, cone.cos_half_angle) - 1) >
+          kFrameTolerance)
+    return Return::Err(
+        Invalid("Cone apex requires a regular signed cone profile"));
+  const long double slope =
+      static_cast<long double>(cone.sin_half_angle) / cone.cos_half_angle;
+  const auto apex_level = -static_cast<long double>(cone.radius) / slope;
+  const auto apex_error =
+      std::hypot(static_cast<long double>(apex.x) - cone.origin.x -
+                     apex_level * cone.axis.x,
+                 static_cast<long double>(apex.y) - cone.origin.y -
+                     apex_level * cone.axis.y,
+                 static_cast<long double>(apex.z) - cone.origin.z -
+                     apex_level * cone.axis.z);
+  if (!std::isfinite(slope) || !std::isfinite(apex_level) ||
+      !std::isfinite(apex_error) || apex_error > tolerance)
+    return Return::Err(Invalid("Isolated vertex is not at the cone apex"));
+  constexpr double kFullTurn = 2 * std::numbers::pi;
+  const auto span = std::abs(circle.end - circle.start);
+  if (!std::isfinite(span) || span > kFullTurn || kFullTurn - span > 1e-12)
+    return Return::Err(
+        Invalid("Cone apex circle requires exactly one full turn"));
+  const auto alignment = Dot(circle.normal, cone.axis);
+  const auto axial_variation =
+      circle.major_radius *
+      std::hypot(Dot(circle.x_axis, cone.axis),
+                 Dot(Cross(circle.normal, circle.x_axis), cone.axis));
+  if (!std::isfinite(circle.major_radius) || circle.major_radius <= tolerance ||
+      circle.major_radius != circle.minor_radius || !std::isfinite(alignment) ||
+      std::abs(alignment) < 1 - kFrameTolerance ||
+      !std::isfinite(axial_variation) || axial_variation > tolerance)
+    return Return::Err(Invalid("Cone apex circle is tilted or degenerate"));
+  const auto level = Project(circle.center, cone.origin, cone.axis);
+  const auto height = std::abs(level - apex_level);
+  const auto expected_radius =
+      std::fma(level, slope, static_cast<long double>(cone.radius));
+  const auto dx = static_cast<long double>(circle.center.x) - cone.origin.x;
+  const auto dy = static_cast<long double>(circle.center.y) - cone.origin.y;
+  const auto dz = static_cast<long double>(circle.center.z) - cone.origin.z;
+  const auto radial_offset =
+      std::hypot(dx - level * cone.axis.x, dy - level * cone.axis.y,
+                 dz - level * cone.axis.z);
+  const auto profile_error =
+      std::abs(static_cast<long double>(circle.major_radius) -
+               expected_radius) +
+      std::abs(slope) * axial_variation;
+  if (!std::isfinite(level) || !std::isfinite(height) ||
+      height <= 2 * tolerance || !std::isfinite(expected_radius) ||
+      expected_radius <= tolerance || !std::isfinite(radial_offset) ||
+      !std::isfinite(profile_error) ||
+      radial_offset + profile_error > tolerance)
+    return Return::Err(
+        Invalid("Cone apex cut is not coaxial at the source radius"));
+  const bool forward = (circle.end > circle.start) == (alignment > 0);
+  if ((forward == natural_sense) != (slope < 0))
+    return Return::Err(
+        Invalid("Cone apex circle winding disagrees with the face normal"));
+  if (const auto error = Charge(remaining_checks)) return Return::Err(*error);
+  return Return::Ok(
+      slope > 0 ? CircularBand{height, apex, 0, expected_radius}
+                : CircularBand{height, circle.center, expected_radius, 0});
+}
 }  // namespace openswstep::internal

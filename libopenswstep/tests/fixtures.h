@@ -1020,6 +1020,48 @@ inline ModelFixture SphericalCap(double level = 3, bool north = true,
   Set(f, fin, "backward", fin);
   return f;
 }
+// Original analytic cone: radius 3, height 2, with a true isolated apex.
+inline ModelFixture ApexCone(bool narrowing = false, bool named_seams = false,
+                             bool apex_first = false) {
+  auto f = SphericalCap(0, narrowing, named_seams);
+  RemoveNode(f, 701);
+  const double q = std::sqrt(13.);
+  f.Add(52, 701,
+        {Numbers("origin", {0, 0, 2}, FieldType::kVector),
+         Numbers("axis", {0, 0, 1}, FieldType::kVector), Numbers("radius", {3}),
+         Numbers("sin_half_angle", {(narrowing ? -3. : 3.) / q}),
+         Numbers("cos_half_angle", {2 / q}),
+         Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  for (auto& node : f.report.nodes) {
+    if (node.index == 700 || node.index == 4000)
+      node.fields[0].values = {0., 0., 2.};
+    if (node.index == 4000) node.fields[3].values = {3.};
+    if (node.index == 500) node.fields[0].values = {3., 0., 2.};
+  }
+  if (named_seams)
+    Set(f, 200, "next", 8001);
+  else
+    Set(f, 1, "vertex", 8001);
+  f.Add(29, 8000,
+        {Numbers("position", {0, 0, narrowing ? 4. : 0.}, FieldType::kVector)});
+  f.Add(18, 8001,
+        {Pointer("owner", 1, 1029), Pointer("halfedge", 8002, 17),
+         Pointer("previous", named_seams ? 200 : 0, 18), Pointer("next", 0, 18),
+         Pointer("point", 8000, 29)});
+  f.Add(17, 8002,
+        {Pointer("edge", 0, 16), Pointer("vertex", 8001, 18),
+         Pointer("other", 0, 17), Pointer("loop", 8003, 15),
+         Pointer("forward", 8002, 17), Pointer("backward", 8002, 17),
+         Pointer("curve", 0, 1008), Pointer("next_at_vx", 0, 17),
+         ByteValue("sense", '+', FieldType::kCharacter)});
+  f.Add(15, 8003,
+        {Pointer("face", 301, 14), Pointer("halfedge", 8002, 17),
+         Pointer("next", apex_first ? 601 : 0, 15)});
+  Set(f, 301, "loop", apex_first ? 8003 : 601);
+  Set(f, 601, "next", apex_first ? 0 : 8003);
+  return f;
+}
 inline ModelFixture SpunSphericalCap(bool reverse = false, bool major = false) {
   auto f = SphericalCap(major ? -3 : 3);
   RemoveNode(f, 701);

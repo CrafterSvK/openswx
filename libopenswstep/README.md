@@ -29,6 +29,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Complete CYLINDER bands between separated monotone CIRCLE/ELLIPSE profiles with isolated axial steps | Exact source bounds, oblique cuts and stepped rims; analytic variable-height volume |
 | Partial CYLINDER patches with two circular arcs and two axial generators | Exact `CYLINDRICAL_SURFACE` with one four-edge outer bound, including major arcs and parameter-seam crossings |
 | Complete CONE bands between two full coaxial circles with positive radii | Exact `CONICAL_SURFACE`, including expanding/narrowing frustums and conical tubes |
+| Complete CONE caps with one circular loop and one isolated apex | Exact `CONICAL_SURFACE` with one circular `FACE_OUTER_BOUND`; the certified apex remains an implicit surface singularity |
 | Partial CONE patches with two circular arcs and two straight cone generators | Exact `CONICAL_SURFACE` with one four-edge outer bound, including expanding/narrowing sectors |
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
 | Regular ring TORUS bands between two full coaxial circles, including split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
@@ -397,7 +398,28 @@ keeps the band on the positive-radius branch between them. Signed volume
 includes the analytic conical flux, including inward conical tube walls.
 Narrowing source cones use a positive STEP semi-angle and reversed exported
 axis. The reference origin may be at the apex, provided both boundary circles
-are away from it. Apex boundary loops remain unsupported.
+are away from it.
+
+A complete cone cap may instead have one isolated vertex loop at its true apex
+and one full circular loop. The exporter validates the apex against the signed
+source cone, the entire cut circle's coaxiality and profile radius, positive
+axial separation, and winding relative to the face normal. Loop order and
+vertex-free or named ring seams are supported. One shared boundary check is
+charged. The zero-radius endpoint participates in the exact conical flux used
+for solid orientation checks.
+
+Native SolidWorks AP214 output represents this cap with the conical surface
+and only the circular outer bound. The exporter uses the same representation:
+after validation, the isolated loop is represented by the cone's singularity,
+without an empty EDGE_LOOP, an additional VERTEX_LOOP or a fabricated edge.
+No face or regular source edge is omitted. The apex is not counted as a
+separately serialized STEP vertex; OCCT reconstructs it on import. A vertex
+shared with another isolated cap or a regular face boundary is rejected.
+Partial apex cuts, noncircular cuts, additional loops and points away from the
+apex remain unsupported or invalid. Synthetic radius-3/height-2 cones cover
+both signed profile directions, source loop orders, reference origins,
+translated frames, binary decoding and independent OCCT volume checks. Private
+native reference files used during investigation are not stored in the project.
 
 Partial conical patches support one four-edge loop alternating between two
 coaxial `CIRCLE` arcs and two straight `LINE` generators. Both cut radii must
@@ -413,7 +435,7 @@ Major arcs, parameter-seam crossings, inward sheets, reversed axes and narrowing
 cones are supported. Together with planar caps and radial walls this permits
 closed conical sector solids. Signed volume uses the exact conical divergence
 integral, retaining both transverse and axial origin terms. Five shared checks
-cover each patch. Other conical trimming contours, apex boundaries, elliptic
+cover each patch. Other conical trimming contours, partial apex boundaries, elliptic
 cuts and additional hole loops remain unsupported.
 
 Spherical bands use two complete coaxial latitude circles on a positive-radius
@@ -532,7 +554,7 @@ approximation is written.
 NURBS curves outside the supported open-wire/planar-polynomial subsets and NURBS surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
 uncertified curved-hole envelopes, curved outer contours with curved holes,
 nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
-horn/apple/lemon tori, apex loops, explicit seam fins, other
+horn/apple/lemon tori, uncertified apex loops, explicit seam fins, other
 non-planar surfaces, other tolerant fin-specific curves/pcurves, isolated face loops,
 compounds/assemblies, general
 mixed-dimensional bodies, multiple material regions and solid void shells are
