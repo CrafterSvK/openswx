@@ -2195,7 +2195,7 @@ TEST(OpenSwStep, ParsesToroidalSolidsThroughTheBinaryEntryPoint) {
   ASSERT_TRUE(result.ok()) << result.error().message;
   EXPECT_EQ(result.value().statistics.solids, 1);
 }
-TEST(OpenSwStep, ChecksToroidalCutsWindingAndRegularRingRestrictions) {
+TEST(OpenSwStep, ChecksToroidalCutsWindingAndPositiveSheetRestrictions) {
   auto tilted = test::ToroidalBand(false);
   for (auto& node : tilted.report.nodes)
     if (node.index == 4001)
@@ -2217,18 +2217,47 @@ TEST(OpenSwStep, ChecksToroidalCutsWindingAndRegularRingRestrictions) {
   const auto direction = Export(winding);
   ASSERT_FALSE(direction.ok());
   EXPECT_NE(direction.error().message.find("winding"), std::string::npos);
-  for (const double major : {0.5, 1.}) {
-    auto nonring = test::ToroidalBand(false);
-    for (auto& node : nonring.report.nodes) {
-      if (node.index == 702) node.fields[2].values = {major};
-      if (node.index == 4000) node.fields[3].values = {major + 1};
-      if (node.index == 4001) node.fields[3].values = {major};
+  for (const double major : {0.0625, 0.5, 1.}) {
+    const auto result = Export(test::NonringToroidalBand(major, false));
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    CheckReferences(result.value());
+  }
+}
+TEST(OpenSwStep, ExportsRegularSpindleAndHornBandsWithUnchangedTopology) {
+  for (double major : {.0625, .5, 1.})
+    for (bool named : {false, true}) {
+      const auto fixture = test::NonringToroidalBand(major, true, named);
+      for (const auto& source : {fixture, test::RotateAndTranslate(fixture)}) {
+        const auto result = Export(source);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().statistics.faces, 3u);
+        EXPECT_EQ(result.value().statistics.solids, 1u);
+        EXPECT_NE(result.value().text.find("TOROIDAL_SURFACE"),
+                  std::string::npos);
+        const auto binary = test::Serialize(source);
+        const auto parsed = ExportParasolid(binary.bytes, NodeId{1}, Options(),
+                                            &binary.catalog);
+        ASSERT_TRUE(parsed.ok()) << parsed.error().message;
+        EXPECT_EQ(parsed.value().text, result.value().text);
+      }
     }
-    const auto result = Export(nonring);
+}
+TEST(OpenSwStep, RejectsIntervalsCrossingAnAxisEvenWhenBothCutsAreRegular) {
+  for (double major : {.5, 1., 1. + .5e-7}) {
+    const auto result =
+        Export(test::NonringToroidalBand(major, false, false, true));
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
-    EXPECT_NE(result.error().message.find("regular ring"), std::string::npos);
+    EXPECT_NE(result.error().message.find("axis"), std::string::npos);
   }
+  const auto safe =
+      Export(test::NonringToroidalBand(.5, false, false, false, 1.8));
+  ASSERT_TRUE(safe.ok()) << safe.error().message;
+  ASSERT_TRUE(
+      Export(test::NonringToroidalBand(1. + 2e-7, false, false, true)).ok());
+  auto options = Options();
+  options.max_polygon_checks = 0;
+  EXPECT_FALSE(Export(test::NonringToroidalBand(.5), options).ok());
 }
 TEST(OpenSwStep, BoundsToroidalCutComparisonsAcrossMixedSupportedFaces) {
   auto options = Options();

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 openswx contributors
 #include "torus_boundary.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <numbers>
@@ -97,10 +98,10 @@ Result<TorusBand> ValidateTorusLoops(std::span<const ConicBoundary> loops,
                         "Torus tolerance must be positive and finite"});
   if (!std::isfinite(torus.major_radius) ||
       !std::isfinite(torus.minor_radius) || torus.minor_radius <= tolerance ||
-      static_cast<long double>(torus.major_radius) - torus.minor_radius <=
-          tolerance)
-    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
-                        "Toroidal bands require a regular ring torus"});
+      torus.major_radius <= 0)
+    return Return::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Toroidal bands require positive finite major and minor radii"});
   if (loops.size() != 2)
     return Return::Err({ErrorCode::kUnsupportedFormat, 0,
                         "Toroidal band requires two full circular cuts"});
@@ -170,7 +171,25 @@ Result<TorusBand> ValidateTorusLoops(std::span<const ConicBoundary> loops,
         Invalid("Torus cut circles coincide or are tolerance-ambiguous"));
   auto span = angles[1 - *first] - angles[*first];
   if (span <= 0) span += 2 * std::numbers::pi_v<long double>;
-  return Return::Ok({angles[*first], span});
+  const auto start = angles[*first];
+  const auto end = start + span;
+  auto minimum_cosine = std::min(std::cos(start), std::cos(end));
+  const auto turn = 2 * std::numbers::pi_v<long double>;
+  const auto first_minimum =
+      std::numbers::pi_v<long double> +
+      turn * std::ceil((start - std::numbers::pi_v<long double>) / turn);
+  if (first_minimum <= end) minimum_cosine = -1;
+  // A spindle/horn support is usable only on its positive radial sheet.
+  // Include interior extrema: regular cut circles alone do not prove that
+  // their winding-selected interval avoids an axis crossing or an inner sheet.
+  const auto minimum_radial =
+      std::fma(static_cast<long double>(torus.minor_radius), minimum_cosine,
+               static_cast<long double>(torus.major_radius));
+  if (!std::isfinite(minimum_radial) || minimum_radial <= tolerance)
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Toroidal band reaches the axis, inner sheet or "
+                        "unresolved radial clearance"});
+  return Return::Ok({start, span});
 }
 long double TorusBandVolume6(const openparasolid::TorusGeometry& torus,
                              TorusBand band, Vector3 origin) {

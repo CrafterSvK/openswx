@@ -160,9 +160,11 @@ struct StepDocument {
 /// patches and variable-height complete cylinder bands. SPHERE faces use one
 /// full latitude circle for a cap or two full coaxial latitude circles for a
 /// band, away from the poles. Winding selects either cap, including caps larger
-/// than a hemisphere. Regular ring TORUS bands use two coaxial full-circle
-/// cuts; winding selects the meridian interval, including its periodic seam and
-/// complementary band. Each complete cut can also comprise monotone arcs on one
+/// than a hemisphere. TORUS bands use two coaxial full-circle cuts; winding
+/// selects the meridian interval, including periodic seams and complementary
+/// bands. The entire interval must keep R+r*cos(v) above the source tolerance.
+/// This also supports regular positive-sheet trims of spindle/horn supports;
+/// both endpoint values and every interior cosine minimum are checked. Each complete cut can also comprise monotone arcs on one
 /// supporting circle, retaining the individual source edges. Unbounded
 /// SPUN_SURF circular generators in an axial meridian plane of a regular ring
 /// torus use the equivalent TOROIDAL_SURFACE with corrected normal orientation.
@@ -227,7 +229,8 @@ struct StepDocument {
 /// geometry. The independent control-hull path extends the certified subset
 /// to simple nonconvex curves and mixed holes. Uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, uncertified apex loops,
-/// explicit seam fins and horn/apple/lemon tori remain unsupported. Specialized
+/// explicit seam fins and torus intervals reaching the axis or inner sheet
+/// remain unsupported. Specialized
 /// planar paths retain their narrower hole subsets; elliptic holes can use
 /// the general curved-region path. Paired tolerant edges without a recorded 3D curve can use an
 /// exact constant-profile circular SP_CURVE on a recognized spun torus and a

@@ -1229,6 +1229,28 @@ inline ModelFixture ToroidalBand(bool solid = true, bool named_seams = false,
   }
   return f;
 }
+// Radius-one meridian, full azimuth, with a certified outer-sheet interval.
+inline ModelFixture NonringToroidalBand(double major, bool solid = true,
+                                        bool named_seams = false,
+                                        bool complement = false,
+                                        double end = std::numbers::pi / 2) {
+  auto f = ToroidalBand(solid, named_seams, complement);
+  const double height = std::sin(end), radius = major + std::cos(end);
+  for (auto& node : f.report.nodes) {
+    if (node.index == 702) node.fields[2].values = {major};
+    if (node.index == 4000) node.fields[3].values = {major + 1};
+    if (node.index == 4001) {
+      node.fields[0].values = {0., 0., height};
+      node.fields[3].values = {radius};
+    }
+    if (node.index == 701) node.fields[0].values = {0., 0., height};
+    if (named_seams && node.index == 500)
+      node.fields[0].values = {major + 1, 0., 0.};
+    if (named_seams && node.index == 501)
+      node.fields[0].values = {radius, 0., height};
+  }
+  return f;
+}
 inline ModelFixture ReversedToroidalBand(bool axis = false) {
   auto f = ToroidalBand();
   if (axis) {

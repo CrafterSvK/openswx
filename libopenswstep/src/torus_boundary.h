@@ -11,8 +11,11 @@ struct TorusBand {
   long double start;
   long double span;
 };
-// Validates a regular ring torus band with two coaxial full-circle cuts.
-// Horn/apple/lemon tori, coincident cuts and partial azimuths are unsupported.
+// Validates a positive-sheet torus band with two coaxial full-circle cuts.
+// The complete winding-selected interval must satisfy R+r*cos(v)>tolerance,
+// including interior extrema. This admits regular trims of spindle/horn
+// supports; axis crossings, inner sheets, coincident cuts and partial azimuths
+// remain unsupported. The comparison budget also covers this bounded check.
 // The winding selects the meridian interval, never a shortest-arc assumption.
 [[nodiscard]] openparasolid::Result<TorusBand> ValidateTorusLoops(
     std::span<const ConicBoundary> loops,

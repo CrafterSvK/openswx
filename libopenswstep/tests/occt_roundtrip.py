@@ -31,6 +31,16 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "spindle-solid": (2,3,3,1,"volume",math.pi*(.25+math.pi/4+2/3)),
+    "spindle-solid-seams": (2,3,3,1,"volume",math.pi*(.25+math.pi/4+2/3)),
+    "spindle-small-major": (2,3,3,1,"volume",math.pi*(.0625**2+.03125*math.pi+2/3)),
+    "spindle-solid-oblique": (2,3,3,1,"volume",math.pi*(.25+math.pi/4+2/3)),
+    "spindle-sheet": (2,3,1,0,"area",.5*math.pi**2+2*math.pi),
+    "spindle-overhang": (2,3,3,1,"volume",math.pi*(.25*math.sin(1.8)+.5*(1.8+math.sin(1.8)*math.cos(1.8))+math.sin(1.8)-math.sin(1.8)**3/3)),
+    "horn-solid": (2,3,3,1,"volume",math.pi*(1+math.pi/2+2/3)),
+    "horn-solid-seams": (2,3,3,1,"volume",math.pi*(1+math.pi/2+2/3)),
+    "horn-sheet": (2,3,1,0,"area",math.pi**2+2*math.pi),
+
     "simple-stadium-ellipse-hole": (5,5,1,0,"area",4+.95*math.pi),
     "simple-annular-circle-hole": (5,5,1,0,"area",1.99*math.pi),
     "simple-notch-spline": (8,8,1,0,"area",10),

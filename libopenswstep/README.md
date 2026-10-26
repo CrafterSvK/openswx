@@ -34,7 +34,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Complete CONE caps with one circular loop and one isolated apex | Exact `CONICAL_SURFACE` with one circular `FACE_OUTER_BOUND`; the certified apex remains an implicit surface singularity |
 | Partial CONE patches with two circular arcs and two straight cone generators | Exact `CONICAL_SURFACE` with one four-edge outer bound, including expanding/narrowing sectors |
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
-| Regular ring TORUS bands between two full coaxial circles, including split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
+| Regular positive-sheet TORUS bands between two full coaxial circles, including spindle/horn trims and split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | SPUN_SURF with an unbounded circular generator in an axial meridian plane of a regular ring torus | Equivalent analytic `TOROIDAL_SURFACE`, preserving source normal orientation and boundary edges |
 | SPUN_SURF with a centered circular pole-to-pole half-meridian | Equivalent analytic `SPHERICAL_SURFACE`; complete circular cuts may be oblique to the source spin axis |
 | Certified paired planar/rotational tolerant circular edges | Shared exact circular 3D master with `SURFACE_CURVE`, both source `PCURVE` representations and declared edge uncertainty |
@@ -509,16 +509,30 @@ circle just as for bands. Two complementary source cap faces can also close a
 complete sphere, sharing their original latitude edge. A single unbounded
 sphere face, explicit pole cuts and partial azimuths remain unsupported.
 
-Regular ring torus bands require positive minor radius and a major radius
-larger than the minor radius by more than the source tolerance. Two complete
+Toroidal bands require positive finite major and minor radii, with minor
+radius greater than the source length tolerance. Two complete
 coaxial circular cuts are checked against the meridian profile, including
 whole-circle tilt and displacement bounds. Their separation must exceed two
 source tolerances. The opposite cut windings and the effective face normal
 select one directed meridian interval; no shortest-arc or axial-order choice is
 made. Complementary bands, equal-height cuts with different radii, reversed
 axes and crossing the meridian parameter seam are supported. Both bounds use
-`FACE_BOUND`. A complete uncut torus and horn/apple/lemon variants remain
-unsupported.
+`FACE_BOUND`.
+
+Regular trims of spindle and horn supports are also accepted: the complete
+winding-selected interval must have `R+r*cos(v)` strictly greater than the
+source length tolerance. The minimum is evaluated at both interval endpoints
+and any enclosed cosine minimum. Valid cut circles alone are insufficient:
+their complementary interval can cross a singular axis or the inner sheet.
+Those intervals remain unsupported. No shortest-arc choice, radius alteration,
+normal flip or relaxed tolerance is used. The same analytic signed volume
+integral applies on the certified positive sheet. A complete uncut torus
+remains unsupported (XT 5.2.2.5: Torus, p. 58).
+
+Synthetic solid/sheet regressions cover spindle/horn quadrants, small major
+radii, oblique frames, named seams and overhanging regular intervals. Axis-
+crossing complements with regular endpoint circles are rejected. Independent
+OCCT round trips verify complete topology, analytic volumes and areas.
 
 The solid volume check includes the exact divergence integral over the selected
 toroidal band. Closed supported mixtures of planar caps, cylindrical/conical
@@ -596,12 +610,13 @@ These checks do not certify all geometric intersections, disjointness of
 separate components, or full CAD-kernel validity. No triangulation or geometry
 approximation is written.
 
-NURBS curves outside the supported open-wire/planar-polynomial subsets and NURBS surfaces, uncertified nonconvex planar curved boundaries, holes in elliptic/nonconvex curved contours,
-uncertified curved-hole envelopes, curved outer contours with curved holes,
-nonconvex curved holes, single-edge elliptical holes, spherical pole cuts/unbounded sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
-horn/apple/lemon tori, uncertified apex loops, explicit seam fins, other
-non-planar surfaces, other tolerant fin-specific curves/pcurves, isolated face loops,
-compounds/assemblies, general
+NURBS curves outside the supported open-wire/planar-polynomial subsets,
+arbitrary NURBS source surfaces, uncertified nonconvex planar boundaries and
+curved-hole envelopes, nested/touching holes, spherical pole cuts/unbounded
+sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
+torus intervals reaching the axis or inner sheet, uncertified apex loops,
+explicit seam fins, other non-planar surfaces, other tolerant fin-specific
+curves/pcurves, isolated face loops, compounds/assemblies, general
 mixed-dimensional bodies, multiple material regions and solid void shells are
 not supported. Unsupported selected geometry fails the entire export. No partial document is returned and no part of the selected body is
 silently discarded. Unrelated source geometry is not exported.
