@@ -18,9 +18,9 @@ membership. Advancing one stage does not establish success at the next.
 | P0 | Compiler-dependent coincident conic endpoints | Fixed: compare distinct vertex positions against caller tolerance before wrapping angles. The reported CI failure is reproduced with Clang 19 `-O3 -DNDEBUG`; tiny rounding gaps remain unsupported instead of becoming nearly full turns. |
 | P1 | Partial intersection edges ending at a closed help seam | Fixed when the existing shared-H/full-period certificate succeeds: recorded direction selects the first/last chart occurrence. Interior duplicates, unproven periods and unknown senses remain unsupported. |
 | P1 | Chart normals computed at coarse membership tolerance | Fixed for supported inversions: prefer the solve residual goal before the chord/tangent recurrence, retaining the source chart allowance and reporting membership fallbacks. Binding, evaluation and STEP circle recovery use the same policy. The investigated spring now binds all 15 faces without a larger tolerance. |
-| P1 | General non-circular intersection curves | Extended for direct PLANE/SWEPT_SURF cuts of open single-span polynomial quadratic/cubic sections: exact control mapping, globally unique chord projections and conditioned endpoint bounds. Other pairs remain open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
+| P1 | General non-circular intersection curves | Extended for direct PLANE/SWEPT_SURF cuts of open single-span polynomial/rational quadratic/cubic sections: exact homogeneous control mapping, globally unique chord projections and conditioned endpoint bounds. Other pairs remain open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
-| P2 | Non-rectangular or closed-profile spline sweeps | Extended for polynomial single-span strips with matching graph profiles, strictly positive whole-profile gap and two generators. Bounded analytic flux enters the volume sign certificate. Rational/multispan variable strips, full closed profiles and multiply trimmed sweeps remain open. |
+| P2 | Non-rectangular or closed-profile spline sweeps | Extended for polynomial/rational single-span strips with matching graph profiles, strictly positive whole-profile gap and two generators. Rational strips require identical stored weights and explicit certified UV curves. Bounded flux enters the volume sign certificate. Multispan variable strips, full closed profiles and multiply trimmed sweeps remain open. |
 | P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Open clamped rational and polynomial curves up to degree seven now use local outward blossom extraction and positive Bernstein numerator subdivision for all valid interior multiplicities. An original native simple-knot rational cut prism binds and exports completely. Higher-degree rational, periodic, unclamped, SP and uncertified projections remain explicit. |
 | P2 | Oblique spherical cuts | Extended for native SPHERE caps and coaxial bands: whole-support and circle-frame error bounds consume the unchanged tolerance before existing profile/winding checks. An equivalent-pole synthetic fixture is compared with an original native sphere cap; the native saved file itself was already supported. Noncoaxial cuts remain open. |
 | P2 | Torus sectors bounded by complete meridians | Extended for regular ring supports: two whole-circle/profile certificates and opposite winding select minor or major azimuth sectors. Original native 90°/270° revolutions now export completely and have zero two-way solid differences against native STEP. Partial meridians and general contours remain open. |
@@ -160,7 +160,7 @@ matching basis/interval profiles, whole-control agreement along generators,
 positive height coefficients and directed corner closure certify one strip.
 Its degree-(p,1) tensor support covers the trim; polynomial Bernstein products
 bound the variable-height flux and enter signed shell-volume validation.
-Rational/multispan variable strips, closed profiles, multiple regions, trim
+Multispan variable strips, closed profiles, multiple regions, trim
 wrappers, other support pairs and uncertified conditioning remain unsupported.
 
 The complete export retains five faces, nine edges and six vertices and
@@ -171,6 +171,26 @@ volume error about 0.00009572 mm³ and sampled equation residual about
 they do not relax exporter tolerance. OCC's zero two-way differences under
 imported tolerances are not an exact-equivalence certificate. Private spring
 files are not included and their later NURBS/cylinder boundary remains open.
+
+### Rational graph strips and explicit UV bounds, 2026-10-27
+
+The same plane map now acts on homogeneous quadratic/cubic controls, retaining
+source 3D weights. Positive rational derivative-numerator bounds, with bounded
+subdivision, certify every chart chord and condition its endpoint uncertainty.
+Identical stored profile weights and positive Cartesian height ordinates
+certify the non-rectangular strip. Its exact weighted flux has denominator W³;
+outward quotient integral bounds enter the signed-volume certificate.
+
+Explicit rational PCURVEs of degree p+1 encode u*W and weighted height on the
+finite tensor support. A lifted rounding certificate uses the unchanged 3D
+allowance; PCURVE and ADVANCED_FACE share the same face-local surface entity.
+The original MIT native `openswx-testdata/verification/rational-strip-001`
+exports completely and matches independent recipe volume/area integrals.
+Native STEP approximation and OCC area integration sensitivity are recorded
+separately. A code-only curved wedge verifies the full public export as well.
+No private model was added. Multispan/closed/multiply trimmed strips,
+proportional but differently stored weights and general NURBS intersections
+remain open; private spring NURBS/cylinder boundaries are not solved here.
 
 ## Historical corpus evidence
 

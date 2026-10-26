@@ -50,7 +50,7 @@ unsigned Choose(unsigned n, unsigned k) {
   return value;
 }
 using Vector = std::array<Interval, 3>;
-using Coefficients = std::array<Interval, 7>;
+using Coefficients = std::array<Interval, 10>;
 struct Piece {
   Coefficients numerator{}, denominator{};
   unsigned depth = 0;
@@ -69,9 +69,11 @@ ParseError Limit() {
 }
 Result<Interval> IntegratePiece(const NurbsCurveGeometry& curve, Vector3 origin,
                                 Vector3 normal, long double normal_error,
-                                uint64_t& checks) {
+                                uint64_t& checks,
+                                std::span<const ScalarBound> heights = {}) {
   using Return = Result<Interval>;
-  const unsigned p = curve.axis.degree, degree = 2 * p;
+  const unsigned p = curve.axis.degree;
+  unsigned degree = 2 * p;
   if (curve.axis.control_count != p + 1 || curve.axis.knots.size() != 2)
     return Return::Err({ErrorCode::kUnsupportedFormat, 0,
                         "Rational integral requires a single Bezier span"});
@@ -126,6 +128,27 @@ Result<Interval> IntegratePiece(const NurbsCurveGeometry& curve, Vector3 origin,
           Add(root.numerator[k],
               Mul(numerator[k - 1], Divide(Exact(k), Exact(degree))));
   }
+  if (!heights.empty()) {
+    const auto weighted_products = uint64_t{2} * (degree + 1) * (p + 1);
+    if (checks < weighted_products) return Return::Err(Limit());
+    checks -= weighted_products;
+    Piece weighted;
+    for (unsigned i = 0; i <= degree; ++i)
+      for (unsigned j = 0; j <= p; ++j) {
+        const auto factor = Divide(Exact(Choose(degree, i) * Choose(p, j)),
+                                   Exact(Choose(degree + p, i + j)));
+        const auto height =
+            Mul({heights[j].lower, heights[j].upper}, weights[j]);
+        weighted.numerator[i + j] =
+            Add(weighted.numerator[i + j],
+                Mul(factor, Mul(root.numerator[i], height)));
+        weighted.denominator[i + j] =
+            Add(weighted.denominator[i + j],
+                Mul(factor, Mul(root.denominator[i], weights[j])));
+      }
+    root = weighted;
+    degree += p;
+  }
   constexpr unsigned kDepth = 6;
   std::array<Piece, kDepth + 1> stack{};
   stack[0] = root;
@@ -174,6 +197,42 @@ Result<Interval> IntegratePiece(const NurbsCurveGeometry& curve, Vector3 origin,
   return Return::Ok(result);
 }
 }  // namespace
+Result<BoundedIntegral> RationalWeightedCurveIntegral(
+    const NurbsCurveGeometry& curve, std::span<const ScalarBound> heights,
+    Vector3 origin, Vector3 normal, uint64_t& checks) {
+  using Return = Result<BoundedIntegral>;
+  for (const double value :
+       {origin.x, origin.y, origin.z, normal.x, normal.y, normal.z})
+    if (!std::isfinite(value))
+      return Return::Err(
+          {ErrorCode::kInvalidOptions, 0, "Invalid weighted integral frame"});
+  if (!curve.controls.rational || curve.controls.dimension != 4 ||
+      (curve.axis.degree != 2 && curve.axis.degree != 3) ||
+      curve.axis.knots.size() != 2 ||
+      curve.axis.control_count != curve.axis.degree + 1 ||
+      heights.size() != curve.axis.control_count)
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Weighted rational integral requires one "
+                        "quadratic/cubic span and matching heights"});
+  for (const auto& height : heights)
+    if (!std::isfinite(height.lower) || !std::isfinite(height.upper) ||
+        height.lower <= 0 || height.upper < height.lower)
+      return Return::Err({ErrorCode::kInvalidOptions, 0,
+                          "Invalid weighted integral height bound"});
+  const auto validated = RestrictNurbsWire(curve, curve.axis.knots.front(),
+                                           curve.axis.knots.back(), checks);
+  if (!validated.ok()) return Return::Err(validated.error());
+  const auto result =
+      IntegratePiece(validated.value(), origin, normal, 0, checks, heights);
+  if (!result.ok()) return Return::Err(result.error());
+  const auto value = std::midpoint(result.value().low, result.value().high);
+  const auto error =
+      Up(std::max(value - result.value().low, result.value().high - value));
+  if (!std::isfinite(value) || !std::isfinite(error))
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Weighted rational integral is unrepresentable"});
+  return Return::Ok({value, error});
+}
 Result<BoundedIntegral> RationalCurveIntegral(const NurbsCurveGeometry& curve,
                                               Vector3 origin, Vector3 normal,
                                               uint64_t& checks,

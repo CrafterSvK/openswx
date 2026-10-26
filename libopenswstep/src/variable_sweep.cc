@@ -22,11 +22,23 @@ ParseError Limit() {
           "Variable sweep proof budget exhausted"};
 }
 Vector3 Pole(const NurbsCurveGeometry& c, unsigned i) {
-  return {c.controls.values[3 * i], c.controls.values[3 * i + 1],
-          c.controls.values[3 * i + 2]};
+  const auto at = i * c.controls.dimension;
+  const long double w = c.controls.rational ? c.controls.values[at + 3] : 1;
+  return {static_cast<double>(c.controls.values[at] / w),
+          static_cast<double>(c.controls.values[at + 1] / w),
+          static_cast<double>(c.controls.values[at + 2] / w)};
+}
+bounds::Vector PoleBounds(const NurbsCurveGeometry& c, unsigned i) {
+  if (!c.controls.rational) return bounds::Vec(Pole(c, i));
+  bounds::Vector out{};
+  for (unsigned k = 0; k < 3; ++k)
+    out[k] = bounds::Div(bounds::Exact(c.controls.values[4 * i + k]),
+                         bounds::Exact(c.controls.values[4 * i + 3]));
+  return out;
 }
 bool SameBasis(const NurbsCurveGeometry& a, const NurbsCurveGeometry& b) {
-  return !b.controls.rational && b.controls.dimension == 3 &&
+  return a.controls.rational == b.controls.rational &&
+         b.controls.dimension == (b.controls.rational ? 4 : 3) &&
          a.axis.degree == b.axis.degree &&
          a.axis.control_count == b.axis.control_count &&
          a.axis.knots == b.axis.knots &&
@@ -57,13 +69,13 @@ Result<SplineSweepPatch> RecognizeSplineSweepStrip(
           ? std::get_if<NurbsCurveGeometry>(
                 &model.geometry()[*profile_node->geometry].payload)
           : nullptr;
-  if (!section || section->controls.rational ||
-      section->controls.dimension != 3 ||
+  if (!section ||
+      section->controls.dimension != (section->controls.rational ? 4 : 3) ||
       (section->axis.degree != 2 && section->axis.degree != 3) ||
       section->axis.closed || section->axis.periodic ||
       section->axis.knots.size() != 2 || curves.size() != 4)
     return Return::Err(
-        Unsupported("Variable sweep strips require one polynomial "
+        Unsupported("Variable sweep strips require one open "
                     "quadratic/cubic span and four edges"));
   std::array<const NurbsCurveGeometry*, 4> profiles{};
   unsigned count = 0;
@@ -87,7 +99,7 @@ Result<SplineSweepPatch> RecognizeSplineSweepStrip(
       ++count;
     } else if (!std::holds_alternative<LineGeometry>(*curves[i].geometry))
       return Return::Err(
-          Unsupported("Variable sweep strip needs polynomial profiles and "
+          Unsupported("Variable sweep strip needs spline profiles and "
                       "straight generators"));
   }
   if (count != 2 || (profiles[0] != nullptr) == (profiles[1] != nullptr) ||
@@ -118,8 +130,16 @@ Result<SplineSweepPatch> RecognizeSplineSweepStrip(
     selected[profile_count] = curve.value();
     for (unsigned j = 0; j < result.profile.axis.control_count; ++j) {
       if (!bounds::Spend(checks, 64)) return Return::Err(Limit());
-      const auto delta =
-          bounds::Diff(Pole(curve.value(), j), Pole(result.profile, j));
+      if (section->controls.rational &&
+          curve.value().controls.values[4 * j + 3] !=
+              result.profile.controls.values[4 * j + 3])
+        return Return::Err(
+            Unsupported("Rational strip profiles require identical weights"));
+      const auto boundary = PoleBounds(curve.value(), j),
+                 base = PoleBounds(result.profile, j);
+      bounds::Vector delta{};
+      for (unsigned k = 0; k < 3; ++k)
+        delta[k] = bounds::Sub(boundary[k], base[k]);
       const auto v = bounds::Div(bounds::Dot(delta, direction), norm2);
       displacement[profile_count][j] = v;
       bounds::Vector residual{};
@@ -163,9 +183,15 @@ Result<SplineSweepPatch> RecognizeSplineSweepStrip(
   for (unsigned i = 0; i < result.profile.axis.control_count; ++i) {
     for (const double v : {result.lower, result.upper}) {
       if (!bounds::Spend(checks, 32)) return Return::Err(Limit());
-      const auto point = Pole(result.profile, i);
-      const auto input = bounds::Vec(point);
-      const std::array<double, 3> coordinates{point.x, point.y, point.z};
+      const auto input = PoleBounds(result.profile, i);
+      const auto at = i * result.profile.controls.dimension;
+      const long double w = result.profile.controls.rational
+                                ? result.profile.controls.values[at + 3]
+                                : 1;
+      const std::array<long double, 3> coordinates{
+          result.profile.controls.values[at] / w,
+          result.profile.controls.values[at + 1] / w,
+          result.profile.controls.values[at + 2] / w};
       const std::array<double, 3> d{swept->sweep.x, swept->sweep.y,
                                     swept->sweep.z};
       bounds::Vector rounding{};
@@ -223,6 +249,25 @@ Result<BoundedIntegral> SplineSweepStripVolume6(const SplineSweepPatch& patch,
                                                 Vector3 origin,
                                                 uint64_t& checks) {
   using Return = Result<BoundedIntegral>;
+  if (patch.profile.controls.rational) {
+    const auto weighted = RationalWeightedCurveIntegral(
+        patch.profile, patch.height_controls, origin, patch.sweep, checks);
+    if (!weighted.ok()) return Return::Err(weighted.error());
+    const auto integral = bounds::Mul(
+        bounds::Exact(2), {bounds::Sub(bounds::Exact(weighted.value().value),
+                                       bounds::Exact(weighted.value().error))
+                               .low,
+                           bounds::Add(bounds::Exact(weighted.value().value),
+                                       bounds::Exact(weighted.value().error))
+                               .high});
+    if (!bounds::Valid(integral))
+      return Return::Err(
+          Unsupported("Rational variable sweep flux is unrepresentable"));
+    const auto value = std::midpoint(integral.low, integral.high);
+    return Return::Ok({value, std::nextafter(std::max(value - integral.low,
+                                                      integral.high - value),
+                                             bounds::kInfinity)});
+  }
   const auto& curve = patch.profile;
   const auto p = curve.axis.degree;
   if (curve.controls.rational || curve.controls.dimension != 3 ||

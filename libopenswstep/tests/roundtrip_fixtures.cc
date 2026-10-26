@@ -8,6 +8,7 @@
 
 #include "fixtures.h"
 #include "openswstep/export.h"
+#include "rational_strip_fixture.h"
 
 int main(int argc, char** argv) {
   if (argc != 2) return 1;
@@ -15,6 +16,7 @@ int main(int argc, char** argv) {
   using openparasolid::NodeId;
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
+          {"rational-variable-wedge", test::RationalVariableWedge()},
           {"rational-planar-segment", test::RationalSplineFace()},
           {"rational-planar-inward", test::RationalSplineFace(true)},
           {"rational-planar-oblique", test::ObliqueRationalSplineFace()},
@@ -656,6 +658,9 @@ int main(int argc, char** argv) {
     }
     ExportOptions options;
     options.length_unit = LengthUnit::kMillimetre;
+    if (name == "rational-variable-wedge")
+      options.binding.intersection =
+          openparasolid::IntersectionEvaluationOptions{1e-7, 1e-11};
     const auto step = ExportBody(model.value(), NodeId{1}, options);
     if (!step.ok()) {
       std::cerr << name << ": " << step.error().message << '\n';

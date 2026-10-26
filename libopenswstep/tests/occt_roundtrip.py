@@ -31,6 +31,7 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "rational-variable-wedge": (8,12,6,1,"volume",2.25*(.75+math.pi/8)),
     "rational-planar-segment": (2,2,1,0,"area",4*math.pi/9-math.sqrt(3)/3),
     "rational-planar-inward": (2,2,1,0,"area",4*math.pi/9-math.sqrt(3)/3),
     "rational-planar-oblique": (2,2,1,0,"area",4*math.pi/9-math.sqrt(3)/3),

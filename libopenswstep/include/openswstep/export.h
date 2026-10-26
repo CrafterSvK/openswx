@@ -63,6 +63,8 @@ struct ExportOptions {
   /// Swept/plane recovery charges 128 units per chart point plus 128 for frame
   /// work. Variable-strip certificates share the rectangular attempt's budget;
   /// their polynomial flux charges 32*(p+1)*p*(p+1) coefficient-product units.
+  /// Rational graphs charge derivative products/subdivisions; strip UV curves
+  /// charge 256*(p+2) units plus restrictions; weighted flux shares the budget.
   /// Open B-spline wires consume one endpoint separation check per interior
   /// control point.
   /// Partial or unclamped restriction also charges the original control count
@@ -134,18 +136,21 @@ struct StepDocument {
 /// control comparisons certify translated profiles; the oriented parameter
 /// rectangle and an injective transverse projection certify the patch. Signed
 /// solid volume uses analytic polynomial surface flux, without tessellation.
-/// Single-span polynomial quadratic/cubic sweeps also support variable-height
+/// Single-span polynomial/rational quadratic/cubic sweeps support variable-height
 /// strips with corresponding graph profiles and two straight generators.
 /// Positive whole-profile gap bounds certify the oriented region; outward
 /// Bernstein-product flux bounds must certify positive shell volume. Direct
-/// PLANE/SWEPT_SURF intersections can supply exact polynomial edges when the
+/// PLANE/SWEPT_SURF intersections can supply exact source-weight edges when the
 /// plane is transverse, the section is globally injective across the sweep,
 /// and every chart chord has a global monotone projection. Construction error
 /// and conditioned endpoint uncertainty share the unchanged caller tolerance.
 /// Explicit intersection solver settings remain required. Writer-local curves
 /// and section parameters leave the source model and chart units unchanged
 /// (XT 5.2.1: Curves, p. 34; 5.2.1.4: B_CURVE, p. 38; 5.2.2.10:
-/// Swept_surf, p. 67). Rational/multispan variable strips, trim wrappers,
+/// Swept_surf, p. 67). Rational strips require identical stored profile weights;
+/// explicit rational UV curves have degree p+1 and certified 3D lifting error.
+/// Weighted flux uses a W^3 denominator and bounded outward integration.
+/// Multispan variable strips, trim wrappers,
 /// other implicit intersections and multiply trimmed sweeps remain unsupported.
 /// Supports simple concave planar LINE/CIRCLE/ELLIPSE and polynomial quadratic
 /// or cubic B_CURVE loops, with disjoint unnested holes. Bounded Bezier control

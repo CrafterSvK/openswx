@@ -13,7 +13,8 @@ namespace openswstep {
 namespace {
 using namespace openparasolid;
 using namespace openparasolid::test;
-ModelFixture SweptPlaneFixture(bool cubic = false) {
+ModelFixture SweptPlaneFixture(bool cubic = false, bool rational = false,
+                               double scale = 1) {
   ModelFixture f;
   f.Spline();
   for (auto& node : f.report.nodes)
@@ -66,6 +67,46 @@ ModelFixture SweptPlaneFixture(bool cubic = false) {
     f.Add(45, 3,
           {Array("vertices", FieldType::kDouble,
                  {0., 0., 0., 1. / 3, 0., 0., 2. / 3, 0., 0., 1., 1., 0.})});
+  }
+  if (rational) {
+    std::vector<ScalarValue> controls;
+    std::array<double, 4> weights{1, .75, 1.25, 1};
+    std::vector<double> points;
+    for (auto& node : f.report.nodes) {
+      if (node.index == 2) {
+        const auto& fields =
+            f.report.schemas[node.schema_index].definition.fields;
+        for (auto& field : node.fields) {
+          if (fields[field.definition_index].name == "rational")
+            field.values = {true};
+          if (fields[field.definition_index].name == "vertex_dim")
+            field.values = {int64_t{4}};
+        }
+      }
+      if (node.index == 3)
+        for (const auto& v : node.fields[0].values)
+          points.push_back(std::get<double>(v));
+    }
+    const unsigned degree = cubic ? 3u : 2u;
+    double denominator = 0, x = 0, y = 0;
+    for (unsigned i = 0; i <= degree; ++i) {
+      const auto w = weights[i] * scale;
+      for (unsigned k = 0; k < 3; ++k)
+        controls.emplace_back(points[3 * i + k] * w);
+      controls.emplace_back(w);
+      const auto coefficient =
+          degree == 2 ? (i == 1 ? 2. : 1.) : (i == 1 || i == 2 ? 3. : 1.);
+      denominator += coefficient * weights[i];
+      x += coefficient * weights[i] * points[3 * i];
+      y += coefficient * weights[i] * points[3 * i + 1];
+    }
+    std::erase_if(f.report.nodes, [](const auto& n) { return n.index == 3; });
+    f.Add(45, 3, {Array("vertices", FieldType::kDouble, std::move(controls))});
+    for (auto& n : f.report.nodes)
+      if (n.index == 31)
+        n.fields.back().values = {
+            0., 0., 2., x / denominator, y / denominator, 2 + x / denominator,
+            1., 1., 3.};
   }
   return f;
 }
@@ -146,30 +187,46 @@ Result<internal::IntersectionCurveRecovery> Recover(const ModelFixture& fixture,
 }
 TEST(OpenSwStepSweptIntersection,
      DerivesExactPolynomialGraphAndPartialIntervals) {
-  for (const bool cubic : {false, true})
-    for (const bool partial : {false, true}) {
-      uint64_t checks = 100000;
-      const auto result = Recover(SweptPlaneFixture(cubic), checks, 0, partial);
-      ASSERT_TRUE(result.ok()) << result.error().message;
-      const auto& curve = std::get<NurbsCurveGeometry>(result.value().geometry);
-      const std::vector<double> expected =
-          cubic ? std::vector<double>{0,          0,          2,      1. / 3,
-                                      0,          2 + 1. / 3, 2. / 3, 0,
-                                      2 + 2. / 3, 1,          1,      3}
-                : std::vector<double>{0, 0, 2, .5, 0, 2.5, 1, 1, 3};
-      ASSERT_EQ(curve.controls.values.size(), expected.size());
-      for (std::size_t i = 0; i < expected.size(); ++i)
-        EXPECT_NEAR(curve.controls.values[i], expected[i], 1e-15);
-      ASSERT_EQ(result.value().uses.size(), 2u);
-      EXPECT_EQ(result.value().uses[0].start, result.value().uses[1].end);
-      EXPECT_EQ(result.value().uses[0].end, result.value().uses[1].start);
-      EXPECT_GT(result.value().uses[0].end, result.value().uses[0].start);
-      if (partial) {
-        EXPECT_GT(result.value().uses[0].start, 0);
-        EXPECT_LT(result.value().uses[0].end, 1);
-      }
-      EXPECT_LT(checks, uint64_t{100000});
-    }
+  for (const bool rational : {false, true})
+    for (const double scale : {1e-100, 1., 1e100})
+      for (const bool cubic : {false, true})
+        for (const bool partial : {false, true}) {
+          uint64_t checks = 100000;
+          const auto result = Recover(SweptPlaneFixture(cubic, rational, scale),
+                                      checks, 0, partial);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          const auto& curve =
+              std::get<NurbsCurveGeometry>(result.value().geometry);
+          const std::vector<double> expected =
+              cubic ? std::vector<double>{0,          0,      2, 1. / 3,     0,
+                                          2 + 1. / 3, 2. / 3, 0, 2 + 2. / 3, 1,
+                                          1,          3}
+                    : std::vector<double>{0, 0, 2, .5, 0, 2.5, 1, 1, 3};
+          const std::array<double, 4> weights{1, .75, 1.25, 1};
+          ASSERT_EQ(curve.controls.values.size(),
+                    rational ? expected.size() / 3 * 4 : expected.size());
+          for (std::size_t i = 0; i < expected.size() / 3; ++i) {
+            const long double w =
+                rational ? curve.controls.values[4 * i + 3] : 1;
+            if (rational)
+              EXPECT_DOUBLE_EQ(curve.controls.values[4 * i + 3],
+                               weights[i] * scale);
+            for (unsigned k = 0; k < 3; ++k)
+              EXPECT_NEAR(
+                  static_cast<double>(
+                      curve.controls.values[(rational ? 4 : 3) * i + k] / w),
+                  expected[3 * i + k], 1e-15);
+          }
+          ASSERT_EQ(result.value().uses.size(), 2u);
+          EXPECT_EQ(result.value().uses[0].start, result.value().uses[1].end);
+          EXPECT_EQ(result.value().uses[0].end, result.value().uses[1].start);
+          EXPECT_GT(result.value().uses[0].end, result.value().uses[0].start);
+          if (partial) {
+            EXPECT_GT(result.value().uses[0].start, 0);
+            EXPECT_LT(result.value().uses[0].end, 1);
+          }
+          EXPECT_LT(checks, uint64_t{100000});
+        }
 }
 TEST(OpenSwStepSweptIntersection,
      RejectsUnsupportedTopologyAndEndpointChanges) {

@@ -7,6 +7,7 @@
 #include <map>
 
 #include "openparasolid/evaluate.h"
+#include "rational_graph.h"
 #include "sweep_bounds.h"
 namespace openswstep::internal {
 namespace {
@@ -24,8 +25,11 @@ ParseError Limit() {
           "Swept intersection proof budget exhausted"};
 }
 Vector3 Pole(const NurbsCurveGeometry& c, unsigned i) {
-  return {c.controls.values[3 * i], c.controls.values[3 * i + 1],
-          c.controls.values[3 * i + 2]};
+  const auto at = i * c.controls.dimension;
+  const long double w = c.controls.rational ? c.controls.values[at + 3] : 1;
+  return {static_cast<double>(c.controls.values[at] / w),
+          static_cast<double>(c.controls.values[at + 1] / w),
+          static_cast<double>(c.controls.values[at + 2] / w)};
 }
 struct Supports {
   NodeId swept_id;
@@ -110,8 +114,8 @@ Result<IntersectionCurveRecovery> RecoverSweptPlaneIntersection(
   const auto* section =
       section_object ? std::get_if<NurbsCurveGeometry>(&section_object->payload)
                      : nullptr;
-  if (!section || section->controls.rational ||
-      section->controls.dimension != 3 ||
+  if (!section ||
+      section->controls.dimension != (section->controls.rational ? 4 : 3) ||
       (section->axis.degree != 2 && section->axis.degree != 3) ||
       section->axis.closed || section->axis.periodic ||
       section->axis.knots.size() != 2 ||
@@ -119,7 +123,7 @@ Result<IntersectionCurveRecovery> RecoverSweptPlaneIntersection(
       section->axis.multiplicities.front() != section->axis.degree + 1 ||
       section->axis.multiplicities.back() != section->axis.degree + 1)
     return Return::Err(
-        Unsupported("Swept plane recovery requires one open clamped polynomial "
+        Unsupported("Swept plane recovery requires one open clamped "
                     "quadratic/cubic span"));
   const auto count = intersection->chart.positions.size();
   if (count < 2)
@@ -151,28 +155,48 @@ Result<IntersectionCurveRecovery> RecoverSweptPlaneIntersection(
     return Return::Err(
         Unsupported("Plane does not give an isolated swept graph"));
   auto curve = *section;
-  std::array<bounds::Vector, 4> graph_controls{};
+  std::array<bounds::Vector, 4> graph_controls{}, homogeneous_controls{};
+  std::array<double, 4> weights{};
   long double construction_error = 0;
   for (unsigned i = 0; i < section->axis.control_count; ++i) {
-    const auto pole = Pole(*section, i);
-    const auto height = bounds::Div(
-        bounds::Dot(normal, bounds::Diff(supports.plane->origin, pole)),
-        denominator);
-    bounds::Vector error{};
-    const auto input = bounds::Vec(pole);
+    const auto at = i * section->controls.dimension;
+    const auto w =
+        section->controls.rational ? section->controls.values[at + 3] : 1.;
+    weights[i] = w;
+    bounds::Vector numerator{};
+    const auto origin = bounds::Vec(supports.plane->origin);
+    for (unsigned k = 0; k < 3; ++k)
+      numerator[k] =
+          bounds::Sub(bounds::Mul(origin[k], bounds::Exact(w)),
+                      bounds::Exact(section->controls.values[at + k]));
+    const auto height =
+        bounds::Div(bounds::Dot(normal, numerator), denominator);
+    bounds::Vector error{}, model_error{};
     for (unsigned k = 0; k < 3; ++k) {
       const auto value =
-          bounds::Add(input[k], bounds::Mul(height, direction[k]));
+          bounds::Add(bounds::Exact(section->controls.values[at + k]),
+                      bounds::Mul(height, direction[k]));
       if (!bounds::Valid(value))
         return Return::Err(
             Unsupported("Swept graph controls are unrepresentable"));
-      graph_controls[i][k] = value;
+      homogeneous_controls[i][k] = value;
+      graph_controls[i][k] = section->controls.rational
+                                 ? bounds::Div(value, bounds::Exact(w))
+                                 : value;
       const auto rounded =
           static_cast<double>(std::midpoint(value.low, value.high));
-      curve.controls.values[3 * i + k] = rounded;
-      error[k] = bounds::Sub(value, bounds::Exact(rounded));
+      curve.controls.values[at + k] = rounded;
+      const auto cartesian =
+          static_cast<double>(static_cast<long double>(rounded) / w);
+      error[k] = bounds::Sub(graph_controls[i][k], bounds::Exact(cartesian));
+      model_error[k] =
+          bounds::Sub(graph_controls[i][k],
+                      bounds::Div(bounds::Exact(rounded), bounds::Exact(w)));
     }
-    construction_error = std::max(construction_error, bounds::Length(error));
+    const auto extra =
+        section->controls.rational ? bounds::Length(model_error) : 0;
+    construction_error =
+        std::max(construction_error, bounds::Length(error) + extra);
   }
   if (!(construction_error <= tolerance / 16))
     return Return::Err(
@@ -195,6 +219,16 @@ Result<IntersectionCurveRecovery> RecoverSweptPlaneIntersection(
     chart_direction = sign;
     const auto chord = bounds::Diff(intersection->chart.positions[i],
                                     intersection->chart.positions[i - 1]);
+    if (curve.controls.rational) {
+      const auto bounded = RationalGraphChordCondition(
+          std::span<const bounds::Vector>(homogeneous_controls.data(),
+                                          curve.axis.control_count),
+          std::span<const double>(weights.data(), curve.axis.control_count),
+          Pole(curve, 0), chord, sign, checks);
+      if (!bounded.ok()) return Return::Err(bounded.error());
+      conditioning = std::max(conditioning, bounded.value());
+      continue;
+    }
     for (unsigned j = 1; j < curve.axis.control_count; ++j) {
       bounds::Vector step{};
       for (unsigned k = 0; k < 3; ++k)
@@ -264,7 +298,8 @@ Result<IntersectionCurveRecovery> RecoverSweptPlaneIntersection(
           bounds::Exact(construction_error),
           bounds::Mul(
               bounds::Exact(conditioning),
-              bounds::Add(bounds::Exact(error),
+              bounds::Add(bounds::Add(bounds::Exact(error),
+                                      bounds::Exact(construction_error)),
                           bounds::Exact(use->intersection->solve_tolerance))));
       if (!bounds::Valid(endpoint_bound) || endpoint_bound.high > tolerance)
         return Return::Err(Unsupported(

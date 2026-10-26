@@ -20,7 +20,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Single convex planar contour additionally containing polynomial quadratic/cubic B_CURVE edges, including smooth multi-span bounds | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
 | Certified simple, possibly concave planar LINE/CIRCLE/ELLIPSE and quadratic/cubic polynomial B_CURVE contours with unnested holes | Exact source edges; bounded control-hull certificates and analytic area preserve topology |
 | Rectangular SWEPT_SURF patches with matching open clamped polynomial B_CURVE profiles and straight generators | Exact degree-(p,1) B-spline surfaces, original profile knots, signed sweep parameters and analytic surface flux |
-| Certified single-span polynomial SWEPT_SURF graph strips and direct transverse plane intersections | Exact polynomial intersection curves and tensor supports, whole-region gap checks and bounded analytic flux |
+| Certified single-span polynomial/rational SWEPT_SURF graph strips and direct transverse plane intersections | Exact intersection curves and tensor supports, rational UV bounds, whole-region gap checks and bounded flux |
 | Rectangular rational quadratic/cubic SWEPT_SURF patches with identical profile weights and convex planar caps | Exact rational tensor surfaces with bounded area/flux verification; general rational B_SURF trims remain unsupported |
 | Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
@@ -402,20 +402,23 @@ control arrays prove constant translations along the stored sweep; this is not
 an endpoint-only recognition. The reader's transverse projection certificate
 excludes folded/singular support. All four corners must identify one oriented
 parameter rectangle, with height greater than the source length tolerance.
-Tolerant fin pcurves and trim layouts outside the polynomial strips below and
+Tolerant fin pcurves and trim layouts outside the strips below and
 the bounded rational rectangle subset remain unsupported.
 
-Single-span polynomial quadratic/cubic sections additionally admit one
+Single-span polynomial or positive-weight rational quadratic/cubic sections
+additionally admit one
 variable-height graph strip. Both boundary curves retain the same section
 basis/interval; whole-control residual bounds place them along the sweep.
 Strictly positive height-difference coefficients keep them separated everywhere.
 Two straight generators and the four directed corners certify one region.
 The original source projection certificate excludes a folded support. The
 finite tensor box covers the strip, with emitted-pole rounding checked; the
-original boundary curves define its actual non-rectangular trim. Bernstein
-products integrate height times the polynomial surface flux exactly, with
-outward arithmetic bounds included in the shell-volume certificate. Rational
-and multispan variable strips and additional loops remain unsupported.
+original boundary curves define its actual non-rectangular trim. Rational
+profiles must have identical stored weights. Polynomial Bernstein products
+integrate height times surface flux exactly; rational products have denominator
+W³ and use bounded outward quotient integration. Both retain uncertainty in
+the shell-volume certificate. Multispan variable strips and additional loops
+remain unsupported.
 
 Each face emits its own finite `B_SPLINE_SURFACE_WITH_KNOTS` of degree `(p,1)`.
 Its U knots and signed V displacement bounds remain in source parameters.
@@ -981,16 +984,18 @@ source model and its native chart parameters unchanged. Existing spherical cut,
 face winding, manifold and positive-volume checks remain in force. Recognition
 shares the boundary comparison budget and does not widen STEP uncertainty.
 Other surface intersections remain unsupported except for the direct
-polynomial plane/swept subset below. Partial/ambiguous circular branches retain
+plane/swept subset below. Partial/ambiguous circular branches retain
 their previous limitations.
 This does not establish which SolidWorks feature payload is current or implement
 partition/delta reconstruction.
 
-### Direct plane/swept polynomial intersections
+### Direct plane/swept intersections
 
-A transverse plane on an open, single-span polynomial quadratic/cubic
+A transverse plane on an open, single-span polynomial or rational quadratic/cubic
 SWEPT_SURF defines the exact graph
 `Q(u) = P(u) + d * dot(n, O-P(u)) / dot(n,d)`.
+For rational sections the homogeneous map is
+`HQ = HP + d * dot(n, O*W-HP) / dot(n,d)`; source weights remain unchanged.
 The writer applies this linear map to the original control array. Outward
 interval construction uses the actual forward plane basis; no chart point is
 fitted. The source section's transverse projection proves global injectivity.
@@ -1003,7 +1008,7 @@ failures even when isolated endpoint distances look small.
 Two opposite accurate face uses must agree on the source interval and solver
 goals. Explicit intersection options are required. Derived writer-local
 B_CURVEs and section parameters leave source geometry and native chart units
-unchanged. Fin-specific pcurves, trim wrappers, rational/multispan sections,
+unchanged. Fin-specific pcurves, trim wrappers, multispan sections,
 parallel cuts and other support pairs remain unsupported. This does not
 implement general cylinder/cylinder or NURBS surface intersections.
 
@@ -1014,6 +1019,19 @@ controls, while the exact derived edge has four. The native's observed volume,
 area and curve residual differences are recorded separately; OCC Boolean zero
 under imported tolerances is not an exact-equivalence proof and never widens
 the library's geometric allowance. General saved-state membership is separate.
+
+The original MIT `openswx-testdata/verification/rational-strip-001` regression
+adds a complete weighted cubic solid cut by an oblique plane. Explicit rational
+UV curves prevent importer-generated trimming approximations: the homogeneous
+u*W numerator raises the 2D degree by one, while the 3D edge retains its source
+degree and weights. Outward bounds lift UV rounding into the unchanged 3D
+allowance. Each PCURVE shares the exact finite support of its ADVANCED_FACE.
+Independent recipe integrals verify volume and area; native STEP approximation
+errors remain separate observations. OCC area verification sums per-face
+integrals at Eps=1e-14 because default integration accuracy affects this model.
+The synthetic RationalVariableWedge also verifies the complete public export
+and OCC round trip without native files. Proportional but differently stored
+weight arrays, multispan strips and general NURBS intersections remain open.
 
 ## Bounded rational sweep export
 

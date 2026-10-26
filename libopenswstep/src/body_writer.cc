@@ -27,6 +27,7 @@
 #include "spun_sphere.h"
 #include "spun_torus.h"
 #include "step_writer.h"
+#include "strip_pcurve.h"
 #include "tolerant_circle.h"
 #include "torus_boundary.h"
 #include "torus_meridian.h"
@@ -194,6 +195,12 @@ class BodyWriter {
   std::map<uint32_t, Id> edges_;
   std::map<uint32_t, Id> curves_;
   std::map<uint32_t, Id> surfaces_;
+  std::map<uint32_t, Id> swept_surfaces_;
+  struct StripPcurveUse {
+    std::size_t face;
+    NurbsCurveGeometry pcurve;
+  };
+  std::map<uint32_t, std::vector<StripPcurveUse>> strip_pcurves_;
   std::map<uint32_t, GeometryObject> recovered_curves_;
   std::map<uint32_t, const CircularEdgeRecovery*> recovered_edges_;
   std::map<uint32_t, std::vector<EdgeUse>> uses_;
@@ -352,10 +359,22 @@ Result<Id> BodyWriter::Edge(NodeId edge, NodeId curve, NodeId start, NodeId end,
               "Multiple conic turns cannot be represented by one EDGE_CURVE"));
   // A selected spline section belongs to this source edge. Distinct intervals
   // on one basis must never reuse the other edge's restricted geometry.
-  const auto geometry =
-      restricted ? Result<Id>::Ok(WriteNurbsCurve(writer_, *restricted))
-                 : Curve(curve);
+  auto geometry = restricted
+                      ? Result<Id>::Ok(WriteNurbsCurve(writer_, *restricted))
+                      : Curve(curve);
   if (!geometry.ok()) return geometry;
+  if (restricted) {
+    const auto associated = strip_pcurves_.find(edge.value);
+    if (associated != strip_pcurves_.end()) {
+      std::vector<Id> pcurves;
+      for (const auto& use : associated->second)
+        pcurves.push_back(
+            ParameterCurve(use.pcurve, Surface(faces_[use.face])));
+      geometry = Result<Id>::Ok(
+          writer_.Add("SURFACE_CURVE(''," + Reference(geometry.value()) + ',' +
+                      References(pcurves) + ",.CURVE_3D.)"));
+    }
+  }
   Id start_id = 0, end_id = 0;
   if (start.value == 0 && end.value == 0) {
     if (!conic ||
@@ -939,6 +958,21 @@ Result<bool> BodyWriter::PrepareSplineSweepFace(FaceData& face) {
     return Result<bool>::Err(Error(face.source->face, patch.error().code,
                                    patch.error().message.c_str()));
   face.spline_sweep = std::move(patch).value();
+  if (face.spline_sweep->profile.controls.rational &&
+      !face.spline_sweep->height_controls.empty()) {
+    for (const auto& fin : face.source->loops.front().fins) {
+      const auto basis = Basis(fin.curve);
+      if (!basis.ok()) return Result<bool>::Err(basis.error());
+      const auto* spline =
+          std::get_if<NurbsCurveGeometry>(&basis.value()->payload);
+      if (!spline) continue;
+      const auto pc = BuildRationalStripPcurve(*face.spline_sweep, *spline,
+                                               options_.tolerance,
+                                               polygon_checks_remaining_);
+      if (!pc.ok()) return Result<bool>::Err(pc.error());
+      strip_pcurves_[fin.use.edge.value].push_back({faces_.size(), pc.value()});
+    }
+  }
   const auto point = EvaluateSurface(
       model_, face.source->surface,
       face.spline_sweep->profile.axis.knots.front(), face.spline_sweep->lower);
@@ -1419,6 +1453,9 @@ Result<bool> BodyWriter::CheckSolid() {
 }
 Id BodyWriter::Surface(const FaceData& face) {
   if (face.spline_sweep) {
+    if (const auto found = swept_surfaces_.find(face.source->face.value);
+        found != swept_surfaces_.end())
+      return found->second;
     // A source support can be shared by several disjoint trims. Each certified
     // finite patch owns its surface domain; do not reuse another trim's extent.
     const auto& patch = *face.spline_sweep;
@@ -1462,7 +1499,7 @@ Id BodyWriter::Surface(const FaceData& face) {
         weights += "(" + w + "," + w + ")";
       }
       weights += ')';
-      return writer_.Add(
+      const auto result = writer_.Add(
           "(BOUNDED_SURFACE() B_SPLINE_SURFACE(" +
           std::to_string(profile.axis.degree) + ",1," + rows +
           ",.UNSPECIFIED.,.F.,.F.,.F.) " + "B_SPLINE_SURFACE_WITH_KNOTS(" +
@@ -1471,12 +1508,17 @@ Id BodyWriter::Surface(const FaceData& face) {
           "),.UNSPECIFIED.) " +
           "GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(" +
           weights + ") REPRESENTATION_ITEM('') SURFACE())");
+      swept_surfaces_.emplace(face.source->face.value, result);
+      return result;
     }
-    return writer_.Add("B_SPLINE_SURFACE_WITH_KNOTS(''," +
-                       std::to_string(profile.axis.degree) + ",1," + rows +
-                       ",.UNSPECIFIED.,.F.,.F.,.F.," + multiplicities +
-                       ",(2,2)," + knots + ",(" + writer_.Number(patch.lower) +
-                       ',' + writer_.Number(patch.upper) + "),.UNSPECIFIED.)");
+    const auto result =
+        writer_.Add("B_SPLINE_SURFACE_WITH_KNOTS(''," +
+                    std::to_string(profile.axis.degree) + ",1," + rows +
+                    ",.UNSPECIFIED.,.F.,.F.,.F.," + multiplicities + ",(2,2)," +
+                    knots + ",(" + writer_.Number(patch.lower) + ',' +
+                    writer_.Number(patch.upper) + "),.UNSPECIFIED.)");
+    swept_surfaces_.emplace(face.source->face.value, result);
+    return result;
   }
   if (const auto found = surfaces_.find(face.source->surface.value);
       found != surfaces_.end())
@@ -1524,10 +1566,17 @@ Id BodyWriter::Surface(const FaceData& face) {
 }
 Id BodyWriter::ParameterCurve(const NurbsCurveGeometry& curve, Id surface) {
   std::vector<Id> points;
-  for (std::size_t i = 0; i < curve.controls.values.size(); i += 2)
+  for (std::size_t i = 0; i < curve.controls.values.size();
+       i += curve.controls.dimension) {
+    const long double w =
+        curve.controls.rational ? curve.controls.values[i + 2] : 1;
     points.push_back(writer_.Add(
-        "CARTESIAN_POINT('',(" + writer_.Number(curve.controls.values[i]) +
-        ',' + writer_.Number(curve.controls.values[i + 1]) + "))"));
+        "CARTESIAN_POINT('',(" +
+        writer_.Number(static_cast<double>(curve.controls.values[i] / w)) +
+        ',' +
+        writer_.Number(static_cast<double>(curve.controls.values[i + 1] / w)) +
+        "))"));
+  }
   std::string multiplicities = "(", knots = "(";
   for (std::size_t i = 0; i < curve.axis.knots.size(); ++i) {
     if (i) {
@@ -1539,11 +1588,28 @@ Id BodyWriter::ParameterCurve(const NurbsCurveGeometry& curve, Id surface) {
   }
   multiplicities += ')';
   knots += ')';
-  const auto spline =
-      writer_.Add("B_SPLINE_CURVE_WITH_KNOTS(''," +
-                  std::to_string(curve.axis.degree) + ',' + References(points) +
-                  ",.UNSPECIFIED.," + Logical(curve.axis.closed) + ",.F.," +
-                  multiplicities + ',' + knots + ",.UNSPECIFIED.)");
+  Id spline = 0;
+  if (curve.controls.rational) {
+    std::string weights = "(";
+    for (std::size_t i = 2; i < curve.controls.values.size(); i += 3) {
+      if (i != 2) weights += ',';
+      weights += writer_.Number(curve.controls.values[i]);
+    }
+    weights += ')';
+    spline = writer_.Add(
+        "(BOUNDED_CURVE() B_SPLINE_CURVE(" + std::to_string(curve.axis.degree) +
+        ',' + References(points) + ",.UNSPECIFIED.," +
+        Logical(curve.axis.closed) + ",.F.) B_SPLINE_CURVE_WITH_KNOTS(" +
+        multiplicities + ',' + knots +
+        ",.UNSPECIFIED.) CURVE() GEOMETRIC_REPRESENTATION_ITEM() " +
+        "RATIONAL_B_SPLINE_CURVE(" + weights + ") REPRESENTATION_ITEM(''))");
+  } else {
+    spline = writer_.Add("B_SPLINE_CURVE_WITH_KNOTS(''," +
+                         std::to_string(curve.axis.degree) + ',' +
+                         References(points) + ",.UNSPECIFIED.," +
+                         Logical(curve.axis.closed) + ",.F.," + multiplicities +
+                         ',' + knots + ",.UNSPECIFIED.)");
+  }
   const auto context = writer_.Add(
       "(GEOMETRIC_REPRESENTATION_CONTEXT(2) REPRESENTATION_CONTEXT('','2D'))");
   const auto representation =
