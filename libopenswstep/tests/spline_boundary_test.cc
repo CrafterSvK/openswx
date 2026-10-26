@@ -135,6 +135,51 @@ TEST(OpenSwStepSplineBoundary, RejectsOverlappingNestedAndOutsideHoles) {
             .ok());
   }
 }
+TEST(OpenSwStepSplineBoundary, ClosesRoundedJoinsDuringContainmentTests) {
+  // Two separated clockwise square holes in a rectangular outer loop. The
+  // right hole's lower-right join straddles the left hole's horizontal ray.
+  // Independent source edge evaluation leaves a valid sub-tolerance gap.
+  const auto rectangle = [](double left, double bottom, double right,
+                            double top, double gap) {
+    Contour result;
+    result.geometry = {LineGeometry{{left, bottom, 0}, {0, 1, 0}},
+                       LineGeometry{{left, top, 0}, {1, 0, 0}},
+                       LineGeometry{{right, top, 0}, {0, -1, 0}},
+                       LineGeometry{{right, bottom, 0}, {-1, 0, 0}}};
+    result.ends = {top - bottom, right - left, top - bottom - gap,
+                   right - left};
+    return result;
+  };
+  const auto outer = rectangle(0, 0, 6, 3, 0);
+  const auto left = rectangle(1, 1, 2, 2, 0);
+  for (const double gap : {std::nextafter(1., 2.) - 1., 2.5e-8}) {
+    const auto right = rectangle(3, 1, 4, 2, gap);
+    for (const bool reverse : {false, true})
+      for (const bool closing_join : {false, true}) {
+        auto right_curves = right.Curves(reverse);
+        if (closing_join)
+          std::rotate(right_curves.begin(),
+                      right_curves.begin() + (reverse ? 1 : 3),
+                      right_curves.end());
+        const std::vector<std::vector<internal::PlanarCurve>> loops{
+            left.Curves(reverse), right_curves, outer.Curves(!reverse)};
+        uint64_t checks = 10000;
+        const auto result = internal::ValidateSimplePlanarRegion(
+            loops, Plane(), !reverse, 1e-7, checks);
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        EXPECT_EQ(result.value().outer_loop, 2u);
+        EXPECT_NEAR(result.value().area, 16, 1e-7);
+      }
+  }
+  // Missing source joins larger than the caller tolerance remain unsupported.
+  const auto broken = rectangle(3, 1, 4, 2, 1e-4);
+  const std::vector<std::vector<internal::PlanarCurve>> loops{
+      left.Curves(), broken.Curves(), outer.Curves(true)};
+  uint64_t checks = 10000;
+  EXPECT_FALSE(
+      internal::ValidateSimplePlanarRegion(loops, Plane(), true, 1e-7, checks)
+          .ok());
+}
 TEST(OpenSwStepSplineBoundary, EnforcesExplicitToleranceAndWorkBudget) {
   const auto fixture = Notch();
   uint64_t checks = 0;

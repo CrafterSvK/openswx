@@ -412,12 +412,24 @@ Result<Certificate> CertifyLoop(std::span<const PlanarCurve> curves,
 }
 bool Contains(const Certificate& loop, Point p, uint64_t& remaining) {
   bool inside = false;
-  for (const auto& piece : loop.pieces) {
-    if (!Spend(remaining)) return false;
-    const auto a = piece.p[0], b = piece.p[piece.degree];
+  const auto cross = [&](Point a, Point b) {
     if ((a.y > p.y) != (b.y > p.y) &&
         p.x < a.x + (p.y - a.y) * (b.x - a.x) / (b.y - a.y))
       inside = !inside;
+  };
+  for (std::size_t i = 0; i < loop.pieces.size(); ++i) {
+    if (!Spend(remaining)) return false;
+    const auto& piece = loop.pieces[i];
+    const auto end = piece.p[piece.degree];
+    cross(piece.p[0], end);
+    // Independently evaluated source endpoints can differ within tolerance.
+    // Close those certified joins for winding, including the last/first join.
+    // Otherwise a ray through the tiny gap can produce odd parity outside a
+    // loop. Cross-loop hull clearance keeps each connector away from the
+    // tested loop. These connectors are never serialized as source geometry.
+    const auto next = loop.pieces[(i + 1) % loop.pieces.size()].p[0];
+    if (!Spend(remaining)) return false;
+    cross(end, next);
   }
   return inside;
 }

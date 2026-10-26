@@ -376,8 +376,16 @@ requiring an artificial gap at their common source vertex.
 
 Across distinct loops, complete hulls must be separated by the source length
 tolerance. Replacing each piece by its chord is then a homotopy avoiding every
-other loop, so chord winding gives certified containment. Exact polynomial and
-analytic conic integrals give net face area. Validation pieces never become
+other loop, so chord winding gives certified containment. Independently
+computed endpoints may differ within the already certified join tolerance.
+The winding polygon explicitly connects each piece's end to the next piece's
+start, including the closing join. Omitting these tiny connectors can falsely
+report nesting when a test ray passes through a rounding gap. Each source
+chord and each connector consumes one shared budget check. Clearance between
+loops keeps these certified join connectors away from other contours; this is
+only a validation construction, with no snapping or source-geometry repair.
+Gaps exceeding the source tolerance still fail the existing join certificate.
+Exact polynomial and analytic conic integrals give net face area. Validation pieces never become
 STEP edges: source knots, edge counts and topology are retained. Unsupported
 rational/higher-degree spline bounds identify the source curve and edge.
 No tolerance is enlarged, and an unproven certificate rejects the whole body.

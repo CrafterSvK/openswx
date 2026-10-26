@@ -229,7 +229,10 @@ struct StepDocument {
 /// nonadjacent sagitta envelopes certify separation. These checks can reject
 /// valid close contours; exported curves and areas remain exact source
 /// geometry. The independent control-hull path extends the certified subset
-/// to simple nonconvex curves and mixed holes. Uncertified envelopes, other
+/// to simple nonconvex curves and mixed holes. Its winding polygon explicitly
+/// closes already certified endpoint gaps within the unchanged source
+/// tolerance, including the last/first join. Each chord and connector consumes
+/// a shared budget check; neither becomes an exported edge or changes area. Uncertified envelopes, other
 /// non-planar trimming contours, spherical pole cuts, uncertified apex loops,
 /// explicit seam fins and torus intervals reaching the axis or inner sheet
 /// remain unsupported. Specialized

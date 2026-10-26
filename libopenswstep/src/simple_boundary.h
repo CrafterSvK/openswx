@@ -18,7 +18,9 @@ namespace openswstep::internal {
     double tolerance, uint64_t& remaining_checks);
 // Classifies one positively wound outer loop and negative holes. Cross-loop
 // hull separation precedes chord winding tests for strict, unnested
-// containment.
+// containment. The winding polygon closes certified sub-tolerance endpoint
+// gaps, including the last/first join; each chord and connector consumes one
+// shared budget check without changing source curves or analytic areas.
 [[nodiscard]] openparasolid::Result<PlanarRegion> ValidateSimplePlanarRegion(
     std::span<const std::vector<PlanarCurve>> loops,
     const openparasolid::PlaneGeometry& plane, bool natural_sense,
