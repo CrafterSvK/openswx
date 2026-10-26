@@ -10,6 +10,7 @@
 #include <set>
 
 #include "spun_torus.h"
+#include "tolerant_cylinder.h"
 
 namespace openswstep::internal {
 namespace {
@@ -251,6 +252,18 @@ Result<CircularEdgeRecovery> RecoverPair(
     const std::map<uint32_t, Vector3>& vertices, double tolerance,
     bool use_source_tolerances, uint64_t& remaining) {
   using Return = Result<CircularEdgeRecovery>;
+  if (fins.size() == 2) {
+    const auto a = Geometry(model, fins[0]->surface),
+               b = Geometry(model, fins[1]->surface);
+    if (!a.ok()) return Return::Err(a.error());
+    if (!b.ok()) return Return::Err(b.error());
+    if ((std::holds_alternative<CylinderGeometry>(a.value()->payload) &&
+         std::holds_alternative<NurbsSurfaceGeometry>(b.value()->payload)) ||
+        (std::holds_alternative<CylinderGeometry>(b.value()->payload) &&
+         std::holds_alternative<NurbsSurfaceGeometry>(a.value()->payload)))
+      return RecoverCylinderNurbsEdge(model, fins, vertices, tolerance,
+                                      use_source_tolerances, remaining);
+  }
   if (fins.size() != 2 || !fins[0]->use.fin_curve.value ||
       !fins[1]->use.fin_curve.value || fins[0]->use.edge_curve.value ||
       fins[1]->use.edge_curve.value)

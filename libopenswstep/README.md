@@ -39,7 +39,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Regular positive-sheet TORUS bands between two full coaxial circles, including spindle/horn trims and split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | SPUN_SURF with an unbounded circular generator in an axial meridian plane of a regular ring torus | Equivalent analytic `TOROIDAL_SURFACE`, preserving source normal orientation and boundary edges |
 | SPUN_SURF with a centered circular pole-to-pole half-meridian | Equivalent analytic `SPHERICAL_SURFACE`; complete circular cuts may be oblique to the source spin axis |
-| Certified paired planar/rotational tolerant circular edges | Shared exact circular 3D master with `SURFACE_CURVE`, both source `PCURVE` representations and declared edge uncertainty |
+| Certified paired planar/rotational and cylinder/rational-carrier tolerant circular edges | Shared exact circular 3D master with `SURFACE_CURVE`, both source `PCURVE` representations and declared edge uncertainty |
 | Solid bodies with one material region and one connected closed supported shell | `MANIFOLD_SOLID_BREP` inside `ADVANCED_BREP_SHAPE_REPRESENTATION` |
 
 Coordinates remain in the source frame. **The caller must specify metres or
@@ -637,6 +637,21 @@ used. These are tolerant B-reps: associated pcurves need not coincide exactly
 with their 3D master. General tolerant edges, rational pcurves, arbitrary
 periodic layouts, partial spline domains and other surface pairings remain
 unsupported.
+
+Vertex-bounded minor arcs also support a CYLINDER/rational B_SURF pair with
+full-domain affine polynomial pcurves. The constant-height cylinder supplies
+the exact circle. Outward homogeneous tensor bounds certify the whole rational
+trace (open piecewise-Bezier axes of degree one to three, positive weights).
+An existing explicitly trimmed master must be a matching circle or a certified
+plane intersection on the same B_SURF. Plane recovery isolates a graph U(V),
+including the active chart continuation, and requires a trim inside one chart
+chord plus explicit intersection solver options. Both source pcurves are
+retained unchanged. Source edge tolerances remain explicitly opt-in and are
+reported in output uncertainty. Closed/periodic carriers, multiple active
+chart chords and other master branches remain unsupported. This edge mapping
+does not enable arbitrary B_SURF face trimming or whole-spring export.
+See `openswx-testdata/verification/tolerant-cylinder-001` for the original
+native carrier and independent recovered-curve verification.
 
 Single-fin closed tolerant loops with stored `TRIMMED_CURVE` intervals can be
 resolved by the exporter after ordinary binding reports an unsupported case.

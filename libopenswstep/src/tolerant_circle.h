@@ -29,7 +29,9 @@ struct CircularEdgeRecovery {
 // Recovers only paired, vertex-bounded arcs or complete tolerant rings between
 // a planar SP_CURVE
 // and a constant-profile SP_CURVE on an unbounded circular SPUN_SURF. Retains
-// both parameter curves. The rotational use supplies the exact 3D circle;
+// both parameter curves. Also supports certified CYLINDER/rational B_SURF
+// minor arcs, with affine pcurves and an optional certified existing master.
+// The rotational use supplies the exact 3D circle;
 // bounded Bernstein checks certify the planar spline's whole-curve agreement,
 // angular branch and monotonicity. No fitting or sampled equivalence test.
 [[nodiscard]] openparasolid::Result<std::vector<CircularEdgeRecovery>>

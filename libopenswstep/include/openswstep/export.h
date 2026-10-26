@@ -57,7 +57,10 @@ struct ExportOptions {
   /// cut-pair check. Concave minor-arc contours share chord-polygon, join-cone
   /// and nonadjacent envelope checks, including a preceding convex attempt.
   /// Automatic closed tolerant-ring recovery charges both its preflight and
-  /// final Bernstein certificates to this same budget. Open B-spline wires
+  /// final Bernstein certificates to this same budget. Cylinder/rational-carrier
+  /// recovery charges source controls, trace subdivisions and 128*(p+1)*(q+1)
+  /// units per bounded tensor cell, including its master graph checks.
+  /// Open B-spline wires
   /// consume one endpoint separation check per interior control point.
   /// Partial or unclamped restriction also charges the original control count
   /// for copying and the new control count at each homogeneous knot insertion.
@@ -272,8 +275,15 @@ struct StepDocument {
 /// exterior knot on each side and endpoint multiplicity two can be clamped
 /// exactly to their natural domain without changing controls or polynomial
 /// pieces. Other periodic layouts, rational/partial-domain or other
-/// fin-specific mappings remain unsupported. Sheet orientation is propagated
-/// across shared edges. Solid export requires one material region with one
+/// fin-specific mappings remain unsupported outside the following subset.
+/// Vertex-bounded CYLINDER/rational B_SURF minor arcs retain affine source
+/// pcurves after whole-trace outward tensor bounds. Open piecewise-Bezier
+/// carriers have positive weights and axis degrees one to three. A recorded
+/// trimmed master must match the circle or a certified plane-intersection
+/// graph on that same carrier, with one active chart chord and explicit solver
+/// settings. Source allowances remain opt-in. This edge mapping does not
+/// establish support for general B_SURF face trimming. Sheet orientation is
+/// propagated across shared edges. Solid export requires one material region with one
 /// closed, connected shell, consistent face-side uses and positive signed
 /// volume. Foreign geometry, other tolerant fin curves, isolated face loops,
 /// compound bodies, general bodies and other curve/surface types return

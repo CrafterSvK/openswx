@@ -25,7 +25,7 @@ membership. Advancing one stage does not establish success at the next.
 | P2 | Oblique spherical cuts | Extended for native SPHERE caps and coaxial bands: whole-support and circle-frame error bounds consume the unchanged tolerance before existing profile/winding checks. An equivalent-pole synthetic fixture is compared with an original native sphere cap; the native saved file itself was already supported. Noncoaxial cuts remain open. |
 | P2 | Torus sectors bounded by complete meridians | Extended for regular ring supports: two whole-circle/profile certificates and opposite winding select minor or major azimuth sectors. Original native 90°/270° revolutions now export completely and have zero two-way solid differences against native STEP. Partial meridians and general contours remain open. |
 | P2 | Negative-major-radius torus branches | Open. Valid XT lemon branches require an exact STEP support/normal/trim equivalence proof; changing the radius sign or applying the ring certificate is insufficient. |
-| P2 | Tolerant support pairs outside PLANE/SPUN_SURF | Open. Preserve per-edge error budgets and certify the exact support pair instead of extending approximate chart circles by sampling. |
+| P2 | Tolerant support pairs outside PLANE/SPUN_SURF | Extended for vertex-bounded CYLINDER/rational B_SURF minor arcs with affine pcurves. Outward tensor bounds certify whole traces; existing circle or isolated plane-intersection masters are checked. Source allowances remain opt-in. General support pairs remain open. |
 | P3 | Final-body membership when configuration partitions contain no bodies | Open. Multiple internal payloads can correspond to multiple native bodies; neither taking the last candidate nor unioning all candidates certifies the saved target state. A successfully exported internal body can also differ completely from the native final body; exporter success is not membership evidence. |
 
 ### Partial polynomial spline intervals
@@ -75,8 +75,12 @@ chord/tangent parameter recurrence. Intersection evaluation and automatic
 interval binding now request the solve tolerance as a preferred normal goal,
 with the original chart allowance retained and fallback counts exposed.
 The investigated spring now binds all 15 faces at the original tolerances.
-Whole-body STEP preflight next rejects a tolerant edge whose fin-specific
-curve arrangement is outside the circular recovery subset. General rational
+The first tolerant CYLINDER/B_SURF edge now passes recovery when source edge
+tolerances are explicitly enabled: its roughly 1.64 µm source allowance covers
+a roughly 1.11 µm pcurve separation; strict 0.1 µm recovery still rejects it.
+The next whole-body preflight boundary is "Intersection circle requires
+complete accurate ring loops". This does not certify later non-circular
+intersections or the complete body. General rational
 B_SURF trimming/serialization remains an additional independent STEP limitation.
 No whole-spring export success is claimed.
 
@@ -96,6 +100,32 @@ original weighted B-spline surfaces and curves with independent native whole-
 body references. Supporting an auxiliary helix record does not substitute for
 these steps. Internal wire/sheet payloads must not be promoted to a complete
 spring merely because they can be exported or displayed.
+
+### Tolerant cylinder / rational carrier arcs
+
+The new subset retains two full-domain affine polynomial SP pcurves between a
+CYLINDER and an open rational piecewise-Bezier B_SURF (axis degrees one to
+three, positive weights). The cylinder has constant source height and supplies
+an exact minor circle. Outward-rounded homogeneous tensor restrictions bound
+the entire other pcurve against that circle, with finite work and depth limits.
+No curve fitting or sampled equivalence acceptance is used.
+
+A recorded master must be an explicitly trimmed matching circle or an
+intersection of the same B_SURF and a plane. The latter requires explicit
+solver settings, ordinary limits, a selected trim within one active chart
+chord, and a certified plane graph U(V) with nonzero signed U derivative.
+The full active chart continuation is isolated even when it extends beyond
+the trimmed edge. Endpoint residual bounds consume the same edge allowance.
+Multichord trims, closed/periodic carriers, rational pcurves, arbitrary master
+branches and other support pairs remain unsupported. Missing masters are also
+permitted only after the complete paired trace certificate succeeds.
+
+`verification/tolerant-cylinder-001` freezes an original MIT native rational
+quarter-cylinder carrier. Synthetic tests construct the tolerant arrangement
+and interior bow separately; the native file does not claim that topology.
+OCC independently checks the recovered circle against the native sheet.
+This extends edge mapping only; general rational face trim serialization and
+whole-spring export remain open. Both source pcurves and topology are retained.
 
 ## Historical corpus evidence
 
