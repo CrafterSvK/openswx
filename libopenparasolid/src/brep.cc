@@ -98,6 +98,18 @@ const GeometryObject* Geometry(const Model& model, NodeId id) {
   const auto* n = model.FindNode(id);
   return n && n->geometry ? &model.geometry()[*n->geometry] : nullptr;
 }
+Result<double> FinTolerance(const Model& model, const FinUse& use,
+                            double tolerance,
+                            const FaceTraversalOptions& options) {
+  if (!options.use_source_edge_tolerances) return Result<double>::Ok(tolerance);
+  const auto* edge = model.FindNode(use.edge);
+  if (!edge || edge->node_type != 16)
+    return Result<double>::Err(Error("Fin edge is unavailable"));
+  if (!edge->edge_tolerance) return Result<double>::Ok(tolerance);
+  if (!std::isfinite(*edge->edge_tolerance) || *edge->edge_tolerance <= 0)
+    return Result<double>::Err(Error("Invalid source edge tolerance"));
+  return Result<double>::Ok(std::max(tolerance, *edge->edge_tolerance));
+}
 double Distance(Vector3 a, Vector3 b) {
   return std::hypot(a.x - b.x, a.y - b.y, a.z - b.z);
 }
@@ -446,11 +458,11 @@ Result<FinParameterInterval> SplineInterval(const Model& model,
       std::holds_alternative<NurbsCurveGeometry>(curve.payload) &&
       use.start_vertex != use.end_vertex &&
       Distance(start.value(), end.value()) > tolerance) {
-    const auto a = internal::InvertMonotoneNurbsCurve(*spline, start.value(),
-                                                     tolerance);
+    const auto a =
+        internal::InvertMonotoneNurbsCurve(*spline, start.value(), tolerance);
     if (!a.ok()) return Result<FinParameterInterval>::Err(a.error());
-    const auto b = internal::InvertMonotoneNurbsCurve(*spline, end.value(),
-                                                     tolerance);
+    const auto b =
+        internal::InvertMonotoneNurbsCurve(*spline, end.value(), tolerance);
     if (!b.ok()) return Result<FinParameterInterval>::Err(b.error());
     if (a.value() == b.value())
       return Result<FinParameterInterval>::Err(
@@ -864,12 +876,16 @@ Result<FaceTrimming> BindFaceTrimming(
       out.isolated_vertex = uv.value();
     }
     std::optional<Vector3> first_position, previous_end;
+    double first_tolerance = tolerance, previous_tolerance = tolerance;
     for (const auto& use : loop.fins) {
       auto found = parameters.find(use.fin.value);
       if (found == parameters.end())
         return Result<FaceTrimming>::Err(Error("Missing fin parameter interval",
                                                0, ErrorCode::kInvalidOptions));
       const auto& p = *found->second;
+      const auto fin_tolerance = FinTolerance(model, use, tolerance, options);
+      if (!fin_tolerance.ok())
+        return Result<FaceTrimming>::Err(fin_tolerance.error());
       if (!use.fin_curve.value) {
         const auto* geometry = Geometry(model, use.edge_curve);
         std::optional<bool> increasing;
@@ -896,16 +912,23 @@ Result<FaceTrimming> BindFaceTrimming(
                            p.end,
                            intersection};
       for (double fraction : {0., 0.5, 1.}) {
-        auto sample = EvaluateBoundFin(model, fin, fraction, tolerance);
+        auto sample =
+            EvaluateBoundFin(model, fin, fraction, fin_tolerance.value());
         if (!sample.ok()) return Result<FaceTrimming>::Err(sample.error());
         const auto& position = sample.value().curve.position;
         if (fraction == 0) {
-          if (previous_end && Distance(*previous_end, position) > tolerance)
+          if (previous_end &&
+              Distance(*previous_end, position) >
+                  std::max(previous_tolerance, fin_tolerance.value()))
             return Result<FaceTrimming>::Err(
                 Error("Fin endpoints do not join within face loop tolerance"));
-          if (!first_position) first_position = position;
+          if (!first_position) {
+            first_position = position;
+            first_tolerance = fin_tolerance.value();
+          }
         } else if (fraction == 1) {
           previous_end = position;
+          previous_tolerance = fin_tolerance.value();
         }
         const NodeId vertex = fraction == 0   ? use.start_vertex
                               : fraction == 1 ? use.end_vertex
@@ -914,7 +937,7 @@ Result<FaceTrimming> BindFaceTrimming(
           auto point = Point(model, vertex);
           if (!point.ok()) return Result<FaceTrimming>::Err(point.error());
           if (Distance(point.value(), sample.value().curve.position) >
-              tolerance)
+              fin_tolerance.value())
             return Result<FaceTrimming>::Err(
                 Error("Fin interval endpoint disagrees with vertex"));
         }
@@ -923,7 +946,8 @@ Result<FaceTrimming> BindFaceTrimming(
       parameters.erase(found);
     }
     if (first_position && previous_end &&
-        Distance(*previous_end, *first_position) > tolerance)
+        Distance(*previous_end, *first_position) >
+            std::max(first_tolerance, previous_tolerance))
       return Result<FaceTrimming>::Err(
           Error("Face loop does not close within tolerance"));
     result.loops.push_back(std::move(out));
@@ -975,8 +999,11 @@ Result<FaceTrimming> BindFaceTrimmingWithOverrides(
         supplied.erase(specified);
         continue;
       }
-      const auto interval =
-          internal::InferFinInterval(model, use, tolerance, intersection);
+      const auto fin_tolerance = FinTolerance(model, use, tolerance, options);
+      if (!fin_tolerance.ok())
+        return Result<FaceTrimming>::Err(fin_tolerance.error());
+      const auto interval = internal::InferFinInterval(
+          model, use, fin_tolerance.value(), intersection);
       if (!interval.ok()) return Result<FaceTrimming>::Err(interval.error());
       intervals.push_back(interval.value());
     }

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <numbers>
+#include <numeric>
 #include <set>
 
 #include "spun_torus.h"
@@ -72,6 +73,19 @@ Result<ParameterCurve> ReadParameterCurve(const Model& model,
         "Tolerant circular edges require nonperiodic polynomial 2D splines"));
   auto result = *spline;
   auto& axis = result.axis;
+  const bool periodic_source = axis.periodic;
+  if (axis.knots.size() != axis.multiplicities.size() ||
+      uint64_t{axis.control_count} + axis.degree + 1 > 1000000)
+    return Return::Err(Unsupported("Circular pcurve knot arrays are invalid"));
+  std::vector<double> source_knots;
+  source_knots.reserve(uint64_t{axis.control_count} + axis.degree + 1);
+  for (std::size_t i = 0; i < axis.knots.size(); ++i)
+    source_knots.insert(source_knots.end(), axis.multiplicities[i],
+                        axis.knots[i]);
+  if (source_knots.size() != uint64_t{axis.control_count} + axis.degree + 1)
+    return Return::Err(Unsupported("Circular pcurve knot vector is invalid"));
+  const double source_domain_start = source_knots[axis.degree];
+  const double source_domain_end = source_knots[axis.control_count];
   if (ring && axis.degree == 2 && axis.knots.size() >= 4 &&
       axis.multiplicities.front() == 1 && axis.multiplicities.back() == 1 &&
       axis.multiplicities[1] == 2 &&
@@ -87,10 +101,21 @@ Result<ParameterCurve> ReadParameterCurve(const Model& model,
     axis.multiplicities.front() = 3;
     axis.multiplicities.back() = 3;
   }
+  const double domain_width = axis.knots.back() - axis.knots.front();
+  const double trim_width = std::abs(fin.end - fin.start);
+  const double period_roundoff =
+      64 * std::numeric_limits<double>::epsilon() *
+      std::max({1.0, std::abs(domain_width), std::abs(trim_width)});
+  const bool full_domain =
+      (fin.start == axis.knots.front() && fin.end == axis.knots.back()) ||
+      (fin.end == axis.knots.front() && fin.start == axis.knots.back());
+  const bool full_period =
+      periodic_source &&
+      std::abs(trim_width - (source_domain_end - source_domain_start)) <=
+          period_roundoff;
   if (axis.multiplicities.front() != axis.degree + 1 ||
       axis.multiplicities.back() != axis.degree + 1 ||
-      !((fin.start == axis.knots.front() && fin.end == axis.knots.back()) ||
-        (fin.end == axis.knots.front() && fin.start == axis.knots.back())))
+      (!full_domain && !full_period))
     return Return::Err(Unsupported(
         "Tolerant circular edges require the full clamped spline domain"));
   axis.periodic = false;
@@ -247,6 +272,213 @@ Result<bool> CheckPlanarSpline(const NurbsCurveGeometry& spline,
         Unsupported("Tolerant circular pcurves select different branches"));
   return Return::Ok(true);
 }
+
+Result<CurveEvaluation> EvaluateRingUse(const Model& model,
+                                        const BoundFinGeometry& fin,
+                                        double parameter) {
+  using Return = Result<CurveEvaluation>;
+  const auto basis = Basis(model, fin.curve);
+  if (!basis.ok()) return Return::Err(basis.error());
+  const auto* surface_curve =
+      std::get_if<SurfaceCurveGeometry>(&basis.value()->payload);
+  if (!surface_curve) return EvaluateCurve(model, fin.curve, parameter);
+  const auto pcurve = Geometry(model, surface_curve->parameter_curve);
+  if (!pcurve.ok()) return Return::Err(pcurve.error());
+  const auto* spline =
+      std::get_if<NurbsCurveGeometry>(&pcurve.value()->payload);
+  if (!spline || !spline->axis.periodic || !spline->axis.closed)
+    return EvaluateCurve(model, fin.curve, parameter);
+  if (!spline->axis.degree ||
+      spline->axis.degree >= spline->axis.control_count ||
+      spline->axis.knots.size() != spline->axis.multiplicities.size())
+    return Return::Err(Unsupported("Periodic ring pcurve has invalid knots"));
+
+  std::vector<double> knots;
+  knots.reserve(uint64_t{spline->axis.control_count} + spline->axis.degree + 1);
+  for (std::size_t i = 0; i < spline->axis.knots.size(); ++i)
+    knots.insert(knots.end(), spline->axis.multiplicities[i],
+                 spline->axis.knots[i]);
+  if (knots.size() !=
+      uint64_t{spline->axis.control_count} + spline->axis.degree + 1)
+    return Return::Err(
+        Unsupported("Periodic ring pcurve has an inconsistent knot vector"));
+  const double start = knots[spline->axis.degree];
+  const double end = knots[spline->axis.control_count];
+  const double period = end - start;
+  if (!std::isfinite(parameter) || !std::isfinite(period) || period <= 0)
+    return Return::Err(Unsupported("Periodic ring pcurve has no valid period"));
+  double wrapped = start + std::fmod(parameter - start, period);
+  if (wrapped < start) wrapped += period;
+  if (wrapped >= end) wrapped = start;
+  // Evaluate the untrimmed SP_CURVE at an equivalent periodic parameter. The
+  // trim's recorded unwrapped interval is retained for topology and export.
+  if (!basis.value()->source.value)
+    return Return::Err(Unsupported("Periodic SP_CURVE has no source identity"));
+  return EvaluateCurve(model, basis.value()->source, wrapped);
+}
+
+Result<CircularEdgeRecovery> RecoverCylinderPlaneRing(
+    const Model& model, std::span<const BoundFinGeometry* const> fins,
+    double tolerance, bool use_source_tolerances, uint64_t& remaining) {
+  using Return = Result<CircularEdgeRecovery>;
+  if (fins.size() != 2 || !fins[0]->use.fin_curve.value ||
+      !fins[1]->use.fin_curve.value || fins[0]->use.edge_curve.value ||
+      fins[1]->use.edge_curve.value || fins[0]->use.edge != fins[1]->use.edge)
+    return Return::Err(Unsupported(
+        "Cylinder/plane recovery needs two fin-specific ring curves"));
+  const BoundFinGeometry* cylinder_fin = nullptr;
+  const BoundFinGeometry* plane_fin = nullptr;
+  const CylinderGeometry* cylinder = nullptr;
+  const PlaneGeometry* plane = nullptr;
+  for (const auto* fin : fins) {
+    if (fin->use.start_vertex != fin->use.end_vertex)
+      return Return::Err(Unsupported(
+          "Cylinder/plane circular recovery supports complete rings"));
+    const auto support = Geometry(model, fin->surface);
+    if (!support.ok()) return Return::Err(support.error());
+    if (const auto* cylinder_support =
+            std::get_if<CylinderGeometry>(&support.value()->payload)) {
+      cylinder_fin = fin;
+      cylinder = cylinder_support;
+    } else if (const auto* plane_support =
+                   std::get_if<PlaneGeometry>(&support.value()->payload)) {
+      plane_fin = fin;
+      plane = plane_support;
+    }
+  }
+  if (!cylinder || !plane)
+    return Return::Err(Unsupported("Expected a CYLINDER/PLANE support pair"));
+  if (cylinder_fin->use.sense == plane_fin->use.sense)
+    return Return::Err(
+        Unsupported("Cylinder/plane ring uses require opposite directions"));
+  const auto cylinder_curve = ReadParameterCurve(model, *cylinder_fin, true);
+  const auto plane_curve = ReadParameterCurve(model, *plane_fin, true);
+  if (!cylinder_curve.ok()) return Return::Err(cylinder_curve.error());
+  if (!plane_curve.ok()) return Return::Err(plane_curve.error());
+  const auto& cp = cylinder_curve.value().spline;
+  if (cp.axis.degree != 1 || cp.axis.control_count != 2 ||
+      cp.axis.knots.size() != 2 || cp.controls.rational ||
+      cp.controls.dimension != 2 || cp.controls.values.size() != 4)
+    return Return::Err(Unsupported(
+        "Cylinder ring pcurve must be one affine full-turn segment"));
+  double first = cp.controls.values[0], last = cp.controls.values[2];
+  const double first_height = cp.controls.values[1];
+  const double last_height = cp.controls.values[3];
+  if (cylinder_fin->end < cylinder_fin->start) std::swap(first, last);
+  if (cylinder_fin->use.sense == TopologySense::kReverse)
+    std::swap(first, last);
+  constexpr double kFullTurn = 2 * std::numbers::pi;
+  if (!std::isfinite(first) || !std::isfinite(last) ||
+      std::abs(std::abs(last - first) - kFullTurn) > 1e-12 ||
+      std::abs(last_height - first_height) > tolerance / 4)
+    return Return::Err(Unsupported(
+        "Cylinder ring pcurve does not describe one constant-height turn"));
+
+  const auto normal = plane->normal;
+  const auto denominator = Dot(normal, cylinder->axis);
+  const auto normal_length = std::hypot(normal.x, normal.y, normal.z);
+  const auto axis_length =
+      std::hypot(cylinder->axis.x, cylinder->axis.y, cylinder->axis.z);
+  if (!std::isfinite(denominator) || !std::isfinite(normal_length) ||
+      !std::isfinite(axis_length) || normal_length == 0 || axis_length == 0 ||
+      std::abs(denominator) <= 64 * std::numeric_limits<double>::epsilon() *
+                                   normal_length * axis_length)
+    return Return::Err(Unsupported(
+        "Cylinder axis is parallel to the plane and has no unique ring"));
+  const auto height = (static_cast<long double>(normal.x) *
+                           (plane->origin.x - cylinder->origin.x) +
+                       static_cast<long double>(normal.y) *
+                           (plane->origin.y - cylinder->origin.y) +
+                       static_cast<long double>(normal.z) *
+                           (plane->origin.z - cylinder->origin.z)) /
+                      denominator;
+  if (!std::isfinite(height) ||
+      std::abs(height) > std::numeric_limits<double>::max())
+    return Return::Err(
+        Unsupported("Cylinder/plane ring center is unrepresentable"));
+  const auto pcurve_height = std::midpoint(first_height, last_height);
+  CircleGeometry circle;
+  circle.center = {static_cast<double>(std::fma(
+                       height, static_cast<long double>(cylinder->axis.x),
+                       cylinder->origin.x)),
+                   static_cast<double>(std::fma(
+                       height, static_cast<long double>(cylinder->axis.y),
+                       cylinder->origin.y)),
+                   static_cast<double>(std::fma(
+                       height, static_cast<long double>(cylinder->axis.z),
+                       cylinder->origin.z))};
+  circle.normal = cylinder->axis;
+  circle.x_axis = cylinder->x_axis;
+  circle.radius = cylinder->radius;
+  if (!std::isfinite(circle.radius) || circle.radius <= 2 * tolerance)
+    return Return::Err(Unsupported("Cylinder/plane ring radius is unresolved"));
+  const auto pcurve_center = Vector3{
+      static_cast<double>(std::fma(static_cast<long double>(pcurve_height),
+                                   cylinder->axis.x, cylinder->origin.x)),
+      static_cast<double>(std::fma(static_cast<long double>(pcurve_height),
+                                   cylinder->axis.y, cylinder->origin.y)),
+      static_cast<double>(std::fma(static_cast<long double>(pcurve_height),
+                                   cylinder->axis.z, cylinder->origin.z))};
+  if (std::hypot(circle.center.x - pcurve_center.x,
+                 circle.center.y - pcurve_center.y,
+                 circle.center.z - pcurve_center.z) > tolerance / 4)
+    return Return::Err(Unsupported(
+        "Cylinder pcurve height disagrees with the plane intersection"));
+  const auto* edge = model.FindNode(cylinder_fin->use.edge);
+  if (use_source_tolerances && edge && edge->edge_tolerance) {
+    if (!std::isfinite(*edge->edge_tolerance) || *edge->edge_tolerance <= 0)
+      return Return::Err({ErrorCode::kInvalidRecord, 0,
+                          "Source edge tolerance must be positive and finite"});
+    tolerance = std::max(tolerance, *edge->edge_tolerance);
+  }
+  // A shifted periodic trim's unwrapped interval does not determine the
+  // natural direction of its closed pcurve. The cylinder pcurve supplies that
+  // direction while the opposite fin senses retain face boundary orientation.
+  const auto certified =
+      CheckPlanarSpline(plane_curve.value().spline, *plane, circle, tolerance,
+                        last - first, true, remaining);
+  if (!certified.ok()) return Return::Err(certified.error());
+
+  const auto transverse = Cross(circle.normal, circle.x_axis);
+  const auto phase = first;
+  circle.x_axis = {
+      circle.x_axis.x * std::cos(phase) + transverse.x * std::sin(phase),
+      circle.x_axis.y * std::cos(phase) + transverse.y * std::sin(phase),
+      circle.x_axis.z * std::cos(phase) + transverse.z * std::sin(phase)};
+
+  NurbsCurveGeometry cylinder_pcurve = cp;
+  cylinder_pcurve.controls.values = {first, pcurve_height, last, pcurve_height};
+  CircularEdgeRecovery result{
+      cylinder_fin->use.edge, cylinder_fin->use.edge, circle, tolerance, {}};
+  for (const auto* fin : fins) {
+    const auto& pcurve =
+        fin == cylinder_fin ? cylinder_pcurve : plane_curve.value().spline;
+    const double edge_first = fin->use.sense == TopologySense::kForward
+                                  ? 0.0
+                                  : last - first,
+                 edge_last = fin->use.sense == TopologySense::kForward
+                                 ? last - first
+                                 : 0.0;
+    for (const auto& [parameter, edge_parameter] :
+         {std::pair{fin->start, edge_first}, std::pair{fin->end, edge_last}}) {
+      const auto source = EvaluateRingUse(model, *fin, parameter);
+      if (!source.ok()) return Return::Err(source.error());
+      const auto expected =
+          EvaluateCurve(GeometryPayload{circle}, edge_parameter);
+      if (!expected.ok()) return Return::Err(expected.error());
+      if (std::hypot(source.value().position.x - expected.value().position.x,
+                     source.value().position.y - expected.value().position.y,
+                     source.value().position.z - expected.value().position.z) >
+          tolerance)
+        return Return::Err(Unsupported(
+            "Cylinder/plane ring endpoints select different seams"));
+    }
+    result.uses.push_back(
+        {fin->use.fin, fin->surface, edge_first, edge_last, pcurve});
+  }
+  return Return::Ok(std::move(result));
+}
+
 Result<CircularEdgeRecovery> RecoverPair(
     const Model& model, std::span<const BoundFinGeometry* const> fins,
     const std::map<uint32_t, Vector3>& vertices, double tolerance,
@@ -262,6 +494,12 @@ Result<CircularEdgeRecovery> RecoverPair(
         (std::holds_alternative<CylinderGeometry>(b.value()->payload) &&
          std::holds_alternative<NurbsSurfaceGeometry>(a.value()->payload)))
       return RecoverCylinderNurbsEdge(model, fins, vertices, tolerance,
+                                      use_source_tolerances, remaining);
+    if ((std::holds_alternative<CylinderGeometry>(a.value()->payload) &&
+         std::holds_alternative<PlaneGeometry>(b.value()->payload)) ||
+        (std::holds_alternative<PlaneGeometry>(a.value()->payload) &&
+         std::holds_alternative<CylinderGeometry>(b.value()->payload)))
+      return RecoverCylinderPlaneRing(model, fins, tolerance,
                                       use_source_tolerances, remaining);
   }
   if (fins.size() != 2 || !fins[0]->use.fin_curve.value ||
@@ -389,8 +627,8 @@ Result<CircularEdgeRecovery> RecoverPair(
     const auto b = fin->use.sense == TopologySense::kForward ? last : first;
     for (const auto parameter : {a, b}) {
       const auto canonical = EvaluateCurve(GeometryPayload{circle}, parameter);
-      const auto source = EvaluateCurve(model, fin->curve,
-                                        parameter == a ? fin->start : fin->end);
+      const auto source =
+          EvaluateRingUse(model, *fin, parameter == a ? fin->start : fin->end);
       if (!canonical.ok()) return Return::Err(canonical.error());
       if (!source.ok()) return Return::Err(source.error());
       const auto p = canonical.value().position, q = source.value().position;
@@ -514,7 +752,14 @@ Result<std::vector<FinParameterInterval>> ResolveClosedTolerantRingIntervals(
           for (const auto& [parameter, point] :
                {std::pair{trim->parameter_1, trim->point_1},
                 std::pair{trim->parameter_2, trim->point_2}}) {
-            const auto sample = EvaluateCurve(model, use.fin_curve, parameter);
+            const BoundFinGeometry ring_fin{use,
+                                            face.face,
+                                            face.surface,
+                                            use.fin_curve,
+                                            trim->parameter_1,
+                                            trim->parameter_2,
+                                            options.intersection};
+            const auto sample = EvaluateRingUse(model, ring_fin, parameter);
             if (!sample.ok()) return Return::Err(sample.error());
             const auto p = sample.value().position;
             if (std::hypot(p.x - point.x, p.y - point.y, p.z - point.z) >

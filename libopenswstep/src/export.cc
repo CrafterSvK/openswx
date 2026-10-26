@@ -31,15 +31,18 @@ openparasolid::Result<StepDocument> ExportBody(
   using openparasolid::Result;
   const auto valid = internal::ValidateOptions(options);
   if (!valid.ok()) return Result<StepDocument>::Err(valid.error());
+  auto binding_options = options.binding;
+  binding_options.face.use_source_edge_tolerances =
+      options.use_source_edge_tolerances;
   auto bound = openparasolid::BindBodyGeometryWithOverrides(
       model, body, options.fin_intervals, options.wire_intervals,
-      options.tolerance, options.binding);
+      options.tolerance, binding_options);
   if (!bound.ok() &&
       bound.error().code == openparasolid::ErrorCode::kUnsupportedFormat) {
     uint64_t remaining = options.max_polygon_checks;
     const auto recovered = internal::ResolveClosedTolerantRingIntervals(
         model, body, options.fin_intervals, options.tolerance,
-        options.use_source_edge_tolerances, options.binding, remaining);
+        options.use_source_edge_tolerances, binding_options, remaining);
     if (!recovered.ok()) return Result<StepDocument>::Err(recovered.error());
     if (!recovered.value().empty()) {
       auto intervals = options.fin_intervals;
@@ -47,7 +50,7 @@ openparasolid::Result<StepDocument> ExportBody(
                        recovered.value().end());
       bound = openparasolid::BindBodyGeometryWithOverrides(
           model, body, intervals, options.wire_intervals, options.tolerance,
-          options.binding);
+          binding_options);
       if (!bound.ok()) return Result<StepDocument>::Err(bound.error());
       auto writer_options = options;
       writer_options.max_polygon_checks = remaining;
