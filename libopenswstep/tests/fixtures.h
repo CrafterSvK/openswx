@@ -1229,6 +1229,25 @@ inline ModelFixture ToroidalBand(bool solid = true, bool named_seams = false,
   }
   return f;
 }
+// Original closed torus with no source seams, vertices or trimming loops.
+inline ModelFixture CompleteTorus(bool solid = true, bool inward = false) {
+  auto f = ToroidalBand(solid);
+  auto& nodes = f.report.nodes;
+  std::erase_if(nodes, [](const auto& node) {
+    return node.index != 1 && node.index != 2 && node.index != 3 &&
+           node.index != 4 && node.index != 5 && node.index != 302 &&
+           node.index != 702;
+  });
+  Set(f, 1, "edge", 0);
+  Set(f, 1, "vertex", 0);
+  Set(f, solid ? 5 : 4, "face", 302);
+  Set(f, 4, "front_face", 302);
+  Set(f, 302, "loop", 0);
+  for (const auto* field : {"previous", "next", "previous_front", "next_front"})
+    Set(f, 302, field, 0);
+  if (inward) Set(f, 302, "sense", '-');
+  return f;
+}
 // Radius-one meridian, full azimuth, with a certified outer-sheet interval.
 inline ModelFixture NonringToroidalBand(double major, bool solid = true,
                                         bool named_seams = false,

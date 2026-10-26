@@ -31,6 +31,10 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "complete-torus": (1,2,1,1,"volume",6*math.pi**2),
+    "complete-torus-oblique": (1,2,1,1,"volume",6*math.pi**2),
+    "complete-torus-sheet": (1,2,1,0,"area",12*math.pi**2),
+    "complete-torus-inward": (1,2,1,0,"area",12*math.pi**2),
     "tight-circle-hole": (5,5,1,0,"area",.5625*math.pi),
     "tight-circle-hole-oblique": (5,5,1,0,"area",.5625*math.pi),
     "tight-ellipse-hole": (5,5,1,0,"area",2.515625*math.pi),

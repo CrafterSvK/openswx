@@ -907,9 +907,6 @@ Result<bool> BodyWriter::PrepareSplineSweepFace(FaceData& face) {
 }
 Result<bool> BodyWriter::PrepareFaces() {
   for (const auto& source : body_.faces) {
-    if (source.loops.empty())
-      return Result<bool>::Err(Error(source.face, ErrorCode::kUnsupportedFormat,
-                                     "Face has no boundary loops"));
     const auto surface = Geometry(source.surface);
     if (!surface.ok()) return Result<bool>::Err(surface.error());
     const auto* plane = std::get_if<PlaneGeometry>(&surface.value()->payload);
@@ -980,6 +977,26 @@ Result<bool> BodyWriter::PrepareFaces() {
       face.natural_sense = !face.natural_sense;
     if (spun_torus && !spun_torus->same_normal)
       face.natural_sense = !face.natural_sense;
+    if (source.loops.empty()) {
+      // A regular complete TORUS is compact and needs no trimming boundary.
+      // Other unbounded/periodic supports require their own closure proof.
+      if (!torus || !std::isfinite(torus->major_radius) ||
+          !std::isfinite(torus->minor_radius) ||
+          torus->minor_radius <= options_.tolerance ||
+          static_cast<long double>(torus->major_radius) - torus->minor_radius <=
+              options_.tolerance)
+        return Result<bool>::Err(
+            Error(source.face, ErrorCode::kUnsupportedFormat,
+                  "Boundary-free faces require a regular complete ring TORUS"));
+      if (!polygon_checks_remaining_)
+        return Result<bool>::Err(Error(source.face, ErrorCode::kResourceLimit,
+                                       "Complete torus check limit exceeded"));
+      --polygon_checks_remaining_;
+      face.torus_band = TorusBand{0, 2 * std::numbers::pi_v<long double>};
+      face.reference_point = torus->center;
+      faces_.push_back(std::move(face));
+      continue;
+    }
     if (swept) {
       const auto prepared = PrepareSplineSweepFace(face);
       if (!prepared.ok()) return prepared;

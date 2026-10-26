@@ -160,7 +160,12 @@ struct StepDocument {
 /// patches and variable-height complete cylinder bands. SPHERE faces use one
 /// full latitude circle for a cap or two full coaxial latitude circles for a
 /// band, away from the poles. Winding selects either cap, including caps larger
-/// than a hemisphere. TORUS bands use two coaxial full-circle cuts; winding
+/// than a hemisphere. A complete boundary-free TORUS face is supported when
+/// its finite radii satisfy r > tolerance and R-r > tolerance (XT 5.2.2.5:
+/// Torus, p. 58). One shared check certifies the whole regular ring; the source
+/// face retains an empty STEP bound set and its analytic full-turn volume.
+/// No source seams or vertices are invented. Other boundary-free supports
+/// remain unsupported. TORUS bands use two coaxial full-circle cuts; winding
 /// selects the meridian interval, including periodic seams and complementary
 /// bands. The entire interval must keep R+r*cos(v) above the source tolerance.
 /// This also supports regular positive-sheet trims of spindle/horn supports;

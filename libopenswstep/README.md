@@ -34,6 +34,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Complete CONE caps with one circular loop and one isolated apex | Exact `CONICAL_SURFACE` with one circular `FACE_OUTER_BOUND`; the certified apex remains an implicit surface singularity |
 | Partial CONE patches with two circular arcs and two straight cone generators | Exact `CONICAL_SURFACE` with one four-edge outer bound, including expanding/narrowing sectors |
 | SPHERE caps with one full latitude circle or bands with two coaxial circles | Exact `SPHERICAL_SURFACE`, source circular bounds and analytic volume contributions |
+| Complete regular ring TORUS faces without trimming loops | Exact boundary-free analytic face; no source seams or vertices are invented |
 | Regular positive-sheet TORUS bands between two full coaxial circles, including spindle/horn trims and split circular cuts | Exact `TOROIDAL_SURFACE` with source-oriented circular bounds and analytic volume contributions |
 | SPUN_SURF with an unbounded circular generator in an axial meridian plane of a regular ring torus | Equivalent analytic `TOROIDAL_SURFACE`, preserving source normal orientation and boundary edges |
 | SPUN_SURF with a centered circular pole-to-pole half-meridian | Equivalent analytic `SPHERICAL_SURFACE`; complete circular cuts may be oblique to the source spin axis |
@@ -540,8 +541,21 @@ and any enclosed cosine minimum. Valid cut circles alone are insufficient:
 their complementary interval can cross a singular axis or the inner sheet.
 Those intervals remain unsupported. No shortest-arc choice, radius alteration,
 normal flip or relaxed tolerance is used. The same analytic signed volume
-integral applies on the certified positive sheet. A complete uncut torus
-remains unsupported (XT 5.2.2.5: Torus, p. 58).
+integral applies on the certified positive sheet (XT 5.2.2.5: Torus, p. 58).
+
+A source TORUS face with no boundary loops denotes the complete supporting
+surface. This compact face is supported only for a regular ring torus with
+finite radii, `r > tolerance` and `R-r > tolerance`. One shared comparison
+check certifies this full interval; the exact band flux integral over a full
+meridian turn gives its signed volume contribution. Material shell sides and
+the existing connected-shell/positive-volume checks still apply. Boundary-free
+planes, cylinders, cones and non-ring tori remain unsupported.
+The STEP `ADVANCED_FACE` retains an empty bound set: no source loops, seams,
+edges or vertices are invented. OCCT may introduce two periodic seam edges
+and one vertex when importing that single analytic face. Independent tests
+cover solid and surface bodies, inward surface orientation and rotated frames,
+and reject spindle/horn supports, unresolved radial clearance and inward
+material normals.
 
 Synthetic solid/sheet regressions cover spindle/horn quadrants, small major
 radii, oblique frames, named seams and overhanging regular intervals. Axis-
@@ -627,7 +641,7 @@ approximation is written.
 NURBS curves outside the supported open-wire/planar-polynomial subsets,
 arbitrary NURBS source surfaces, uncertified nonconvex planar boundaries and
 curved-hole envelopes, nested/touching holes, spherical pole cuts/unbounded
-sphere faces, other cylinder/cone trims, partial torus azimuths, uncut tori,
+sphere faces, other cylinder/cone trims, partial torus azimuths,
 torus intervals reaching the axis or inner sheet, uncertified apex loops,
 explicit seam fins, other non-planar surfaces, other tolerant fin-specific
 curves/pcurves, isolated face loops, compounds/assemblies, general

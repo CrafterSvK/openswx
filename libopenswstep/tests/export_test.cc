@@ -2651,6 +2651,47 @@ TEST(OpenSwStep, RetainsEllipseHoleProfileValidationAndWorkLimits) {
   const auto rejected = Export(nonconvex);
   ASSERT_TRUE(rejected.ok()) << rejected.error().message;
 }
+TEST(OpenSwStep, ExportsCompleteToroidalFacesWithoutInventingSourceBounds) {
+  for (const bool solid : {false, true}) {
+    const auto f = test::CompleteTorus(solid);
+    for (const auto& source : {f, test::RotateAndTranslate(f)}) {
+      auto options = Options();
+      options.max_polygon_checks = 1;
+      const auto result = Export(source, options);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, 1);
+      EXPECT_EQ(result.value().statistics.edges, 0);
+      EXPECT_EQ(result.value().statistics.vertices, 0);
+      EXPECT_EQ(result.value().statistics.solids, solid ? 1 : 0);
+      EXPECT_NE(result.value().text.find("TOROIDAL_SURFACE("),
+                std::string::npos);
+      EXPECT_EQ(result.value().text.find("EDGE_LOOP("), std::string::npos);
+      CheckReferences(result.value());
+    }
+    const auto bytes = test::Serialize(f);
+    const auto binary =
+        ExportParasolid(bytes.bytes, NodeId{1}, Options(), &bytes.catalog);
+    ASSERT_TRUE(binary.ok()) << binary.error().message;
+  }
+  ASSERT_TRUE(Export(test::CompleteTorus(false, true)).ok());
+  ASSERT_FALSE(Export(test::CompleteTorus(true, true)).ok());
+  for (const double radius : {.5, 1., 1. + 1e-8}) {
+    auto invalid = test::CompleteTorus();
+    for (auto& node : invalid.report.nodes)
+      if (node.index == 702) node.fields[2].values = {radius};
+    const auto rejected = Export(invalid);
+    ASSERT_FALSE(rejected.ok());
+    EXPECT_EQ(rejected.error().code, ErrorCode::kUnsupportedFormat);
+  }
+  auto unbounded = test::CompleteTorus();
+  test::RemoveNode(unbounded, 702);
+  unbounded.Add(50, 702,
+                {test::Numbers("origin", {0, 0, 0}, FieldType::kVector),
+                 test::Numbers("normal", {0, 0, 1}, FieldType::kVector),
+                 test::Numbers("x_axis", {1, 0, 0}, FieldType::kVector),
+                 test::ByteValue("sense", '+', FieldType::kCharacter)});
+  ASSERT_FALSE(Export(unbounded).ok());
+}
 TEST(OpenSwStep, ExportsConvexCurvedHolesWithPolygonalAndCircularOuterBounds) {
   for (const bool two : {false, true})
     for (const bool mixed : {false, true})
