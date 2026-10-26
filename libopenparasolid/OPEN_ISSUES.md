@@ -18,9 +18,9 @@ membership. Advancing one stage does not establish success at the next.
 | P0 | Compiler-dependent coincident conic endpoints | Fixed: compare distinct vertex positions against caller tolerance before wrapping angles. The reported CI failure is reproduced with Clang 19 `-O3 -DNDEBUG`; tiny rounding gaps remain unsupported instead of becoming nearly full turns. |
 | P1 | Partial intersection edges ending at a closed help seam | Fixed when the existing shared-H/full-period certificate succeeds: recorded direction selects the first/last chart occurrence. Interior duplicates, unproven periods and unknown senses remain unsupported. |
 | P1 | Chart normals computed at coarse membership tolerance | Fixed for supported inversions: prefer the solve residual goal before the chord/tangent recurrence, retaining the source chart allowance and reporting membership fallbacks. Binding, evaluation and STEP circle recovery use the same policy. The investigated spring now binds all 15 faces without a larger tolerance. |
-| P1 | General non-circular intersection curves | Open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
+| P1 | General non-circular intersection curves | Extended for direct PLANE/SWEPT_SURF cuts of open single-span polynomial quadratic/cubic sections: exact control mapping, globally unique chord projections and conditioned endpoint bounds. Other pairs remain open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
-| P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
+| P2 | Non-rectangular or closed-profile spline sweeps | Extended for polynomial single-span strips with matching graph profiles, strictly positive whole-profile gap and two generators. Bounded analytic flux enters the volume sign certificate. Rational/multispan variable strips, full closed profiles and multiply trimmed sweeps remain open. |
 | P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Open clamped rational and polynomial curves up to degree seven now use local outward blossom extraction and positive Bernstein numerator subdivision for all valid interior multiplicities. An original native simple-knot rational cut prism binds and exports completely. Higher-degree rational, periodic, unclamped, SP and uncertified projections remain explicit. |
 | P2 | Oblique spherical cuts | Extended for native SPHERE caps and coaxial bands: whole-support and circle-frame error bounds consume the unchanged tolerance before existing profile/winding checks. An equivalent-pole synthetic fixture is compared with an original native sphere cap; the native saved file itself was already supported. Noncoaxial cuts remain open. |
 | P2 | Torus sectors bounded by complete meridians | Extended for regular ring supports: two whole-circle/profile certificates and opposite winding select minor or major azimuth sectors. Original native 90°/270° revolutions now export completely and have zero two-way solid differences against native STEP. Partial meridians and general contours remain open. |
@@ -142,6 +142,35 @@ and interior bow separately; the native file does not claim that topology.
 OCC independently checks the recovered circle against the native sheet.
 This extends edge mapping only; general rational face trim serialization and
 whole-spring export remain open. Both source pcurves and topology are retained.
+
+### Exact plane/swept graphs and non-rectangular strips
+
+`verification/slanted-sweep-001` freezes an original MIT SolidWorks cubic
+extrusion clipped by a slanted plane. The reader binds it, but the earlier
+exporter rejected its direct non-circular INTERSECTION. Its supporting plane
+and open single-span polynomial section now determine an exact B_CURVE by a
+linear control map. Outward bounds cover construction; the reader's transverse
+certificate and strictly signed full-profile chord projections isolate the
+chart branch. Endpoint residuals and solve uncertainty are amplified by a
+whole-graph condition bound, within the unchanged caller tolerance. Two
+accurate face uses must retain opposite topology and the same source interval.
+
+The resulting non-rectangular swept face needs an explicit region certificate:
+matching basis/interval profiles, whole-control agreement along generators,
+positive height coefficients and directed corner closure certify one strip.
+Its degree-(p,1) tensor support covers the trim; polynomial Bernstein products
+bound the variable-height flux and enter signed shell-volume validation.
+Rational/multispan variable strips, closed profiles, multiple regions, trim
+wrappers, other support pairs and uncertified conditioning remain unsupported.
+
+The complete export retains five faces, nine edges and six vertices and
+matches independent polynomial volume/area oracles. Native STEP approximates
+the same upper cubic with 22 controls instead of the exact four, with observed
+volume error about 0.00009572 mm³ and sampled equation residual about
+0.0001952 mm. These native differences are recorded as reference observations;
+they do not relax exporter tolerance. OCC's zero two-way differences under
+imported tolerances are not an exact-equivalence certificate. Private spring
+files are not included and their later NURBS/cylinder boundary remains open.
 
 ## Historical corpus evidence
 

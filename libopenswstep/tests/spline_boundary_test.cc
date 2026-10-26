@@ -327,12 +327,74 @@ TEST(OpenSwStepSplineSweep, EnclosesRationalQuarterCircleGreenIntegral) {
   uint64_t checks = 100000;
   EXPECT_FALSE(internal::RationalCurveIntegral(c, {}, {0, 0, 1}, checks).ok());
 }
+TEST(OpenSwStepSplineSweep, CertifiesVariableHeightAndItsPolynomialFlux) {
+  const auto model = SweepModel();
+  auto geometry = SweepBoundary(model);
+  auto& upper = std::get<NurbsCurveGeometry>(geometry[2]);
+  upper.controls.values[5] += .5;
+  upper.controls.values[8] += 1;
+  auto curves = SweepCurves(geometry);
+  curves[1].end = 3;
+  uint64_t checks = 100000;
+  const auto patch = internal::RecognizeSplineSweepPatch(
+      model, NodeId{20}, curves, true, 1e-7, checks);
+  ASSERT_TRUE(patch.ok()) << patch.error().message;
+  ASSERT_EQ(patch.value().height_controls.size(), 3u);
+  long double error = 0;
+  const auto flux = internal::SplineSweepVolume6(patch.value(), {}, checks, &error);
+  ASSERT_TRUE(flux.ok()) << flux.error().message;
+  EXPECT_LE(std::abs(flux.value() + 10), error);
+  EXPECT_LT(error, 1e-10);
+  EXPECT_FALSE(internal::SplineSweepVolume6(patch.value(), {}, checks).ok());
+  checks = 0;
+  const auto exhausted = internal::SplineSweepVolume6(patch.value(), {}, checks, &error);
+  ASSERT_FALSE(exhausted.ok());
+  EXPECT_EQ(exhausted.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStepSplineSweep, EnclosesCubicVariableFluxAgainstExactMoments) {
+  internal::SplineSweepPatch patch;
+  patch.profile.axis.degree = 3;
+  patch.profile.axis.control_count = 4;
+  patch.profile.axis.knots = {0, 1};
+  patch.profile.axis.multiplicities = {4, 4};
+  patch.profile.controls.dimension = 3;
+  patch.profile.controls.values = {0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 3, 0};
+  patch.sweep = {0, 0, 1};
+  patch.lower = 0;
+  patch.upper = 6;
+  patch.height_controls = {{3, 3}, {4, 4}, {5, 5}, {6, 6}};
+  // P=(3t,3t^3,0), H=3+3t. Twice integral H*(P cross P')_z is 243/5.
+  for (const bool shifted : {false, true}) {
+    uint64_t checks = 100000;
+    const auto flux = internal::SplineSweepStripVolume6(
+        patch, shifted ? Vector3{1, 0, 0} : Vector3{}, checks);
+    ASSERT_TRUE(flux.ok()) << flux.error().message;
+    const auto expected = shifted ? 171.L / 10 : 243.L / 5;
+    EXPECT_LE(std::abs(flux.value().value - expected), flux.value().error);
+    EXPECT_LT(flux.value().error, 1e-10);
+  }
+}
+TEST(OpenSwStepSplineSweep, RejectsCrossingAndUnresolvedStripHeights) {
+  const auto model = SweepModel();
+  for (unsigned bad = 0; bad < 4; ++bad) {
+    auto geometry = SweepBoundary(model);
+    auto& upper = std::get<NurbsCurveGeometry>(geometry[2]);
+    if (bad == 0) upper.controls.values[5] -= 4;
+    if (bad == 1) upper.controls.values[5] -= 2;
+    if (bad == 2) upper.controls.values[4] += .01;
+    auto curves = SweepCurves(geometry);
+    if (bad == 3) std::swap(curves[1], curves[2]);
+    uint64_t checks = 100000;
+    EXPECT_FALSE(internal::RecognizeSplineSweepStrip(
+        model, NodeId{20}, curves, true, 1e-7, checks).ok()) << bad;
+  }
+}
 TEST(OpenSwStepSplineSweep, RejectsUnmatchedControlsBasisWindingAndBudgets) {
   const auto model = SweepModel();
   for (int bad = 0; bad < 5; ++bad) {
     auto geometry = SweepBoundary(model);
     auto& upper = std::get<NurbsCurveGeometry>(geometry[2]);
-    if (bad == 0) upper.controls.values[5] += .01;
+    if (bad == 0) upper.controls.values[4] += .01;
     if (bad == 1) upper.axis.knots.back() = 2;
     if (bad == 2)
       geometry[1] = CircleGeometry{{2, 3, 4}, {0, 0, 1}, {1, 0, 0}, 2};

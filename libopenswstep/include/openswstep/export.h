@@ -60,8 +60,11 @@ struct ExportOptions {
   /// final Bernstein certificates to this same budget. Cylinder/rational-carrier
   /// recovery charges source controls, trace subdivisions and 128*(p+1)*(q+1)
   /// units per bounded tensor cell, including its master graph checks.
-  /// Open B-spline wires
-  /// consume one endpoint separation check per interior control point.
+  /// Swept/plane recovery charges 128 units per chart point plus 128 for frame
+  /// work. Variable-strip certificates share the rectangular attempt's budget;
+  /// their polynomial flux charges 32*(p+1)*p*(p+1) coefficient-product units.
+  /// Open B-spline wires consume one endpoint separation check per interior
+  /// control point.
   /// Partial or unclamped restriction also charges the original control count
   /// for copying and the new control count at each homogeneous knot insertion.
   /// Planar polynomial spline bounds consume one plane check per control;
@@ -131,6 +134,19 @@ struct StepDocument {
 /// control comparisons certify translated profiles; the oriented parameter
 /// rectangle and an injective transverse projection certify the patch. Signed
 /// solid volume uses analytic polynomial surface flux, without tessellation.
+/// Single-span polynomial quadratic/cubic sweeps also support variable-height
+/// strips with corresponding graph profiles and two straight generators.
+/// Positive whole-profile gap bounds certify the oriented region; outward
+/// Bernstein-product flux bounds must certify positive shell volume. Direct
+/// PLANE/SWEPT_SURF intersections can supply exact polynomial edges when the
+/// plane is transverse, the section is globally injective across the sweep,
+/// and every chart chord has a global monotone projection. Construction error
+/// and conditioned endpoint uncertainty share the unchanged caller tolerance.
+/// Explicit intersection solver settings remain required. Writer-local curves
+/// and section parameters leave the source model and chart units unchanged
+/// (XT 5.2.1: Curves, p. 34; 5.2.1.4: B_CURVE, p. 38; 5.2.2.10:
+/// Swept_surf, p. 67). Rational/multispan variable strips, trim wrappers,
+/// other implicit intersections and multiply trimmed sweeps remain unsupported.
 /// Supports simple concave planar LINE/CIRCLE/ELLIPSE and polynomial quadratic
 /// or cubic B_CURVE loops, with disjoint unnested holes. Bounded Bezier control
 /// hull subdivision is used only for validation; source edges stay unsplit.

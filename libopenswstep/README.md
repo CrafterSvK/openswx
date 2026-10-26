@@ -20,6 +20,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Single convex planar contour additionally containing polynomial quadratic/cubic B_CURVE edges, including smooth multi-span bounds | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
 | Certified simple, possibly concave planar LINE/CIRCLE/ELLIPSE and quadratic/cubic polynomial B_CURVE contours with unnested holes | Exact source edges; bounded control-hull certificates and analytic area preserve topology |
 | Rectangular SWEPT_SURF patches with matching open clamped polynomial B_CURVE profiles and straight generators | Exact degree-(p,1) B-spline surfaces, original profile knots, signed sweep parameters and analytic surface flux |
+| Certified single-span polynomial SWEPT_SURF graph strips and direct transverse plane intersections | Exact polynomial intersection curves and tensor supports, whole-region gap checks and bounded analytic flux |
 | Rectangular rational quadratic/cubic SWEPT_SURF patches with identical profile weights and convex planar caps | Exact rational tensor surfaces with bounded area/flux verification; general rational B_SURF trims remain unsupported |
 | Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
@@ -401,8 +402,20 @@ control arrays prove constant translations along the stored sweep; this is not
 an endpoint-only recognition. The reader's transverse projection certificate
 excludes folded/singular support. All four corners must identify one oriented
 parameter rectangle, with height greater than the source length tolerance.
-Tolerant fin pcurves, general rational profiles and other trim layouts remain
-unsupported.
+Tolerant fin pcurves and trim layouts outside the polynomial strips below and
+the bounded rational rectangle subset remain unsupported.
+
+Single-span polynomial quadratic/cubic sections additionally admit one
+variable-height graph strip. Both boundary curves retain the same section
+basis/interval; whole-control residual bounds place them along the sweep.
+Strictly positive height-difference coefficients keep them separated everywhere.
+Two straight generators and the four directed corners certify one region.
+The original source projection certificate excludes a folded support. The
+finite tensor box covers the strip, with emitted-pole rounding checked; the
+original boundary curves define its actual non-rectangular trim. Bernstein
+products integrate height times the polynomial surface flux exactly, with
+outward arithmetic bounds included in the shell-volume certificate. Rational
+and multispan variable strips and additional loops remain unsupported.
 
 Each face emits its own finite `B_SPLINE_SURFACE_WITH_KNOTS` of degree `(p,1)`.
 Its U knots and signed V displacement bounds remain in source parameters.
@@ -967,9 +980,40 @@ Writer-local angular intervals preserve their directions while leaving the
 source model and its native chart parameters unchanged. Existing spherical cut,
 face winding, manifold and positive-volume checks remain in force. Recognition
 shares the boundary comparison budget and does not widen STEP uncertainty.
-Other surface intersections and partial/ambiguous chart branches remain unsupported.
+Other surface intersections remain unsupported except for the direct
+polynomial plane/swept subset below. Partial/ambiguous circular branches retain
+their previous limitations.
 This does not establish which SolidWorks feature payload is current or implement
 partition/delta reconstruction.
+
+### Direct plane/swept polynomial intersections
+
+A transverse plane on an open, single-span polynomial quadratic/cubic
+SWEPT_SURF defines the exact graph
+`Q(u) = P(u) + d * dot(n, O-P(u)) / dot(n,d)`.
+The writer applies this linear map to the original control array. Outward
+interval construction uses the actual forward plane basis; no chart point is
+fitted. The source section's transverse projection proves global injectivity.
+Ordered ordinary chart limits and strictly signed whole-graph derivative
+projections onto every chart chord isolate its branch. The same derivative
+bounds condition endpoint/membership and solver uncertainty against the
+unchanged caller tolerance. Ill-conditioned cuts therefore remain explicit
+failures even when isolated endpoint distances look small.
+
+Two opposite accurate face uses must agree on the source interval and solver
+goals. Explicit intersection options are required. Derived writer-local
+B_CURVEs and section parameters leave source geometry and native chart units
+unchanged. Fin-specific pcurves, trim wrappers, rational/multispan sections,
+parallel cuts and other support pairs remain unsupported. This does not
+implement general cylinder/cylinder or NURBS surface intersections.
+
+The original MIT native `openswx-testdata/verification/slanted-sweep-001`
+regression exports the complete five-face body and matches independent recipe
+integrals. Its native STEP reference approximates the upper cubic with 22
+controls, while the exact derived edge has four. The native's observed volume,
+area and curve residual differences are recorded separately; OCC Boolean zero
+under imported tolerances is not an exact-equivalence proof and never widens
+the library's geometric allowance. General saved-state membership is separate.
 
 ## Bounded rational sweep export
 

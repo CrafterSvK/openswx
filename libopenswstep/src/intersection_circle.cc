@@ -10,6 +10,7 @@
 
 #include "openparasolid/evaluate.h"
 #include "spun_sphere.h"
+#include "swept_intersection.h"
 namespace openswstep::internal {
 namespace {
 using namespace openparasolid;
@@ -164,10 +165,10 @@ Result<CircleGeometry> Circle(const Model& model, const GeometryObject& source,
   return Result<CircleGeometry>::Ok(circle);
 }
 }  // namespace
-Result<std::vector<IntersectionCircleRecovery>> RecoverIntersectionCircles(
+Result<std::vector<IntersectionCurveRecovery>> RecoverIntersectionCurves(
     const Model& model, const BodyGeometryBinding& body, double tolerance,
     uint64_t& remaining_checks) {
-  using Return = Result<std::vector<IntersectionCircleRecovery>>;
+  using Return = Result<std::vector<IntersectionCurveRecovery>>;
   std::map<uint32_t, std::vector<const BoundFinGeometry*>> edges;
   for (const auto& face : body.faces)
     for (const auto& loop : face.loops)
@@ -177,19 +178,28 @@ Result<std::vector<IntersectionCircleRecovery>> RecoverIntersectionCircles(
         if (!std::holds_alternative<IntersectionCurveGeometry>(
                 geometry.value()->payload))
           continue;
-        if (loop.fins.size() != 1 || fin.use.fin_curve.value ||
-            !fin.intersection)
+        if ((!IsSweptPlaneIntersection(model, *geometry.value()) &&
+             loop.fins.size() != 1) ||
+            fin.use.fin_curve.value || !fin.intersection)
           return Return::Err(Unsupported(
               "Intersection circle requires complete accurate ring loops"));
         edges[fin.use.edge.value].push_back(&fin);
       }
-  std::vector<IntersectionCircleRecovery> result;
+  std::vector<IntersectionCurveRecovery> result;
   for (const auto& [edge, uses] : edges) {
     if (uses.size() != 2)
       return Return::Err(
           Unsupported("Intersection circle requires two paired face uses"));
     const auto source = Geometry(model, uses[0]->curve);
     if (!source.ok()) return Return::Err(source.error());
+    if (IsSweptPlaneIntersection(model, *source.value())) {
+      const auto recovered = RecoverSweptPlaneIntersection(
+          model, *source.value(), uses, body.vertices, tolerance,
+          remaining_checks);
+      if (!recovered.ok()) return Return::Err(recovered.error());
+      result.push_back(recovered.value());
+      continue;
+    }
     const auto& intersection =
         std::get<IntersectionCurveGeometry>(source.value()->payload);
     if (!source.value()->sense ||
@@ -240,7 +250,7 @@ Result<std::vector<IntersectionCircleRecovery>> RecoverIntersectionCircles(
     const auto& parameters = chart.value().parameterization.parameters;
     const auto circle = Circle(model, *source.value(), *uses[0], tolerance);
     if (!circle.ok()) return Return::Err(circle.error());
-    IntersectionCircleRecovery recovered{NodeId{edge}, circle.value(), {}};
+    IntersectionCurveRecovery recovered{NodeId{edge}, circle.value(), {}};
     for (const auto* use : uses) {
       const bool increasing =
           use->start == parameters.front() && use->end == parameters.back();

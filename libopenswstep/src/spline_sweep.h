@@ -3,6 +3,8 @@
 #ifndef OPENSWSTEP_SRC_SPLINE_SWEEP_H_
 #define OPENSWSTEP_SRC_SPLINE_SWEEP_H_
 
+#include <vector>
+
 #include "convex_boundary.h"
 #include "rational_integral.h"
 
@@ -11,18 +13,39 @@ struct SplineSweepPatch {
   openparasolid::NurbsCurveGeometry profile;
   openparasolid::Vector3 sweep;
   double lower = 0, upper = 0;
+  // Empty for rectangular patches. Otherwise encloses the polynomial height
+  // coefficient at each restricted profile pole; every lower bound is positive.
+  struct Height {
+    long double lower, upper;
+  };
+  std::vector<Height> height_controls;
 };
-// Certifies one rectangular parameter patch with two exactly corresponding
-// polynomial or corresponding rational profiles with identical weights and two straight generators.
-// Control comparisons bound the entire supporting edges, not just a finite set
-// of samples.
+// Certifies a rectangle or a supported polynomial graph strip with two
+// corresponding profiles and two straight generators. The rectangular path
+// compares translated profiles, including rational profiles of identical
+// weights. The strip path proves whole-profile transverse agreement, positive
+// height and oriented corner closure. All attempts share one work budget.
+// Control comparisons bound whole supporting edges, rather than samples.
 [[nodiscard]] openparasolid::Result<SplineSweepPatch> RecognizeSplineSweepPatch(
     const openparasolid::Model& model, openparasolid::NodeId surface,
     std::span<const PlanarCurve> curves, bool natural_sense, double tolerance,
     uint64_t& remaining_checks);
+// Non-rectangular polynomial strips use corresponding boundary profiles whose
+// entire difference from the section is along the sweep. Positive height
+// coefficients certify separation, with topology fixing the directed loop.
+[[nodiscard]] openparasolid::Result<SplineSweepPatch> RecognizeSplineSweepStrip(
+    const openparasolid::Model& model, openparasolid::NodeId surface,
+    std::span<const PlanarCurve> curves, bool natural_sense, double tolerance,
+    uint64_t& remaining_checks);
+// Outward coefficient arithmetic encloses twice the exact polynomial
+// surface flux; callers retain its uncertainty in the signed-volume check.
+[[nodiscard]] openparasolid::Result<BoundedIntegral> SplineSweepStripVolume6(
+    const SplineSweepPatch& patch, openparasolid::Vector3 origin,
+    uint64_t& remaining_checks);
 // Polynomial flux is analytic. Rational flux uses outward-rounded integral
 // bounds; callers must retain its error when certifying signed volume.
-// The optional error result is required for rational patches.
+// The optional error result is required for rational and variable-height
+// patches.
 [[nodiscard]] openparasolid::Result<long double> SplineSweepVolume6(
     const SplineSweepPatch& patch, openparasolid::Vector3 origin,
     uint64_t& remaining_checks, long double* error = nullptr);

@@ -62,7 +62,7 @@ Vector3 Shift(Vector3 p, Vector3 d, double v) {
           static_cast<double>(std::fma(static_cast<long double>(v), d.z, p.z))};
 }
 }  // namespace
-Result<SplineSweepPatch> RecognizeSplineSweepPatch(
+static Result<SplineSweepPatch> RecognizeRectangularSplineSweepPatch(
     const Model& model, NodeId surface, std::span<const PlanarCurve> curves,
     bool natural_sense, double tolerance, uint64_t& remaining_checks) {
   using Return = Result<SplineSweepPatch>;
@@ -228,12 +228,31 @@ Result<SplineSweepPatch> RecognizeSplineSweepPatch(
           Unsupported("Spline sweep parameter boundary is not closed"));
   return Return::Ok(std::move(result));
 }
+Result<SplineSweepPatch> RecognizeSplineSweepPatch(
+    const Model& model, NodeId surface, std::span<const PlanarCurve> curves,
+    bool natural_sense, double tolerance, uint64_t& remaining_checks) {
+  auto rectangle = RecognizeRectangularSplineSweepPatch(
+      model, surface, curves, natural_sense, tolerance, remaining_checks);
+  if (rectangle.ok() || rectangle.error().code != ErrorCode::kUnsupportedFormat)
+    return rectangle;
+  return RecognizeSplineSweepStrip(model, surface, curves, natural_sense,
+                                   tolerance, remaining_checks);
+}
 Result<long double> SplineSweepVolume6(const SplineSweepPatch& patch,
                                        Vector3 origin,
                                        uint64_t& remaining_checks,
                                        long double* error) {
   using Return = Result<long double>;
   if (error) *error = 0;
+  if (!patch.height_controls.empty()) {
+    if (!error)
+      return Return::Err(
+          Unsupported("Variable sweep flux requires its error bound"));
+    const auto flux = SplineSweepStripVolume6(patch, origin, remaining_checks);
+    if (!flux.ok()) return Return::Err(flux.error());
+    *error = flux.value().error;
+    return Return::Ok(flux.value().value);
+  }
   if (patch.profile.controls.rational) {
     if (!error)
       return Return::Err(Unsupported(

@@ -128,7 +128,7 @@ class BodyWriter {
   BodyWriter(const Model& model, const BodyGeometryBinding& body,
              const ExportOptions& options,
              std::span<const CircularEdgeRecovery> recoveries, uint64_t checks,
-             std::span<const IntersectionCircleRecovery> intersections = {})
+             std::span<const IntersectionCurveRecovery> intersections = {})
       : model_(model),
         body_(body),
         options_(options),
@@ -137,7 +137,7 @@ class BodyWriter {
     for (const auto& recovery : intersections)
       recovered_curves_.emplace(
           recovery.edge.value,
-          GeometryObject{recovery.edge, '+', recovery.circle});
+          GeometryObject{recovery.edge, '+', recovery.geometry});
     for (const auto& recovery : recoveries) {
       recovered_curves_.emplace(
           recovery.curve.value,
@@ -1709,7 +1709,7 @@ Result<StepDocument> BuildBody(const Model& model,
                              options.use_source_edge_tolerances, remaining);
   if (!recovered.ok()) return Result<StepDocument>::Err(recovered.error());
   const auto intersections =
-      RecoverIntersectionCircles(model, body, options.tolerance, remaining);
+      RecoverIntersectionCurves(model, body, options.tolerance, remaining);
   if (!intersections.ok())
     return Result<StepDocument>::Err(intersections.error());
   if (recovered.value().empty() && intersections.value().empty())
