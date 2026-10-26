@@ -37,10 +37,11 @@ struct ExportOptions {
   /// source units. Used source edge tolerances can raise only the output
   /// uncertainty, as described by use_source_edge_tolerances.
   double tolerance = 1e-7;
-  /// Honor positive transmitted EDGE tolerances only for certified paired
-  /// tolerant circular edges. Their source pcurves are retained, and the STEP
+  /// Honor positive transmitted EDGE tolerances for that edge's explicit geometry
+  /// recovery, endpoint membership and adjacent face-loop joins. Certified tolerant
+  /// circular edges retain their source pcurves, and STEP
   /// length uncertainty records the maximum used tolerance. False requires
-  /// agreement within tolerance alone; binding tolerances are never widened.
+  /// every binding and recovery check to meet tolerance alone.
   bool use_source_edge_tolerances = true;
   /// Product name, printable ASCII, at most 1024 bytes. Quotes are escaped.
   std::string product_name = "SolidWorks body";
@@ -57,18 +58,18 @@ struct ExportOptions {
   /// cut-pair check. Concave minor-arc contours share chord-polygon, join-cone
   /// and nonadjacent envelope checks, including a preceding convex attempt.
   /// Automatic closed tolerant-ring recovery charges both its preflight and
-  /// final Bernstein certificates to this same budget. Cylinder/rational-carrier
-  /// recovery charges source controls, trace subdivisions and 128*(p+1)*(q+1)
-  /// units per bounded tensor cell, including its master graph checks.
-  /// Swept/plane recovery charges 128 units per chart point plus 128 for frame
-  /// work. Variable-strip certificates share the rectangular attempt's budget;
-  /// their polynomial flux charges 32*(p+1)*p*(p+1) coefficient-product units.
-  /// Rational graphs charge derivative products/subdivisions; strip UV curves
-  /// charge 256*(p+2) units plus restrictions; weighted flux shares the budget.
-  /// Open B-spline wires consume one endpoint separation check per interior
-  /// control point.
-  /// Partial or unclamped restriction also charges the original control count
-  /// for copying and the new control count at each homogeneous knot insertion.
+  /// final Bernstein certificates to this same budget.
+  /// Cylinder/rational-carrier recovery charges source controls, trace
+  /// subdivisions and 128*(p+1)*(q+1) units per bounded tensor cell, including
+  /// its master graph checks. Swept/plane recovery charges 128 units per chart
+  /// point plus 128 for frame work. Variable-strip certificates share the
+  /// rectangular attempt's budget; their polynomial flux charges
+  /// 32*(p+1)*p*(p+1) coefficient-product units. Rational graphs charge
+  /// derivative products/subdivisions; strip UV curves charge 256*(p+2) units
+  /// plus restrictions; weighted flux shares the budget. Open B-spline wires
+  /// consume one endpoint separation check per interior control point. Partial
+  /// or unclamped restriction also charges the original control count for
+  /// copying and the new control count at each homogeneous knot insertion.
   /// Planar polynomial spline bounds consume one plane check per control;
   /// cubics additionally consume one derivative-cone check per Bezier piece.
   /// Both C1 and explicitly verified tangent joins consume one check each. Each
@@ -130,33 +131,33 @@ struct StepDocument {
 /// exclude ambiguous interior occurrences of the edge endpoints. This is not a
 /// wire self-intersection certificate. Periodic or closed spline wires remain
 /// unsupported. The planar polynomial face subset is described below.
-/// Open clamped polynomial SWEPT_SURF patches with two matching B_CURVE profiles and two
-/// straight generators are serialized as exact degree-(p,1) B-spline surfaces.
-/// The source degree, knots and sweep displacement units are preserved. Complete
-/// control comparisons certify translated profiles; the oriented parameter
-/// rectangle and an injective transverse projection certify the patch. Signed
-/// solid volume uses analytic polynomial surface flux, without tessellation.
-/// Single-span polynomial/rational quadratic/cubic sweeps support variable-height
-/// strips with corresponding graph profiles and two straight generators.
-/// Positive whole-profile gap bounds certify the oriented region; outward
-/// Bernstein-product flux bounds must certify positive shell volume. Direct
-/// PLANE/SWEPT_SURF intersections can supply exact source-weight edges when the
-/// plane is transverse, the section is globally injective across the sweep,
-/// and every chart chord has a global monotone projection. Construction error
-/// and conditioned endpoint uncertainty share the unchanged caller tolerance.
-/// Explicit intersection solver settings remain required. Writer-local curves
-/// and section parameters leave the source model and chart units unchanged
-/// (XT 5.2.1: Curves, p. 34; 5.2.1.4: B_CURVE, p. 38; 5.2.2.10:
-/// Swept_surf, p. 67). Rational strips require identical stored profile weights;
-/// explicit rational UV curves have degree p+1 and certified 3D lifting error.
-/// Weighted flux uses a W^3 denominator and bounded outward integration.
-/// Multispan variable strips, trim wrappers,
-/// other implicit intersections and multiply trimmed sweeps remain unsupported.
-/// Supports simple concave planar LINE/CIRCLE/ELLIPSE and polynomial quadratic
-/// or cubic B_CURVE loops, with disjoint unnested holes. Bounded Bezier control
-/// hull subdivision is used only for validation; source edges stay unsplit.
-/// Geometry inside an admitted endpoint tolerance ball is treated consistently
-/// with source topology joins. Other nonadjacent source pieces require strict
+/// Open clamped polynomial SWEPT_SURF patches with two matching B_CURVE
+/// profiles and two straight generators are serialized as exact degree-(p,1)
+/// B-spline surfaces. The source degree, knots and sweep displacement units are
+/// preserved. Complete control comparisons certify translated profiles; the
+/// oriented parameter rectangle and an injective transverse projection certify
+/// the patch. Signed solid volume uses analytic polynomial surface flux,
+/// without tessellation. Single-span polynomial/rational quadratic/cubic sweeps
+/// support variable-height strips with corresponding graph profiles and two
+/// straight generators. Positive whole-profile gap bounds certify the oriented
+/// region; outward Bernstein-product flux bounds must certify positive shell
+/// volume. Direct PLANE/SWEPT_SURF intersections can supply exact source-weight
+/// edges when the plane is transverse, the section is globally injective across
+/// the sweep, and every chart chord has a global monotone projection.
+/// Construction error and conditioned endpoint uncertainty share the unchanged
+/// caller tolerance. Explicit intersection solver settings remain required.
+/// Writer-local curves and section parameters leave the source model and chart
+/// units unchanged (XT 5.2.1: Curves, p. 34; 5.2.1.4: B_CURVE, p. 38; 5.2.2.10:
+/// Swept_surf, p. 67). Rational strips require identical stored profile
+/// weights; explicit rational UV curves have degree p+1 and certified 3D
+/// lifting error. Weighted flux uses a W^3 denominator and bounded outward
+/// integration. Multispan variable strips, trim wrappers, other implicit
+/// intersections and multiply trimmed sweeps remain unsupported. Supports
+/// simple concave planar LINE/CIRCLE/ELLIPSE and polynomial quadratic or cubic
+/// B_CURVE loops, with disjoint unnested holes. Bounded Bezier control hull
+/// subdivision is used only for validation; source edges stay unsplit. Geometry
+/// inside an admitted endpoint tolerance ball is treated consistently with
+/// source topology joins. Other nonadjacent source pieces require strict
 /// separation. Positive-weight rational conic hulls cover exact arcs; general
 /// rational spline boundaries remain unsupported.
 /// @see openparasolid::InvertSurface, XT 5.2.2.10 SWEPT_SURF (p. 67),
@@ -201,11 +202,12 @@ struct StepDocument {
 /// selects the meridian interval, including periodic seams and complementary
 /// bands. The entire interval must keep R+r*cos(v) above the source tolerance.
 /// This also supports regular positive-sheet trims of spindle/horn supports;
-/// both endpoint values and every interior cosine minimum are checked. Each complete cut can also comprise monotone arcs on one
-/// supporting circle, retaining the individual source edges. Unbounded
-/// SPUN_SURF circular generators in an axial meridian plane of a regular ring
-/// torus use the equivalent TOROIDAL_SURFACE with corrected normal orientation.
-/// A circular pole-to-pole meridian centered on the spin axis uses an equivalent
+/// both endpoint values and every interior cosine minimum are checked. Each
+/// complete cut can also comprise monotone arcs on one supporting circle,
+/// retaining the individual source edges. Unbounded SPUN_SURF circular
+/// generators in an axial meridian plane of a regular ring torus use the
+/// equivalent TOROIDAL_SURFACE with corrected normal orientation. A circular
+/// pole-to-pole meridian centered on the spin axis uses an equivalent
 /// SPHERICAL_SURFACE. Its complete half-turn, meridian frame and source normal
 /// are certified within the unchanged length tolerance. Full circular cuts may
 /// be oblique to the source spin axis; the equivalent sphere frame aligns with
@@ -263,9 +265,9 @@ struct StepDocument {
 /// analytic areas are exported. If rectangles cannot certify separation or
 /// containment, the independent simple-region path retries all original loops
 /// using bounded Bezier hull subdivision under the same work budget. Only
-/// uncertified actual contours remain unsupported. Each curved edge consumes one
-/// envelope check plus its corner check; spline holes additionally charge one
-/// check per retained control and all restriction/curve-certificate work.
+/// uncertified actual contours remain unsupported. Each curved edge consumes
+/// one envelope check plus its corner check; spline holes additionally charge
+/// one check per retained control and all restriction/curve-certificate work.
 /// Original and envelope-augmented mixed-boundary checks both share the budget.
 /// Planar annular sectors support
 /// two concentric circular arcs joined by two radial lines, including major
@@ -277,25 +279,25 @@ struct StepDocument {
 /// to simple nonconvex curves and mixed holes. Its winding polygon explicitly
 /// closes already certified endpoint gaps within the unchanged source
 /// tolerance, including the last/first join. Each chord and connector consumes
-/// a shared budget check; neither becomes an exported edge or changes area. Uncertified envelopes, other
-/// non-planar trimming contours, spherical pole cuts, uncertified apex loops,
-/// explicit seam fins and torus intervals reaching the axis or inner sheet
-/// remain unsupported. Specialized
-/// planar paths retain their narrower hole subsets; elliptic holes can use
-/// the general curved-region path. Paired tolerant edges without a recorded 3D curve can use an
-/// exact constant-profile circular SP_CURVE on a recognized spun torus and a
-/// quadratic polynomial planar SP_CURVE. Whole-span Bernstein bounds certify
-/// radial agreement, monotone azimuth and branch selection. STEP SURFACE_CURVE
-/// retains the original planar PCURVE and the affine-mapped rotational PCURVE,
-/// with the exact rotational circle as its 3D master. Transmitted positive EDGE
-/// tolerances may be honored separately from binding tolerance;
-/// ExportStatistics::length_uncertainty reports the output maximum. Complete
-/// rings can be vertex-free or retain one source seam vertex. Missing ring
-/// intervals use stored trim order only after paired full-turn proof; generic
-/// reader inference remains unchanged. Quadratic ring pcurves with one inactive
-/// exterior knot on each side and endpoint multiplicity two can be clamped
-/// exactly to their natural domain without changing controls or polynomial
-/// pieces. Other periodic layouts, rational/partial-domain or other
+/// a shared budget check; neither becomes an exported edge or changes area.
+/// Uncertified envelopes, other non-planar trimming contours, spherical pole
+/// cuts, uncertified apex loops, explicit seam fins and torus intervals
+/// reaching the axis or inner sheet remain unsupported. Specialized planar
+/// paths retain their narrower hole subsets; elliptic holes can use the general
+/// curved-region path. Paired tolerant edges without a recorded 3D curve can
+/// use an exact constant-profile circular SP_CURVE on a recognized spun torus
+/// and a quadratic polynomial planar SP_CURVE. Whole-span Bernstein bounds
+/// certify radial agreement, monotone azimuth and branch selection. STEP
+/// SURFACE_CURVE retains the original planar PCURVE and the affine-mapped
+/// rotational PCURVE, with the exact rotational circle as its 3D master.
+/// Transmitted positive EDGE tolerances may be honored separately from binding
+/// tolerance; ExportStatistics::length_uncertainty reports the output maximum.
+/// Complete rings can be vertex-free or retain one source seam vertex. Missing
+/// ring intervals use stored trim order only after paired full-turn proof;
+/// generic reader inference remains unchanged. Quadratic ring pcurves with one
+/// inactive exterior knot on each side and endpoint multiplicity two can be
+/// clamped exactly to their natural domain without changing controls or
+/// polynomial pieces. Other periodic layouts, rational/partial-domain or other
 /// fin-specific mappings remain unsupported outside the following subset.
 /// Vertex-bounded CYLINDER/rational B_SURF minor arcs retain affine source
 /// pcurves after whole-trace outward tensor bounds. Open piecewise-Bezier
@@ -304,10 +306,10 @@ struct StepDocument {
 /// graph on that same carrier, with one active chart chord and explicit solver
 /// settings. Source allowances remain opt-in. This edge mapping does not
 /// establish support for general B_SURF face trimming. Sheet orientation is
-/// propagated across shared edges. Solid export requires one material region with one
-/// closed, connected shell, consistent face-side uses and positive signed
-/// volume. Foreign geometry, other tolerant fin curves, isolated face loops,
-/// compound bodies, general bodies and other curve/surface types return
+/// propagated across shared edges. Solid export requires one material region
+/// with one closed, connected shell, consistent face-side uses and positive
+/// signed volume. Foreign geometry, other tolerant fin curves, isolated face
+/// loops, compound bodies, general bodies and other curve/surface types return
 /// explicit errors. Existing finite membership checks are retained; no global
 /// intersection or full CAD-kernel validity certificate is implied.
 /// @see Parasolid XT Format Reference (July 2022), 4.3.3-4.3.10 (topology),

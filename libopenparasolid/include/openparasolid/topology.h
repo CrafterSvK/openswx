@@ -274,6 +274,9 @@ struct FaceTraversalOptions {
   /// Positive aggregate bound on loop fins across the entire face, counting
   /// one for every isolated vertex loop. Not a separate allowance per loop.
   uint64_t max_fins = 100000;
+  /// When enabled by an explicit caller, use each source EDGE tolerance for
+  /// that fin's curve/vertex checks and adjacent loop joins.
+  bool use_source_edge_tolerances = false;
 };
 
 /// Reads a FACE's null-terminated loop list and all listed boundaries. Retains
