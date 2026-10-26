@@ -281,8 +281,8 @@ Result<FinParameterInterval> ClosedChartInterval(
           Error("Closed intersection vertex is outside the chart help seam", 0,
                 ErrorCode::kUnsupportedFormat));
   }
-  const auto chart =
-      EvaluateIntersectionChart(model, curve.source, options.chart_tolerance);
+  const auto chart = EvaluateIntersectionChart(
+      model, curve.source, options.chart_tolerance, options.solve_tolerance);
   if (!chart.ok()) return Result<FinParameterInterval>::Err(chart.error());
   constexpr double kSeamTangentTolerance = 1e-8;
   if (Distance(chart.value().tangents.front(), chart.value().tangents.back()) >
@@ -318,7 +318,8 @@ Result<FinParameterInterval> ChartInterval(
   if (!start.ok()) return Result<FinParameterInterval>::Err(start.error());
   if (!end.ok()) return Result<FinParameterInterval>::Err(end.error());
   const auto chart = EvaluateIntersectionChart(model, curve.source,
-                                               intersection->chart_tolerance);
+                                               intersection->chart_tolerance,
+                                               intersection->solve_tolerance);
   if (!chart.ok()) return Result<FinParameterInterval>::Err(chart.error());
   const auto& positions =
       std::get<IntersectionCurveGeometry>(curve.payload).chart.positions;

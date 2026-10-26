@@ -17,6 +17,7 @@ membership. Advancing one stage does not establish success at the next.
 | --- | --- | --- |
 | P0 | Compiler-dependent coincident conic endpoints | Fixed: compare distinct vertex positions against caller tolerance before wrapping angles. The reported CI failure is reproduced with Clang 19 `-O3 -DNDEBUG`; tiny rounding gaps remain unsupported instead of becoming nearly full turns. |
 | P1 | Partial intersection edges ending at a closed help seam | Fixed when the existing shared-H/full-period certificate succeeds: recorded direction selects the first/last chart occurrence. Interior duplicates, unproven periods and unknown senses remain unsupported. |
+| P1 | Chart normals computed at coarse membership tolerance | Fixed for supported inversions: prefer the solve residual goal before the chord/tangent recurrence, retaining the source chart allowance and reporting membership fallbacks. Binding, evaluation and STEP circle recovery use the same policy. The investigated spring now binds all 15 faces without a larger tolerance. |
 | P1 | General non-circular intersection curves | Open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
 | P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
@@ -68,22 +69,29 @@ an analytic HELIX form. HELIX_SU_FORM/HELIX_CU_FORM auxiliary records are decode
 but missing analytic helix reconstruction alone does not explain this case.
 The old first failure was partial rational curve inversion. The bounded
 piecewise-Bezier certificate now advances beyond that edge without changing
-geometry or tolerance. A subsequent stored trim endpoint still differs from
-its evaluated intersection by slightly more than the caller tolerance; it
-remains rejected. General rational B_SURF trimming/serialization is another
-independent STEP limitation. No whole-spring export success is claimed.
+geometry or tolerance. The later trim discrepancy was caused by coarse chart UV inversion stopping
+at the chart-membership allowance: its sampled normals changed the XT
+chord/tangent parameter recurrence. Intersection evaluation and automatic
+interval binding now request the solve tolerance as a preferred normal goal,
+with the original chart allowance retained and fallback counts exposed.
+The investigated spring now binds all 15 faces at the original tolerances.
+Whole-body STEP preflight next rejects a tolerant edge whose fin-specific
+curve arrangement is outside the circular recovery subset. General rational
+B_SURF trimming/serialization remains an additional independent STEP limitation.
+No whole-spring export success is claimed.
 
 Private investigation files and native references stay outside the repository.
 The independent MIT native rational coupon in
 `openswx-testdata/verification/rational-trim-001` reproduces the reader boundary:
-it now binds all five faces, but STEP export still rejects the rational sweep.
+it binds all five faces and now exports the complete rational swept body.
+`verification/rational-sweep-001` records the new whole-body native comparison
+without changing the earlier frozen unsupported capture.
 Original synthetic spatial rational tests also make two turns in XY while
 rising in Z; these are rational arcs with monotone height, not fitted or exact
 constant-pitch helices. They exercise the missing branch certificate without
 copying any private spring geometry.
 
-Next work: establish source-tolerance/pcurve correspondence for the rejected
-trim endpoint, certify rational/periodic surface trim regions, then serialize
+Next work: certify general rational/periodic surface trim regions, then serialize
 original weighted B-spline surfaces and curves with independent native whole-
 body references. Supporting an auxiliary helix record does not substitute for
 these steps. Internal wire/sheet payloads must not be promoted to a complete
@@ -214,7 +222,10 @@ revolutions and an independent equivalent-pole sphere reference are captured
 in `openswx-testdata/verification/analytic-cuts-001`. Noncoaxial sphere cuts,
 partial meridians, negative-major-radius tori and general torus contours remain
 open; this extension does not establish final-body membership.
-Supported polynomial sweeps use exact tensor B-spline surfaces. The following
+Supported polynomial and rational sweeps use exact tensor B-spline surfaces.
+The rational subset retains identical corresponding profile weights and uses
+bounded area/flux enclosures for convex planar caps and signed shell volume.
+This does not enable arbitrary rational B_SURF faces or general trim loops. The following
 are current limitations rather than the original frustum-era work list:
 
 - General non-circular intersection curves and remaining curved trim regions

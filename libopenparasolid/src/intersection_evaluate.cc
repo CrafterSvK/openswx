@@ -243,8 +243,8 @@ Result<IntersectionCurveEvaluation> EvaluateIntersectionCurveWithDiagnostics(
          "Intersection parameter must be finite"});
   if (auto error = internal::ValidateIntersectionOptions(options))
     return Result<IntersectionCurveEvaluation>::Err(std::move(*error));
-  const auto prepared =
-      EvaluateIntersectionChart(model, curve, options.chart_tolerance);
+  const auto prepared = EvaluateIntersectionChart(
+      model, curve, options.chart_tolerance, options.solve_tolerance);
   if (!prepared.ok())
     return Result<IntersectionCurveEvaluation>::Err(prepared.error());
   const auto& parameters = prepared.value().parameterization.parameters;

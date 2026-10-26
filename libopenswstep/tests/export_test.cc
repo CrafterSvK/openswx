@@ -511,7 +511,7 @@ TEST(OpenSwStep, RejectsIncorrectlyWoundSplineHoles) {
       EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
     }
 }
-TEST(OpenSwStep, RejectsRationalAndHigherDegreeSplineFaceBounds) {
+TEST(OpenSwStep, SupportsRationalAndRejectsHigherDegreeSplineFaceBounds) {
   for (unsigned kind : {0u, 1u}) {
     auto fixture = test::QuadraticSplineFace();
     for (auto& node : fixture.report.nodes)
@@ -549,6 +549,12 @@ TEST(OpenSwStep, RejectsRationalAndHigherDegreeSplineFaceBounds) {
     ASSERT_TRUE(model.ok()) << model.error().message;
     ASSERT_TRUE(BindBodyGeometry(model.value(), NodeId{1}, 1e-7).ok());
     const auto result = ExportBody(model.value(), NodeId{1}, Options());
+    if (kind == 0) {
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, 1);
+      CheckReferences(result.value());
+      continue;
+    }
     ASSERT_FALSE(result.ok());
     EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
     EXPECT_NE(result.error().message.find(

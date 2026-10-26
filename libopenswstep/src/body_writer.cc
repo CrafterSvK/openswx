@@ -101,6 +101,7 @@ struct FaceData {
   std::vector<std::vector<Vector3>> polygons;
   std::optional<std::size_t> outer_loop = 0;
   long double planar_area = 0;
+  long double planar_area_error = 0;
   long double axial_height = 0;
   Vector3 reference_point;
   std::optional<CircularBand> cone_band;
@@ -612,6 +613,7 @@ Result<bool> BodyWriter::PrepareSimplePlanarFace(FaceData& face) {
                                    region.error().message.c_str()));
   face.outer_loop = region.value().outer_loop;
   face.planar_area = region.value().area;
+  face.planar_area_error = 0;
   const auto first = EvaluateCurve(*loops.front().front().geometry,
                                    loops.front().front().start);
   if (!first.ok()) return Result<bool>::Err(first.error());
@@ -708,6 +710,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
                           ? circle_indices[region.value().outer_loop]
                           : polygon_indices[region.value().outer_loop];
     face.planar_area = region.value().area;
+    face.planar_area_error = 0;
     face.reference_point =
         polygons.empty() ? holes.front().center : polygons.front().front();
     return Result<bool>::Ok(true);
@@ -726,6 +729,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
       return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                      boundary.error().message.c_str()));
     face.planar_area = boundary.value().area;
+    face.planar_area_error = boundary.value().area_error;
     face.reference_point = boundary.value().reference_point;
     face.outer_loop = outer_index;
     return Result<bool>::Ok(true);
@@ -749,6 +753,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
       return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                      boundary.error().message.c_str()));
     face.planar_area = boundary.value().area;
+    face.planar_area_error = 0;
     face.reference_point = boundary.value().reference_point;
     face.outer_loop = outer_index;
     return Result<bool>::Ok(true);
@@ -780,6 +785,7 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
     return Result<bool>::Err(Error(face.source->face, boundary.error().code,
                                    boundary.error().message.c_str()));
   face.planar_area = boundary.value().area;
+  face.planar_area_error = boundary.value().area_error;
   face.reference_point = boundary.value().reference_point;
   face.outer_loop = outer_index;
   return Result<bool>::Ok(true);
@@ -1152,6 +1158,7 @@ Result<bool> BodyWriter::PrepareFaces() {
                             ? circle_indices[boundary.value().outer_loop]
                             : polygon_indices[boundary.value().outer_loop];
       face.planar_area = boundary.value().area;
+      face.planar_area_error = 0;
       face.reference_point = face.polygons.front().front();
       faces_.push_back(std::move(face));
       continue;
@@ -1313,15 +1320,17 @@ Result<bool> BodyWriter::CheckSolid() {
   const auto& first = faces_.front();
   const auto origin = first.polygons.empty() ? first.reference_point
                                              : first.polygons.front().front();
-  long double volume6 = 0;
+  long double volume6 = 0, volume_error = 0;
   for (std::size_t i = 0; i < faces_.size(); ++i) {
     const auto& face = faces_[i];
     if (face.cylinder || face.cone || face.torus || face.sphere ||
         face.planar_area > 0 || face.spline_sweep) {
       const auto sign = face.natural_sense != reversed_[i] ? 1.L : -1.L;
       if (face.spline_sweep) {
-        const auto flux = SplineSweepVolume6(*face.spline_sweep, origin,
-                                             polygon_checks_remaining_);
+        long double flux_error = 0;
+        const auto flux = SplineSweepVolume6(
+            *face.spline_sweep, origin, polygon_checks_remaining_, &flux_error);
+        volume_error += flux_error;
         if (!flux.ok())
           return Result<bool>::Err(Error(face.source->face, flux.error().code,
                                          flux.error().message.c_str()));
@@ -1373,6 +1382,7 @@ Result<bool> BodyWriter::CheckSolid() {
                               (static_cast<long double>(p.y) - origin.y) * n.y +
                               (static_cast<long double>(p.z) - origin.z) * n.z;
         volume6 += sign * 2 * face.planar_area * distance;
+        volume_error += 2 * face.planar_area_error * std::abs(distance);
       }
       continue;
     }
@@ -1395,7 +1405,13 @@ Result<bool> BodyWriter::CheckSolid() {
       }
     }
   }
-  if (!std::isfinite(volume6) || volume6 <= 0)
+  if (std::isfinite(volume6) && std::isfinite(volume_error) && volume6 > 0 &&
+      volume6 <= volume_error)
+    return Result<bool>::Err(Error(body_.topology.boundary.body,
+                                   ErrorCode::kUnsupportedFormat,
+                                   "Closed shell signed volume is unresolved "
+                                   "within rational integral bounds"));
+  if (!std::isfinite(volume6) || !std::isfinite(volume_error) || volume6 <= 0)
     return Result<bool>::Err(
         Error(body_.topology.boundary.body, ErrorCode::kInvalidRecord,
               "Closed shell has nonpositive or unrepresentable signed volume"));
@@ -1413,13 +1429,16 @@ Id BodyWriter::Surface(const FaceData& face) {
       std::array<Id, 2> points;
       for (std::size_t j = 0; j < 2; ++j) {
         const long double v = j ? patch.upper : patch.lower;
+        const auto at = i * profile.controls.dimension;
+        const long double w =
+            profile.controls.rational ? profile.controls.values[at + 3] : 1;
         points[j] = writer_.Point(
             {static_cast<double>(
-                 std::fma(v, patch.sweep.x, profile.controls.values[3 * i])),
+                 std::fma(v, patch.sweep.x, profile.controls.values[at] / w)),
              static_cast<double>(std::fma(v, patch.sweep.y,
-                                          profile.controls.values[3 * i + 1])),
+                                          profile.controls.values[at + 1] / w)),
              static_cast<double>(std::fma(
-                 v, patch.sweep.z, profile.controls.values[3 * i + 2]))});
+                 v, patch.sweep.z, profile.controls.values[at + 2] / w))});
       }
       rows += References(points);
     }
@@ -1435,6 +1454,24 @@ Id BodyWriter::Surface(const FaceData& face) {
     }
     knots += ')';
     multiplicities += ')';
+    if (profile.controls.rational) {
+      std::string weights = "(";
+      for (std::size_t i = 0; i < profile.axis.control_count; ++i) {
+        if (i) weights += ',';
+        const auto w = writer_.Number(profile.controls.values[4 * i + 3]);
+        weights += "(" + w + "," + w + ")";
+      }
+      weights += ')';
+      return writer_.Add(
+          "(BOUNDED_SURFACE() B_SPLINE_SURFACE(" +
+          std::to_string(profile.axis.degree) + ",1," + rows +
+          ",.UNSPECIFIED.,.F.,.F.,.F.) " + "B_SPLINE_SURFACE_WITH_KNOTS(" +
+          multiplicities + ",(2,2)," + knots + ",(" +
+          writer_.Number(patch.lower) + "," + writer_.Number(patch.upper) +
+          "),.UNSPECIFIED.) " +
+          "GEOMETRIC_REPRESENTATION_ITEM() RATIONAL_B_SPLINE_SURFACE(" +
+          weights + ") REPRESENTATION_ITEM('') SURFACE())");
+    }
     return writer_.Add("B_SPLINE_SURFACE_WITH_KNOTS(''," +
                        std::to_string(profile.axis.degree) + ",1," + rows +
                        ",.UNSPECIFIED.,.F.,.F.,.F.," + multiplicities +

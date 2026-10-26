@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
 #include <numbers>
 #include <vector>
 
@@ -192,9 +193,9 @@ TEST(OpenSwStepSplineBoundary, EnforcesExplicitToleranceAndWorkBudget) {
                                                   true, 0, checks)
                    .ok());
 }
-Model SweepModel(bool shifted_knots = false) {
+Model SweepModel(bool shifted_knots = false, bool rational = false) {
   openparasolid::test::ModelFixture f;
-  f.Spline();
+  f.Spline(rational);
   if (shifted_knots)
     for (auto& node : f.report.nodes)
       if (node.index == 4) node.fields[0].values = {2., 5.};
@@ -210,9 +211,11 @@ std::vector<GeometryPayload> SweepBoundary(const Model& model, double first = 0,
   auto curve = std::get<NurbsCurveGeometry>(
       model.geometry()[*model.FindNode(NodeId{1})->geometry].payload);
   auto lower = curve, upper = curve;
-  for (std::size_t i = 2; i < curve.controls.values.size(); i += 3) {
-    lower.controls.values[i] += low;
-    upper.controls.values[i] += high;
+  for (std::size_t i = 2; i < curve.controls.values.size();
+       i += curve.controls.dimension) {
+    const auto w = curve.controls.rational ? curve.controls.values[i + 1] : 1;
+    lower.controls.values[i] += low * w;
+    upper.controls.values[i] += high * w;
   }
   const auto a = EvaluateCurve(curve, first).value().position;
   const auto b = EvaluateCurve(curve, last).value().position;
@@ -264,6 +267,65 @@ TEST(OpenSwStepSplineSweep,
       internal::SplineSweepVolume6(patch.value(), {}, checks);
   ASSERT_FALSE(exhausted.ok());
   EXPECT_EQ(exhausted.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStepSplineSweep, CertifiesWeightedProfilesAndBoundedFlux) {
+  const auto model = SweepModel(false, true);
+  const auto geometry = SweepBoundary(model);
+  uint64_t checks = 100000;
+  const auto patch = internal::RecognizeSplineSweepPatch(
+      model, NodeId{20}, SweepCurves(geometry), true, 1e-7, checks);
+  ASSERT_TRUE(patch.ok()) << patch.error().message;
+  long double error = 0;
+  const auto flux =
+      internal::SplineSweepVolume6(patch.value(), {}, checks, &error);
+  ASSERT_TRUE(flux.ok()) << flux.error().message;
+  // This source profile has Y=1, X=2t/(1+2t), so integral(X dY-Y dX)=-2/3.
+  EXPECT_LE(std::abs(flux.value() + 8.L / 3), error);
+  EXPECT_GT(error, 0);
+  EXPECT_LT(error, .1);
+  EXPECT_FALSE(internal::SplineSweepVolume6(patch.value(), {}, checks).ok());
+  auto wrong = geometry;
+  auto& upper = std::get<NurbsCurveGeometry>(wrong[2]);
+  upper.controls.values[7] *= 1.01;
+  checks = 100000;
+  EXPECT_FALSE(internal::RecognizeSplineSweepPatch(
+                   model, NodeId{20}, SweepCurves(wrong), true, 1e-7, checks)
+                   .ok());
+  checks = 0;
+  const auto limited =
+      internal::SplineSweepVolume6(patch.value(), {}, checks, &error);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+}
+TEST(OpenSwStepSplineSweep, EnclosesRationalQuarterCircleGreenIntegral) {
+  NurbsCurveGeometry c;
+  c.axis.degree = 2;
+  c.axis.control_count = 3;
+  c.axis.knots = {0, 1};
+  c.axis.multiplicities = {3, 3};
+  c.controls.rational = true;
+  c.controls.dimension = 4;
+  const double w = std::sqrt(.5);
+  c.controls.values = {1, 0, 0, 1, w, w, 0, w, 0, 1, 0, 1};
+  for (const double scale : {1e-100, 1., 1e100}) {
+    auto source = c;
+    for (auto& value : source.controls.values) value *= scale;
+    uint64_t checks = 100000;
+    const auto value =
+        internal::RationalCurveIntegral(source, {}, {0, 0, 1}, checks);
+    ASSERT_TRUE(value.ok()) << value.error().message;
+    EXPECT_LE(std::abs(value.value().value - std::acos(-1.L) / 2),
+              value.value().error);
+    EXPECT_LT(value.value().error, .02);
+  }
+  uint64_t finite_checks=100000;
+  const auto invalid=internal::RationalCurveIntegral(c,{},
+      {0,0,std::numeric_limits<double>::infinity()},finite_checks);
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code,ErrorCode::kInvalidOptions);
+  c.controls.values[3] = 0;
+  uint64_t checks = 100000;
+  EXPECT_FALSE(internal::RationalCurveIntegral(c, {}, {0, 0, 1}, checks).ok());
 }
 TEST(OpenSwStepSplineSweep, RejectsUnmatchedControlsBasisWindingAndBudgets) {
   const auto model = SweepModel();

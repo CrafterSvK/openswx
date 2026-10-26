@@ -567,8 +567,7 @@ TEST(ParasolidIntersectionEvaluate, SpunChartsRetainExplicitProfileFailures) {
               std::string::npos);
   }
 }
-TEST(ParasolidIntersectionEvaluate,
-     RationalNurbsSupportsKeepOriginalKnotUnits) {
+ModelFixture RationalCylinder() {
   ModelFixture f;
   f.Spline(true, true);
   // Move spline fixture nodes away from the chart IDs. Its knot interval is
@@ -605,6 +604,11 @@ TEST(ParasolidIntersectionEvaluate,
   f = std::move(rebuilt);
   f.Add(127, 56,
         {Array("multiplicities", FieldType::kShort, {int64_t{2}, int64_t{2}})});
+  return f;
+}
+TEST(ParasolidIntersectionEvaluate,
+     RationalNurbsSupportsKeepOriginalKnotUnits) {
+  auto f = RationalCylinder();
   Definition(f, {{0, 1, 1}, {1, 0, 1}});
   Plane(f, 1);
   const auto model = ModelBuilder::Build(f.report);
@@ -630,6 +634,58 @@ TEST(ParasolidIntersectionEvaluate,
   EXPECT_NEAR(result.value().first_derivative.x, w / 3, 1e-12);
   EXPECT_NEAR(result.value().first_derivative.y, -w / 3, 1e-12);
   EXPECT_NEAR(result.value().first_derivative.z, 0, 1e-12);
+}
+TEST(ParasolidIntersectionEvaluate,
+     RefinesChartNormalsBeforeReconstructingParameters) {
+  auto f = RationalCylinder();
+  Definition(f, CirclePoints({1.2, .7, .2}, 1, 1));
+  Plane(f, 1);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto coarse = EvaluateIntersectionChart(model.value(), NodeId{1}, .01);
+  const auto strict =
+      EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-12);
+  const auto refined =
+      EvaluateIntersectionChart(model.value(), NodeId{1}, .01, 1e-12);
+  ASSERT_TRUE(coarse.ok());
+  ASSERT_TRUE(strict.ok());
+  ASSERT_TRUE(refined.ok());
+  EXPECT_GT(std::abs(coarse.value().parameterization.parameters.back() -
+                     strict.value().parameterization.parameters.back()),
+            1e-6);
+  EXPECT_EQ(refined.value().normal_refinement_fallbacks, 0);
+  for (std::size_t i = 0; i < 3; ++i) {
+    EXPECT_NEAR(refined.value().parameterization.parameters[i],
+                strict.value().parameterization.parameters[i], 1e-12);
+    const auto point = EvaluateIntersectionCurve(
+        model.value(), NodeId{1}, strict.value().parameterization.parameters[i],
+        {.01, 1e-12});
+    ASSERT_TRUE(point.ok()) << point.error().message;
+    const auto expected = CirclePoints({1.2, .7, .2}, 1, 1)[i];
+    EXPECT_NEAR(point.value().position.x, expected.x, 1e-10);
+    EXPECT_NEAR(point.value().position.y, expected.y, 1e-10);
+    EXPECT_NEAR(point.value().position.z, expected.z, 1e-10);
+  }
+  EXPECT_FALSE(
+      EvaluateIntersectionChart(model.value(), NodeId{1}, .01, -1).ok());
+}
+TEST(ParasolidIntersectionEvaluate,
+     RefinedNormalsRetainStoredChartMembershipAllowance) {
+  ModelFixture f;
+  Definition(f, CirclePoints({.2, .6}, 1, 1e-5));
+  Plane(f, 0);
+  Sphere(f);
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  const auto strict = EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-8);
+  EXPECT_FALSE(strict.ok());
+  const auto allowed =
+      EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-4, 1e-8);
+  ASSERT_TRUE(allowed.ok()) << allowed.error().message;
+  EXPECT_GT(allowed.value().normal_refinement_fallbacks, 0);
+  // Refinement never increases the caller's membership tolerance.
+  EXPECT_FALSE(
+      EvaluateIntersectionChart(model.value(), NodeId{1}, 1e-6, 1e-8).ok());
 }
 TEST(ParasolidIntersectionEvaluate,
      DiagnosticsMatchCircleGeometryAndLegacySample) {

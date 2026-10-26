@@ -15,6 +15,9 @@ int main(int argc, char** argv) {
   using openparasolid::NodeId;
   const std::vector<std::pair<std::string, openparasolid::test::ModelFixture>>
       fixtures{
+          {"rational-planar-segment", test::RationalSplineFace()},
+          {"rational-planar-inward", test::RationalSplineFace(true)},
+          {"rational-planar-oblique", test::ObliqueRationalSplineFace()},
           {"simple-stadium-ellipse-hole", test::StadiumEllipticHole()},
           {"simple-annular-circle-hole",
            test::WithCircularHole(test::AnnularSector(), {1.5, 1.5, 0}, .1)},

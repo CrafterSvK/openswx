@@ -195,8 +195,10 @@ leave a valid curve uncertified; there is no sampled or Newton-only fallback.
 Other knot multiplicities, periodic/closed curves and SP parameter curves
 remain separate tasks. The original native rational trimmed-prism fixture in
 `openswx-testdata/verification/rational-trim-001` now binds its entire body,
-but deliberately still fails whole-body STEP export at the polynomial-sweep
-restriction. Reader binding does not imply general rational surface export.
+and now exports the bounded rational sweep subset. Its earlier frozen
+unsupported STEP result remains historical evidence; current export checks
+are recorded in `verification/rational-sweep-001`. Reader binding still does
+not imply general rational surface export.
 
 ## Binding all faces of a body
 
@@ -3243,3 +3245,20 @@ natural parameter recurrence, seam tangent agreement, optional seam vertex and
 known edge/curve/fin direction are checked. No normalized parameter range or
 conic period is substituted for the source chart. Unknown limits, partial charts,
 repeated help seams and tolerant fin curves still require explicit intervals.
+
+### Preferred chart-normal accuracy
+
+Intersection curve evaluation and automatic fin/wire interval binding request
+`solve_tolerance` as the preferred inversion residual before evaluating chart
+normals and the XT 5.2.1.5 chord/tangent recurrence (pp. 46–47). A coarse UV
+that already satisfies `chart_tolerance` can still change the natural parameter
+spacing enough to break a stored trim endpoint. The same reconstruction policy
+must be used by binding, evaluation and STEP circle recovery.
+
+The independent chart membership allowance stays unchanged. If the preferred
+solve fails with a membership error, inversion retries once with the original
+allowance and records `normal_refinement_fallbacks` in the chart result. Other
+errors remain explicit. There are at most two inversions per chart point and
+surface; no points are snapped, trim parameters fitted or tolerances enlarged.
+The three-argument chart API retains its existing behavior. Its optional fourth
+argument requests the preferred goal for direct diagnostic queries.

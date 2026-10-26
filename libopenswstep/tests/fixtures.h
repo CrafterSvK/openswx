@@ -2613,6 +2613,43 @@ inline ModelFixture QuadraticSplineFace(bool partial = false,
   if (conic) CircleBasis(f, 4000, {0, 0, 0});
   return inward ? ClockwiseHole(std::move(f)) : f;
 }
+inline ModelFixture RationalSplineFace(bool inward = false) {
+  auto f = QuadraticSplineFace();
+  for (auto& node : f.report.nodes)
+    if (node.index == 8000) {
+      const auto& fields =
+          f.report.schemas[node.schema_index].definition.fields;
+      for (auto& field : node.fields) {
+        if (fields[field.definition_index].name == "rational")
+          field.values = {true};
+        if (fields[field.definition_index].name == "vertex_dim")
+          field.values = {int64_t{4}};
+      }
+    }
+  RemoveNode(f, 8001);
+  f.Add(45, 8001,
+        {Array(
+            "vertices", FieldType::kDouble,
+            {1., 0., 0., 1., 0., std::sqrt(3.) / 2, 0., .5, -1., 0., 0., 1.})});
+  return inward ? ClockwiseHole(std::move(f)) : f;
+}
+inline ModelFixture ObliqueRationalSplineFace() {
+  auto f = RotateAndTranslate(RationalSplineFace());
+  for (auto& node : f.report.nodes)
+    if (node.node_type == 45) {
+      auto& values = node.fields[0].values;
+      for (std::size_t i = 0; i < values.size(); i += 4) {
+        const auto x = std::get<double>(values[i]),
+                   y = std::get<double>(values[i + 1]),
+                   z = std::get<double>(values[i + 2]),
+                   w = std::get<double>(values[i + 3]);
+        values[i] = y + 1e6 * w;
+        values[i + 1] = z - 2e6 * w;
+        values[i + 2] = x + 3e6 * w;
+      }
+    }
+  return f;
+}
 inline ModelFixture CubicSplineFace(bool partial = false, bool reverse = false,
                                     bool inward = false, bool unclamped = false,
                                     unsigned multiplicity = 0,

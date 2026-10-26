@@ -187,6 +187,14 @@ struct StepDocument {
 /// be oblique to the source spin axis; the equivalent sphere frame aligns with
 /// the cut, retaining exact source edges. Other bounded generators, tilted/skew
 /// circle planes and other generators remain unsupported.
+/// Open rational quadratic/cubic SWEPT_SURF patches additionally support four
+/// rectangular boundary edges with identical corresponding profile weights.
+/// Exact rational tensor surfaces retain these weights on both linear-axis
+/// rows (XT 5.2.1.4: B_CURVE, p. 38; 5.2.2.10: Swept_surf, p. 67).
+/// Convex rational planar caps and rational flux use outward-rounded bounded
+/// integral enclosures. Their uncertainties must certify positive shell volume;
+/// no fitted geometry is emitted. General rational B_SURF trims remain
+/// unsupported.
 /// The inexpensive convex path supports a single
 /// LINE/CIRCLE/ELLIPSE contour, including split conics, elliptic arcs and
 /// two-edge segments/lenses. A hole-free convex contour may additionally use

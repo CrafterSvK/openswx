@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 openswx contributors
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <string>
@@ -58,8 +59,11 @@ ParseError AtPoint(ParseError error, std::size_t point, std::size_t surface) {
 }  // namespace
 
 Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
-    const Model& model, NodeId curve, double tolerance) {
-  if (!std::isfinite(tolerance) || tolerance < 0)
+    const Model& model, NodeId curve, double tolerance,
+    double normal_refinement_tolerance) {
+  if (!std::isfinite(tolerance) || tolerance < 0 ||
+      !std::isfinite(normal_refinement_tolerance) ||
+      normal_refinement_tolerance < 0)
     return Result<IntersectionChartEvaluation>::Err(
         {ErrorCode::kInvalidOptions, 0,
          "Intersection chart requires a nonnegative finite distance "
@@ -100,20 +104,34 @@ Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
     std::array<SurfaceParameters, 2> parameters{};
     std::array<Vector3, 2> normals{};
     for (std::size_t side = 0; side < surfaces.size(); ++side) {
-      const auto uv =
-          i == 0 ? InvertSurface(model, surfaces[side]->source,
-                                 chart.positions[i], tolerance)
-                 : InvertSurface(model, surfaces[side]->source,
-                                 chart.positions[i], tolerance,
-                                 SurfaceParameterSeed{
-                                     result.surface_parameters.back()[side].u,
-                                     result.surface_parameters.back()[side].v});
+      const auto invert = [&](double goal) {
+        return i == 0 ? InvertSurface(model, surfaces[side]->source,
+                                      chart.positions[i], goal)
+                      : InvertSurface(
+                            model, surfaces[side]->source, chart.positions[i],
+                            goal,
+                            SurfaceParameterSeed{
+                                result.surface_parameters.back()[side].u,
+                                result.surface_parameters.back()[side].v});
+      };
+      const double goal = normal_refinement_tolerance > 0
+                              ? std::min(tolerance, normal_refinement_tolerance)
+                              : tolerance;
+      auto uv = invert(goal);
+      if (!uv.ok() && goal < tolerance &&
+          uv.error().code == ErrorCode::kInvalidRecord) {
+        // The preferred solve goal must not remove the independently requested
+        // membership allowance for approximate stored chart positions.
+        uv = invert(tolerance);
+        ++result.normal_refinement_fallbacks;
+      }
       if (!uv.ok())
         return Result<IntersectionChartEvaluation>::Err(
             AtPoint(uv.error(), i, side));
       parameters[side] = uv.value();
-      const auto normal = EvaluateSurfaceNormal(model, surfaces[side]->source,
-                                                uv.value().u, uv.value().v);
+      const auto normal =
+          EvaluateSurfaceNormal(model, surfaces[side]->source,
+                                parameters[side].u, parameters[side].v);
       if (!normal.ok())
         return Result<IntersectionChartEvaluation>::Err(
             AtPoint(normal.error(), i, side));

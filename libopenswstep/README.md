@@ -20,6 +20,7 @@ geometry binding. It has no CAD-kernel dependency. The core builds with
 | Single convex planar contour additionally containing polynomial quadratic/cubic B_CURVE edges, including smooth multi-span bounds | Exact `B_SPLINE_CURVE_WITH_KNOTS` edge bounds, analytic polynomial area and whole-curve plane/curvature checks |
 | Certified simple, possibly concave planar LINE/CIRCLE/ELLIPSE and quadratic/cubic polynomial B_CURVE contours with unnested holes | Exact source edges; bounded control-hull certificates and analytic area preserve topology |
 | Rectangular SWEPT_SURF patches with matching open clamped polynomial B_CURVE profiles and straight generators | Exact degree-(p,1) B-spline surfaces, original profile knots, signed sweep parameters and analytic surface flux |
+| Rectangular rational quadratic/cubic SWEPT_SURF patches with identical profile weights and convex planar caps | Exact rational tensor surfaces with bounded area/flux verification; general rational B_SURF trims remain unsupported |
 | Single hole-free concave planar LINE/CIRCLE contour with certified minor arcs | Exact source curves and analytic area; chord, departure-cone and sagitta checks certify simplicity |
 | Convex planar LINE/CIRCLE contours with polygonal and/or full circular holes | Exact curved outer bound, source hole loops, analytic containment and net area |
 | Polygonal or complete circular outer bounds with convex multi-edge LINE/CIRCLE/ELLIPSE and polynomial quadratic/cubic B_CURVE holes | Exact source hole curves and analytic net area; conservative analytic envelopes certify containment |
@@ -954,3 +955,36 @@ shares the boundary comparison budget and does not widen STEP uncertainty.
 Other surface intersections and partial/ambiguous chart branches remain unsupported.
 This does not establish which SolidWorks feature payload is current or implement
 partition/delta reconstruction.
+
+## Bounded rational sweep export
+
+Open rational quadratic/cubic SWEPT_SURF sections can export one rectangular
+parameter region bounded by two translated profiles and two straight generators.
+Corresponding profiles must have identical knot bases, intervals and weights.
+Positive-weight control comparisons certify the whole translation; the reader's
+transverse monotone certificate excludes folded or singular support. Different
+weight representations, closed/periodic profiles, additional loops and general
+rational B_SURF trimming remain unsupported.
+
+The STEP surface is an exact tensor-product RATIONAL_B_SPLINE_SURFACE with
+the exactly restricted profile weights repeated at both ends of its degree-one
+linear axis. Exact knot insertion restricts the selected source interval;
+homogeneous controls and weights are derived from that restriction, without
+fitting or changing the source Model. Convex rational planar cap
+arcs use the positive Bernstein variation property of their certified convex
+control polygons; endpoint tangent directions and turning remain unchanged.
+
+Area and surface-flux verification use outward-rounded interval arithmetic.
+On each Bezier span, homogeneous cross-product numerator and positive squared-
+weight denominator are expressed in matching Bernstein degree. Their coefficient
+ratios enclose the integrand. Six levels of bounded subdivision tighten these
+bounds, consuming the shared work budget. Area and flux uncertainties enter
+the signed-volume check: a shell whose positive volume cannot be certified is
+rejected. These integral bounds do not alter the serialized exact geometry.
+Original polynomial integral paths retain their previous behavior.
+
+The existing original MIT rational trim coupon now exports all five faces,
+nine edges and six vertices. Native SolidWorks and library STEP agree in
+independent OCC topology, volume, area and bidirectional solid differences;
+see `openswx-testdata/verification/rational-sweep-001`. This is a rational
+extrusion result, not complete spring or arbitrary NURBS export support.

@@ -234,7 +234,8 @@ Result<std::vector<IntersectionCircleRecovery>> RecoverIntersectionCircles(
         return Return::Err(
             Unsupported("Intersection circle chart repeats its help seam"));
     const auto chart = EvaluateIntersectionChart(
-        model, source.value()->source, uses[0]->intersection->chart_tolerance);
+        model, source.value()->source, uses[0]->intersection->chart_tolerance,
+        uses[0]->intersection->solve_tolerance);
     if (!chart.ok()) return Return::Err(chart.error());
     const auto& parameters = chart.value().parameterization.parameters;
     const auto circle = Circle(model, *source.value(), *uses[0], tolerance);

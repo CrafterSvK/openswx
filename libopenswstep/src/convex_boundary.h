@@ -24,8 +24,10 @@ struct PlanarCurve {
 struct ConvexBoundary {
   long double area;
   openparasolid::Vector3 reference_point;
+  // Outward-rounded rational area enclosure; callers retain this uncertainty.
+  long double area_error = 0;
 };
-// Checks one closed convex LINE/CIRCLE/ELLIPSE/polynomial quadratic/cubic
+// Checks one closed convex LINE/CIRCLE/ELLIPSE/polynomial or rational quadratic/cubic
 // B-spline loop, with topology and endpoint closure already established by body
 // binding. Nonnegative directed curvature and corner turns must total one
 // revolution. Each corner consumes one shared comparison check. Each spline

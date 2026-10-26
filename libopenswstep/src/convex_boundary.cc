@@ -12,6 +12,7 @@
 #include "nurbs_wire.h"
 #include "openparasolid/evaluate.h"
 #include "planar_boundary.h"
+#include "rational_integral.h"
 
 namespace openswstep::internal {
 namespace {
@@ -25,6 +26,7 @@ struct Segment {
   long double area2;
   long double curvature;
   long double length;
+  long double area2_error = 0;
 };
 ParseError Invalid(const char* message) {
   return {ErrorCode::kInvalidRecord, 0, message};
@@ -159,6 +161,52 @@ Result<Segment> ReadPolynomialBezier(const NurbsCurveGeometry& bezier,
         Invalid("Planar spline area or perimeter is unresolved"));
   return Return::Ok(result);
 }
+Result<Segment> ReadSplineBezier(const NurbsCurveGeometry& curve,
+                                 const PlaneGeometry& plane, const Frame& frame,
+                                 double tolerance, bool forward,
+                                 uint64_t& checks) {
+  if (!curve.controls.rational)
+    return ReadPolynomialBezier(curve, plane, frame, tolerance, forward,
+                                checks);
+  // Positive rational Bernstein bases preserve line-crossing variation. The
+  // same convex control polygon therefore certifies the rational arc's
+  // convexity and endpoint tangent cone. Its area is bounded separately.
+  auto polygon = curve;
+  polygon.controls.rational = false;
+  polygon.controls.dimension = 3;
+  polygon.controls.values.clear();
+  long double rounding = 0;
+  for (unsigned i = 0; i < curve.axis.control_count; ++i) {
+    const auto at = 4 * i;
+    const long double weight = curve.controls.values[at + 3];
+    for (unsigned k = 0; k < 3; ++k) {
+      const auto value = curve.controls.values[at + k] / weight;
+      rounding = std::max(rounding, 8 * std::numeric_limits<double>::epsilon() *
+                                        std::abs(value));
+      polygon.controls.values.push_back(static_cast<double>(value));
+    }
+  }
+  if (!(tolerance > rounding))
+    return Result<Segment>::Err(
+        Unsupported("Rational planar control rounding exceeds tolerance"));
+  auto result = ReadPolynomialBezier(
+      polygon, plane, frame,
+      std::nextafter(static_cast<double>(tolerance - rounding), 0.), forward,
+      checks);
+  if (!result.ok()) return result;
+  const auto& x = frame.x;
+  const auto& y = frame.y;
+  const Vector3 normal{x.y * y.z - x.z * y.y, x.z * y.x - x.x * y.z,
+                       x.x * y.y - x.y * y.x};
+  const auto integral =
+      RationalCurveIntegral(curve, frame.origin, normal, checks,
+                            8 * std::numeric_limits<double>::epsilon());
+  if (!integral.ok()) return Result<Segment>::Err(integral.error());
+  auto bounded = result.value();
+  bounded.area2 = (forward ? 1 : -1) * integral.value().value;
+  bounded.area2_error = integral.value().error;
+  return Result<Segment>::Ok(bounded);
+}
 Result<Segment> ReadPolynomialSplineSegment(const PlanarCurve& curve,
                                             const PlaneGeometry& plane,
                                             const Frame& frame,
@@ -166,10 +214,9 @@ Result<Segment> ReadPolynomialSplineSegment(const PlanarCurve& curve,
                                             uint64_t& remaining_checks) {
   using Return = Result<Segment>;
   const auto* spline = std::get_if<NurbsCurveGeometry>(curve.geometry);
-  if (!spline || spline->controls.rational ||
-      (spline->axis.degree != 2 && spline->axis.degree != 3))
+  if (!spline || (spline->axis.degree != 2 && spline->axis.degree != 3))
     return Return::Err(
-        Unsupported("Planar spline bounds require polynomial quadratic or "
+        Unsupported("Planar spline bounds require quadratic or "
                     "cubic B_CURVE sections"));
   const auto section =
       RestrictNurbsWire(*spline, curve.start, curve.end, remaining_checks);
@@ -177,8 +224,8 @@ Result<Segment> ReadPolynomialSplineSegment(const PlanarCurve& curve,
   const auto& selected = section.value();
   const bool forward = curve.end > curve.start;
   if (selected.axis.knots.size() == 2)
-    return ReadPolynomialBezier(selected, plane, frame, tolerance, forward,
-                                remaining_checks);
+    return ReadSplineBezier(selected, plane, frame, tolerance, forward,
+                            remaining_checks);
 
   // Splitting is a validation operation only: serialization retains one
   // B-spline EDGE_CURVE with its selected source interval and interior knots.
@@ -191,11 +238,14 @@ Result<Segment> ReadPolynomialSplineSegment(const PlanarCurve& curve,
         RestrictNurbsWire(selected, selected.axis.knots[k],
                           selected.axis.knots[k + 1], remaining_checks);
     if (!span.ok()) return Return::Err(span.error());
-    const auto piece = ReadPolynomialBezier(
-        span.value(), plane, frame, tolerance, forward, remaining_checks);
+    const auto piece = ReadSplineBezier(span.value(), plane, frame, tolerance,
+                                        forward, remaining_checks);
     if (!piece.ok()) return Return::Err(piece.error());
     pieces.push_back(piece.value());
     result.area2 += piece.value().area2;
+    result.area2_error =
+        std::nextafter(result.area2_error + piece.value().area2_error,
+                       std::numeric_limits<long double>::infinity());
     result.length += piece.value().length;
     result.curvature += piece.value().curvature;
   }
@@ -421,18 +471,23 @@ Result<ConvexBoundary> ValidateConvexPlanarLoop(
        sign * (n.x * x.y - n.y * x.x)}};
   std::vector<Segment> segments;
   segments.reserve(curves.size());
-  long double area2 = 0, perimeter = 0, turning = 0;
+  long double area2 = 0, area2_error = 0, perimeter = 0, turning = 0;
   for (const auto& curve : curves) {
     const auto segment =
         ReadSegment(curve, plane, frame, tolerance, remaining_checks);
     if (!segment.ok()) return Return::Err(segment.error());
     segments.push_back(segment.value());
     area2 += segment.value().area2;
+    area2_error =
+        segment.value().area2_error > 0
+            ? std::nextafter(area2_error + segment.value().area2_error,
+                             std::numeric_limits<long double>::infinity())
+            : area2_error;
     perimeter += segment.value().length;
     turning += segment.value().curvature;
   }
   if (!std::isfinite(area2) || !std::isfinite(perimeter) ||
-      area2 <= tolerance * perimeter)
+      area2 - area2_error <= tolerance * perimeter)
     return Return::Err(
         Invalid("Curved boundary area is degenerate or has incorrect winding"));
   constexpr long double kAngleTolerance = 1e-10L;
@@ -459,7 +514,7 @@ Result<ConvexBoundary> ValidateConvexPlanarLoop(
           kAngleTolerance * (segments.size() + 1))
     return Return::Err(
         Invalid("Curved planar loop does not make one convex revolution"));
-  return Return::Ok({area2 / 2, first.value().position});
+  return Return::Ok({area2 / 2, first.value().position, area2_error / 2});
 }
 Result<ConvexBoundary> ValidateMinorArcPlanarLoop(
     std::span<const PlanarCurve> curves, const PlaneGeometry& plane,

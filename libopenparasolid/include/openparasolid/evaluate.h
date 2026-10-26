@@ -353,6 +353,9 @@ struct IntersectionChartParameters {
 ///
 /// @see @ref xt_intersection "XT 5.2.1.5: Intersection (p. 44)"
 struct IntersectionChartEvaluation {
+  /// Validated UVs that could not meet the optional stricter normal goal.
+  /// Original chart membership is retained; no tolerance is increased.
+  uint64_t normal_refinement_fallbacks = 0;
   /// Natural parameters and measured residual for each stored surface, per
   /// point.
   std::vector<std::array<SurfaceParameters, 2>> surface_parameters;
@@ -387,10 +390,18 @@ struct IntersectionChartEvaluation {
 /// @param curve Stream-local curve identity to evaluate.
 /// @param tolerance Finite nonnegative absolute 3D membership tolerance in
 /// source length units.
+/// @param normal_refinement_tolerance Optional stricter UV residual goal before
+/// computing normals and the XT chord/tangent recurrence. Zero disables it.
+/// If the stricter membership solve fails, the original membership allowance
+/// is tried and a fallback is recorded; resource, option and unsupported errors remain explicit. At most
+/// two inversions per chart point/surface are performed. Stored points,
+/// chart positions and the caller's membership allowance are not changed.
+/// Reconstructed parameters may improve because the tangent estimates improve.
 /// @return The requested value on success, or an explicit ParseError on
 /// failure.
 [[nodiscard]] Result<IntersectionChartEvaluation> EvaluateIntersectionChart(
-    const Model& model, NodeId curve, double tolerance);
+    const Model& model, NodeId curve, double tolerance,
+    double normal_refinement_tolerance = 0);
 
 /// @brief Explicit caller tolerances and regularity thresholds for local
 /// intersection solves.
@@ -400,7 +411,8 @@ struct IntersectionEvaluationOptions {
   /// Nonnegative absolute membership tolerance for the stored chart points.
   double chart_tolerance = 0;
   /// Positive absolute residual tolerance for interior coincidence/plane
-  /// solves.
+  /// solves. Also requests this UV residual goal for chart normals; the
+  /// separate chart membership allowance remains unchanged.
   double solve_tolerance = 0;
   /// Nonnegative absolute tolerance in original curve parameter units. Allows
   /// snapping just outside outer chart endpoints; zero retains strict bounds.

@@ -29,16 +29,20 @@ long double Distance(Vector3 a, Vector3 b) {
   return std::hypot(q[0], q[1], q[2]);
 }
 Vector3 Control(const NurbsCurveGeometry& c, std::size_t i) {
-  return {c.controls.values[3 * i], c.controls.values[3 * i + 1],
-          c.controls.values[3 * i + 2]};
+  const auto at = i * c.controls.dimension;
+  const long double w = c.controls.rational ? c.controls.values[at + 3] : 1;
+  return {static_cast<double>(c.controls.values[at] / w),
+          static_cast<double>(c.controls.values[at + 1] / w),
+          static_cast<double>(c.controls.values[at + 2] / w)};
 }
 bool SameBasis(const NurbsCurveGeometry& a, const NurbsCurveGeometry& b) {
   return a.axis.degree == b.axis.degree &&
          a.axis.control_count == b.axis.control_count &&
          a.axis.knots == b.axis.knots &&
          a.axis.multiplicities == b.axis.multiplicities &&
-         !a.controls.rational && !b.controls.rational &&
-         a.controls.dimension == 3 && b.controls.dimension == 3;
+         a.controls.rational == b.controls.rational &&
+         a.controls.dimension == (a.controls.rational ? 4 : 3) &&
+         b.controls.dimension == a.controls.dimension;
 }
 ParseError Unsupported(const char* message) {
   return {ErrorCode::kUnsupportedFormat, 0, message};
@@ -76,12 +80,12 @@ Result<SplineSweepPatch> RecognizeSplineSweepPatch(
           ? std::get_if<NurbsCurveGeometry>(
                 &model.geometry()[*section_node->geometry].payload)
           : nullptr;
-  if (!section || curves.size() != 4 || section->controls.rational ||
-      section->controls.dimension != 3 || section->axis.closed ||
-      section->axis.periodic ||
+  if (!section || curves.size() != 4 ||
+      section->controls.dimension != (section->controls.rational ? 4 : 3) ||
+      section->axis.closed || section->axis.periodic ||
       (section->axis.degree != 2 && section->axis.degree != 3))
     return Return::Err(
-        Unsupported("Spline sweeps require an open polynomial "
+        Unsupported("Spline sweeps require an open "
                     "quadratic/cubic section and four edges"));
   std::array<const NurbsCurveGeometry*, 4> profiles{};
   std::array<double, 4> displacement{};
@@ -155,9 +159,26 @@ Result<SplineSweepPatch> RecognizeSplineSweepPatch(
     displacement[i] = static_cast<double>(v);
     for (std::size_t j = 0; j < result.profile.axis.control_count; ++j) {
       if (!Spend(remaining_checks)) return Return::Err(Limit());
-      if (Distance(Control(selected.value(), j),
-                   Shift(Control(result.profile, j), swept->sweep,
-                         displacement[i])) > tolerance)
+      if (result.profile.controls.rational &&
+          selected.value().controls.values[4 * j + 3] !=
+              result.profile.controls.values[4 * j + 3])
+        return Return::Err(
+            Unsupported("Rational sweep profiles require identical weights"));
+      long double translation_error = Distance(
+          Control(selected.value(), j),
+          Shift(Control(result.profile, j), swept->sweep, displacement[i]));
+      if (result.profile.controls.rational) {
+        const auto a = Control(selected.value(), j),
+                   b = Control(result.profile, j);
+        const auto scale =
+            std::max({std::abs(a.x), std::abs(a.y), std::abs(a.z),
+                      std::abs(b.x), std::abs(b.y), std::abs(b.z)});
+        // Cover dehomogenization, shifted STEP control rounding and the
+        // displacement inferred from rounded Cartesian controls.
+        translation_error +=
+            16 * std::numeric_limits<double>::epsilon() * scale;
+      }
+      if (translation_error > tolerance)
         return Return::Err(Unsupported(
             "Spline sweep profile is not a constant source translation"));
     }
@@ -209,8 +230,29 @@ Result<SplineSweepPatch> RecognizeSplineSweepPatch(
 }
 Result<long double> SplineSweepVolume6(const SplineSweepPatch& patch,
                                        Vector3 origin,
-                                       uint64_t& remaining_checks) {
+                                       uint64_t& remaining_checks,
+                                       long double* error) {
   using Return = Result<long double>;
+  if (error) *error = 0;
+  if (patch.profile.controls.rational) {
+    if (!error)
+      return Return::Err(Unsupported(
+          "Rational sweep flux requires its certified error bound"));
+    const auto integral = RationalCurveIntegral(patch.profile, origin,
+                                                patch.sweep, remaining_checks);
+    if (!integral.ok()) return Return::Err(integral.error());
+    const long double height =
+        2 * (static_cast<long double>(patch.upper) - patch.lower);
+    if (!std::isfinite(height) || height <= 0)
+      return Return::Err(Unsupported("Rational sweep height is invalid"));
+    *error = std::nextafter(height * integral.value().error,
+                            std::numeric_limits<long double>::infinity());
+    const auto value = height * integral.value().value;
+    *error += 8 * std::numeric_limits<long double>::epsilon() * std::abs(value);
+    if (!std::isfinite(value) || !std::isfinite(*error))
+      return Return::Err(Unsupported("Rational sweep flux is unrepresentable"));
+    return Return::Ok(value);
+  }
   const auto& profile = patch.profile;
   if ((profile.axis.degree != 2 && profile.axis.degree != 3) ||
       profile.controls.rational || profile.controls.dimension != 3 ||
