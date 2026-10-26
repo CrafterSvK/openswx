@@ -12,6 +12,17 @@ struct SphereBand {
   long double lower;
   long double upper;
 };
+struct SphereCutFrame {
+  openparasolid::SphereGeometry geometry;
+  double remaining_tolerance;
+};
+// A sphere has no distinguished polar axis. Certifies equivalence of its whole
+// supporting surface while aligning the output frame with the first cut.
+// Source/circle frame and output rounding bounds consume the caller tolerance;
+// the residual budget is reserved for the existing coaxial-cut certificate.
+[[nodiscard]] openparasolid::Result<SphereCutFrame> ReframeSphereCuts(
+    std::span<const ConicBoundary> loops,
+    const openparasolid::SphereGeometry& sphere, double tolerance);
 // Validates a cap with one latitude circle or a band with two distinct,
 // oppositely wound latitude circles. Winding selects the cap's side, including
 // caps larger than a hemisphere. Pole cuts and partial azimuths are

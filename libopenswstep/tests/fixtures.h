@@ -1248,6 +1248,71 @@ inline ModelFixture CompleteTorus(bool solid = true, bool inward = false) {
   if (inward) Set(f, 302, "sense", '-');
   return f;
 }
+inline ModelFixture MeridianToroidalBand(bool solid = true,
+                                         bool named_seams = false,
+                                         bool major_sector = false,
+                                         double major = 3, double minor = 1) {
+  auto f = ToroidalBand(solid, named_seams);
+  const double sign = major_sector ? -1 : 1;
+  for (auto& node : f.report.nodes) {
+    if (node.index == 4000) {
+      node.fields[0].values = {major, 0., 0.};
+      node.fields[1].values = {0., 1., 0.};
+      node.fields[2].values = {1., 0., 0.};
+      node.fields[3].values = {minor};
+    }
+    if (node.index == 4001) {
+      node.fields[0].values = {0., sign * major, 0.};
+      node.fields[1].values = {-sign, 0., 0.};
+      node.fields[2].values = {0., sign, 0.};
+      node.fields[3].values = {minor};
+    }
+    if (node.index == 700) {
+      node.fields[0].values = {major, 0., 0.};
+      node.fields[1].values = {0., 1., 0.};
+      node.fields[2].values = {1., 0., 0.};
+    }
+    if (node.index == 701) {
+      node.fields[0].values = {0., sign * major, 0.};
+      node.fields[1].values = {-sign, 0., 0.};
+      node.fields[2].values = {0., sign, 0.};
+    }
+    if (node.index == 702) {
+      node.fields[2].values = {major};
+      node.fields[3].values = {minor};
+    }
+    if (node.index == 500) node.fields[0].values = {major + minor, 0., 0.};
+    if (node.index == 501)
+      node.fields[0].values = {0., sign * (major + minor), 0.};
+  }
+  return f;
+}
+inline ModelFixture ObliqueSphereCut(bool solid = true, bool band = false) {
+  auto f = band ? SphericalBand(0, 3, false, false, solid, !solid)
+                : SphericalCap(3, true, false, solid);
+  // Rotate the actual trim geometry, then keep an independent source pole.
+  // The sphere support is unchanged by this polar-frame choice.
+  for (auto& node : f.report.nodes) {
+    const auto& fields = f.report.schemas[node.schema_index].definition.fields;
+    for (std::size_t i = 0; i < fields.size(); ++i) {
+      if (fields[i].type != FieldType::kVector) continue;
+      auto& values = node.fields[i].values;
+      const double x = std::get<double>(values[0]),
+                   y = std::get<double>(values[1]),
+                   z = std::get<double>(values[2]);
+      const bool point = fields[i].name == "position" ||
+                         fields[i].name == "origin" ||
+                         fields[i].name == "center";
+      values = {x + (point ? 10 : 0), .8 * y + .6 * z + (point ? 20 : 0),
+                -.6 * y + .8 * z + (point ? 30 : 0)};
+    }
+    if (node.node_type == 53) {
+      node.fields[1].values = {0., 0., 1.};
+      node.fields[2].values = {1., 0., 0.};
+    }
+  }
+  return f;
+}
 // Radius-one meridian, full azimuth, with a certified outer-sheet interval.
 inline ModelFixture NonringToroidalBand(double major, bool solid = true,
                                         bool named_seams = false,

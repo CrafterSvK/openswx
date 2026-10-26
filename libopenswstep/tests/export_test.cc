@@ -21,10 +21,12 @@
 #include "../src/cylinder_band.h"
 #include "../src/cylinder_patch.h"
 #include "../src/nurbs_wire.h"
+#include "../src/sphere_boundary.h"
 #include "../src/spun_sphere.h"
 #include "../src/spun_torus.h"
 #include "../src/tolerant_circle.h"
 #include "../src/torus_boundary.h"
+#include "../src/torus_meridian.h"
 #include "fixtures.h"
 
 namespace openswstep {
@@ -2179,6 +2181,95 @@ TEST(OpenSwStep, RejectsUncertifiedSplitCircularCuts) {
   remaining = 2;
   EXPECT_TRUE(internal::CombineCircularCut(invalid, 1e-7, remaining).ok());
 }
+TEST(OpenSwStep, ExportsFullMeridianTorusSectorsInSourceWinding) {
+  for (const bool major : {false, true})
+    for (const bool solid : {false, true})
+      for (const bool named : {false, true}) {
+        const auto f = test::MeridianToroidalBand(solid, named, major);
+        for (const auto& source : {f, test::RotateAndTranslate(f)}) {
+          auto options = Options();
+          options.max_polygon_checks = 1;
+          const auto result = Export(source, options);
+          ASSERT_TRUE(result.ok()) << result.error().message;
+          EXPECT_EQ(result.value().statistics.faces, solid ? 3 : 1);
+          EXPECT_EQ(result.value().statistics.edges, 2);
+          EXPECT_EQ(result.value().statistics.solids, solid ? 1 : 0);
+          CheckReferences(result.value());
+        }
+        const auto bytes = test::Serialize(f);
+        ASSERT_TRUE(
+            ExportParasolid(bytes.bytes, NodeId{1}, Options(), &bytes.catalog)
+                .ok());
+      }
+}
+TEST(OpenSwStep, RejectsUncertifiedMeridianTorusCuts) {
+  for (unsigned bad = 0; bad < 4; ++bad) {
+    auto f = test::MeridianToroidalBand(false);
+    for (auto& node : f.report.nodes) {
+      if (bad == 0 && node.index == 702) node.fields[2].values = {1.};
+      if (bad == 1 && node.index == 4001) node.fields[3].values = {1.001};
+      if (bad == 2 && node.index == 4001)
+        node.fields[0].values = {0., 3.001, 0.};
+    }
+    if (bad == 3) test::Set(f, 4001, "sense", '-');
+    EXPECT_FALSE(Export(f).ok()) << bad;
+  }
+}
+TEST(OpenSwStep, CertifiesMeridianSeparationBudgetAndTranslatedFlux) {
+  constexpr double turn = 2 * std::numbers::pi;
+  const TorusGeometry torus{{10, 20, 30}, {0, 0, 1}, 3, 1, {1, 0, 0}};
+  const std::array<internal::ConicBoundary, 2> cuts{
+      {{{13, 20, 30}, {0, 1, 0}, {1, 0, 0}, 1, 1, 0, turn, true},
+       {{10, 23, 30}, {-1, 0, 0}, {0, 1, 0}, 1, 1, turn, 0, true}}};
+  uint64_t checks = 1;
+  const auto band =
+      internal::ValidateTorusMeridians(cuts, torus, true, 1e-7, checks);
+  ASSERT_TRUE(band.ok()) << band.error().message;
+  EXPECT_EQ(checks, 0);
+  const auto pi = std::numbers::pi_v<long double>;
+  EXPECT_NEAR(band.value().span, pi / 2, 1e-15L);
+  EXPECT_NEAR(internal::TorusMeridianVolume6(torus, band.value(), torus.center),
+              9 * pi * pi, 1e-13L);
+  EXPECT_NEAR(internal::TorusMeridianVolume6(torus, band.value(), {0, 0, 0}),
+              9 * pi * pi + 60 * pi, 1e-12L);
+  const auto limited =
+      internal::ValidateTorusMeridians(cuts, torus, true, 1e-7, checks);
+  ASSERT_FALSE(limited.ok());
+  EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  for (int bad = 0; bad < 5; ++bad) {
+    auto changed = cuts;
+    if (bad == 0) {
+      changed[1] = cuts[0];
+      std::swap(changed[1].start, changed[1].end);
+    }
+    if (bad == 1) changed[1].start = std::numbers::pi;
+    if (bad == 2) changed[1].normal = {0, 0, 1};
+    if (bad == 3) changed[1].circle = false;
+    if (bad == 4) {
+      constexpr double angle = 1e-8;
+      changed[1].center = {10 + 3 * std::cos(angle), 20 + 3 * std::sin(angle), 30};
+      changed[1].normal = {-std::sin(angle), std::cos(angle), 0};
+      changed[1].x_axis = {std::cos(angle), std::sin(angle), 0};
+    }
+    checks = 1;
+    EXPECT_FALSE(
+        internal::ValidateTorusMeridians(changed, torus, true, 1e-7, checks)
+            .ok())
+        << bad;
+  }
+  auto reversed = torus;
+  reversed.axis.z = -1;
+  checks = 1;
+  const auto reversed_band =
+      internal::ValidateTorusMeridians(cuts, reversed, true, 1e-7, checks);
+  ASSERT_TRUE(reversed_band.ok()) << reversed_band.error().message;
+  EXPECT_NEAR(reversed_band.value().span, pi / 2, 1e-15L);
+  checks = 1;
+  const auto complement =
+      internal::ValidateTorusMeridians(cuts, torus, false, 1e-7, checks);
+  ASSERT_TRUE(complement.ok()) << complement.error().message;
+  EXPECT_NEAR(complement.value().span, 3 * pi / 2, 1e-15L);
+}
 TEST(OpenSwStep, HandlesToroidalCutOrderAndReversedAxes) {
   for (const auto& f :
        {test::ReversedToroidalBand(), test::ReversedToroidalBand(true),
@@ -3466,7 +3557,8 @@ TEST(OpenSwStep, ParsesSphericalCapsAndRetainsCutValidation) {
   for (auto& node : tilted.report.nodes)
     if (node.index == 4000)
       node.fields[1].values = {0., std::sin(angle), std::cos(angle)};
-  EXPECT_FALSE(Export(tilted).ok());
+  const auto great_circle_cap = Export(tilted);
+  ASSERT_TRUE(great_circle_cap.ok()) << great_circle_cap.error().message;
   const auto pole = Export(test::SphericalCap(5 - 1e-8, true, false, false));
   ASSERT_FALSE(pole.ok());
   EXPECT_EQ(pole.error().code, ErrorCode::kUnsupportedFormat);
@@ -3493,6 +3585,57 @@ TEST(OpenSwStep, ExportsExactSphericalBandsAndClosedTruncatedSpheres) {
     EXPECT_EQ(result.value().statistics.faces, 1);
     EXPECT_EQ(result.value().statistics.edges, 2);
   }
+}
+TEST(OpenSwStep, ReframesObliqueSphereCapsAndBandsWithoutMovingSourceCuts) {
+  for (const bool solid : {false, true})
+    for (const bool band : {false, true}) {
+      const auto source = test::ObliqueSphereCut(solid, band);
+      const auto result = Export(source);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, solid ? (band ? 3 : 2) : 1);
+      EXPECT_EQ(result.value().statistics.edges, band ? 2 : 1);
+      EXPECT_EQ(result.value().statistics.solids, solid ? 1 : 0);
+      const auto bytes = test::Serialize(source);
+      ASSERT_TRUE(
+          ExportParasolid(bytes.bytes, NodeId{1}, Options(), &bytes.catalog)
+              .ok());
+    }
+}
+TEST(OpenSwStep, ChargesWholeSphereAndCutFrameErrorToExistingTolerance) {
+  const SphereGeometry sphere{{0, 0, 0}, 5, {0, 0, 1}, {1, 0, 0}};
+  const std::array<internal::ConicBoundary, 1> cuts{{{{0, 1.8, 2.4},
+                                                      {0, .6, .8},
+                                                      {1, 0, 0},
+                                                      4,
+                                                      4,
+                                                      0,
+                                                      2 * std::numbers::pi,
+                                                      true}}};
+  for (const bool distorted_cut : {false, true}) {
+    auto source = sphere;
+    auto changed = cuts;
+    if (distorted_cut)
+      changed[0].x_axis.x += 1e-12;
+    else
+      source.axis.z += 1e-12;
+    const auto accepted = internal::ReframeSphereCuts(changed, source, 1e-7);
+    ASSERT_TRUE(accepted.ok()) << accepted.error().message;
+    EXPECT_GT(accepted.value().remaining_tolerance, 0);
+    EXPECT_LT(accepted.value().remaining_tolerance, 1e-7);
+    EXPECT_EQ(accepted.value().geometry.center.x, source.center.x);
+    EXPECT_EQ(accepted.value().geometry.radius, source.radius);
+    EXPECT_FALSE(internal::ReframeSphereCuts(changed, source, 1e-15).ok());
+  }
+  EXPECT_FALSE(internal::ReframeSphereCuts(cuts, sphere, 0).ok());
+  auto partial = cuts;
+  partial[0].end = std::numbers::pi;
+  const auto framed = internal::ReframeSphereCuts(partial, sphere, 1e-7);
+  ASSERT_TRUE(framed.ok());
+  uint64_t checks = 1;
+  EXPECT_FALSE(
+      internal::ValidateSphereLoops(partial, framed.value().geometry, true,
+                                    framed.value().remaining_tolerance, checks)
+          .ok());
 }
 TEST(OpenSwStep, RejectsInvalidSphereCutsAndBoundsPairChecks) {
   auto options = Options();

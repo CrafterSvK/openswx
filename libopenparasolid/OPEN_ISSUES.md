@@ -21,9 +21,11 @@ membership. Advancing one stage does not establish success at the next.
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
 | P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
 | P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Rational, periodic, unclamped, SP and uncertified projections remain explicit. Two original native trimmed-prism regressions cover the new subset. |
-| P2 | Oblique spherical cuts | Open for native SPHERE supports in this path. Reorienting a polar frame needs a whole-support equivalence bound and unchanged normal/branch selection, as well as native reference comparison. |
+| P2 | Oblique spherical cuts | Extended for native SPHERE caps and coaxial bands: whole-support and circle-frame error bounds consume the unchanged tolerance before existing profile/winding checks. An equivalent-pole synthetic fixture is compared with an original native sphere cap; the native saved file itself was already supported. Noncoaxial cuts remain open. |
+| P2 | Torus sectors bounded by complete meridians | Extended for regular ring supports: two whole-circle/profile certificates and opposite winding select minor or major azimuth sectors. Original native 90°/270° revolutions now export completely and have zero two-way solid differences against native STEP. Partial meridians and general contours remain open. |
+| P2 | Negative-major-radius torus branches | Open. Valid XT lemon branches require an exact STEP support/normal/trim equivalence proof; changing the radius sign or applying the ring certificate is insufficient. |
 | P2 | Tolerant support pairs outside PLANE/SPUN_SURF | Open. Preserve per-edge error budgets and certify the exact support pair instead of extending approximate chart circles by sampling. |
-| P3 | Final-body membership when configuration partitions contain no bodies | Open. Multiple internal payloads can correspond to multiple native bodies; neither taking the last candidate nor unioning all candidates certifies the saved target state. |
+| P3 | Final-body membership when configuration partitions contain no bodies | Open. Multiple internal payloads can correspond to multiple native bodies; neither taking the last candidate nor unioning all candidates certifies the saved target state. A successfully exported internal body can also differ completely from the native final body; exporter success is not membership evidence. |
 
 ### Partial polynomial spline intervals
 
@@ -174,6 +176,14 @@ and source correspondence must also be checked.
 The exporter supports reviewed analytic and polynomial subsets, including
 mixed curved planar regions, selected elliptic/spline holes, partial cylinder
 and cone patches, sphere caps/bands, trimmed tori and complete ring-torus faces.
+Native SPHERE caps/coaxial bands can reframe the polar axis only after a
+whole-support equivalence bound consumes part of the unchanged tolerance.
+Regular ring-torus sectors now accept two complete meridian circles, including
+major azimuth intervals selected by winding. Native quarter/three-quarter
+revolutions and an independent equivalent-pole sphere reference are captured
+in `openswx-testdata/verification/analytic-cuts-001`. Noncoaxial sphere cuts,
+partial meridians, negative-major-radius tori and general torus contours remain
+open; this extension does not establish final-body membership.
 Supported polynomial sweeps use exact tensor B-spline surfaces. The following
 are current limitations rather than the original frustum-era work list:
 

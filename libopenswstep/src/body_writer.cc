@@ -29,6 +29,7 @@
 #include "step_writer.h"
 #include "tolerant_circle.h"
 #include "torus_boundary.h"
+#include "torus_meridian.h"
 
 namespace openswstep::internal {
 namespace {
@@ -104,6 +105,7 @@ struct FaceData {
   Vector3 reference_point;
   std::optional<CircularBand> cone_band;
   std::optional<TorusBand> torus_band;
+  std::optional<TorusMeridianBand> torus_meridian;
   std::optional<SphereBand> sphere_band;
   std::optional<CylinderPatch> cylinder_patch;
   std::optional<CylinderBand> cylinder_band;
@@ -462,16 +464,25 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
   const auto loops = ConicLoops(face);
   if (!loops.ok()) return Result<bool>::Err(loops.error());
   if (face.sphere) {
+    double cut_tolerance = options_.tolerance;
     if (face.spherical_spun) {
       // The spherical support is independent of its polar frame. Align the
       // canonical frame with the saved cut, even for a cut oblique to SPUN's
       // rotation axis. Source circle edges and outward normal stay unchanged.
       face.sphere->axis = loops.value().front().normal;
       face.sphere->x_axis = loops.value().front().x_axis;
+    } else {
+      const auto frame =
+          ReframeSphereCuts(loops.value(), *face.sphere, options_.tolerance);
+      if (!frame.ok())
+        return Result<bool>::Err(Error(face.source->face, frame.error().code,
+                                       frame.error().message.c_str()));
+      face.sphere = frame.value().geometry;
+      cut_tolerance = frame.value().remaining_tolerance;
     }
     const auto band =
         ValidateSphereLoops(loops.value(), *face.sphere, face.natural_sense,
-                            options_.tolerance, polygon_checks_remaining_);
+                            cut_tolerance, polygon_checks_remaining_);
     if (!band.ok())
       return Result<bool>::Err(Error(face.source->face, band.error().code,
                                      band.error().message.c_str()));
@@ -481,6 +492,30 @@ Result<bool> BodyWriter::PrepareConicFace(FaceData& face) {
     return Result<bool>::Ok(true);
   }
   if (face.torus) {
+    const auto& axis = face.torus->axis;
+    // This threshold selects a route only; the full meridian certificate
+    // below must still establish both source circles and their winding.
+    const bool meridians =
+        loops.value().size() == 2 &&
+        std::all_of(
+            loops.value().begin(), loops.value().end(),
+            [&axis](const auto& loop) {
+              constexpr double kMeridianRouteAlignment = .5;
+              return std::abs(loop.normal.x * axis.x + loop.normal.y * axis.y +
+                              loop.normal.z * axis.z) < kMeridianRouteAlignment;
+            });
+    if (meridians) {
+      const auto band =
+          ValidateTorusMeridians(loops.value(), *face.torus, face.natural_sense,
+                                 options_.tolerance, polygon_checks_remaining_);
+      if (!band.ok())
+        return Result<bool>::Err(Error(face.source->face, band.error().code,
+                                       band.error().message.c_str()));
+      face.torus_meridian = band.value();
+      face.reference_point = loops.value().front().center;
+      face.outer_loop = std::nullopt;
+      return Result<bool>::Ok(true);
+    }
     const auto band =
         ValidateTorusLoops(loops.value(), *face.torus, face.natural_sense,
                            options_.tolerance, polygon_checks_remaining_);
@@ -1294,6 +1329,9 @@ Result<bool> BodyWriter::CheckSolid() {
       } else if (face.sphere) {
         volume6 +=
             sign * SphereBandVolume6(*face.sphere, *face.sphere_band, origin);
+      } else if (face.torus_meridian) {
+        volume6 += sign * TorusMeridianVolume6(*face.torus,
+                                               *face.torus_meridian, origin);
       } else if (face.torus) {
         volume6 +=
             sign * TorusBandVolume6(*face.torus, *face.torus_band, origin);

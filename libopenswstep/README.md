@@ -511,6 +511,14 @@ integral, including the sphere center's offset from the integration origin.
 Closed supported shells can combine spherical bands, planar caps and cylindrical
 bore walls.
 
+For native SPHERE supports the stored polar axis is not geometrically
+preferred (XT 5.2.2.4: Sphere, p. 57). The output frame can align with the first
+complete circular cut. Whole-support and circle-frame error bounds, including
+output normalization, are subtracted from the unchanged caller tolerance;
+the existing coaxial/profile checks receive only the remaining budget. Center,
+radius and source cut curves are retained. This permits oblique caps and
+coaxial bands, but does not admit two noncoaxial cuts or arbitrary sphere trims.
+
 A spherical cap has one complete latitude circle. Its winding relative to the
 effective face normal selects the region above or below the cut; no shortest-cap
 assumption is made. Small caps, hemispheres and caps larger than a hemisphere
@@ -533,6 +541,19 @@ select one directed meridian interval; no shortest-arc or axial-order choice is
 made. Complementary bands, equal-height cuts with different radii, reversed
 axes and crossing the meridian parameter seam are supported. Both bounds use
 `FACE_BOUND`.
+
+Regular ring-torus sectors also support two complete meridian circles whose
+planes contain the torus axis. Their centers must lie on the major-radius
+circle, their radii must match the minor radius, and whole-plane/profile/frame
+bounds must fit the source tolerance. Opposite source windings select the
+azimuth interval, including sectors larger than a half turn. A single shared
+comparison checks separation on the inner ring. The exact divergence integral
+retains transverse origin terms. Source circles and topology remain intact;
+there is no synthesized seam. This route requires `r > tolerance` and
+`R-r > tolerance`; it does not accept full meridians on spindle/horn supports,
+negative major radii, partial meridians or general torus trimming contours.
+Original MIT SolidWorks quarter/three-quarter revolutions and an oblique sphere
+reference are captured in `openswx-testdata/verification/analytic-cuts-001`.
 
 Regular trims of spindle and horn supports are also accepted: the complete
 winding-selected interval must have `R+r*cos(v)` strictly greater than the
@@ -641,7 +662,8 @@ approximation is written.
 NURBS curves outside the supported open-wire/planar-polynomial subsets,
 arbitrary NURBS source surfaces, uncertified nonconvex planar boundaries and
 curved-hole envelopes, nested/touching holes, spherical pole cuts/unbounded
-sphere faces, other cylinder/cone trims, partial torus azimuths,
+sphere faces, other cylinder/cone trims, torus azimuth trims outside the
+two-full-meridian subset,
 torus intervals reaching the axis or inner sheet, uncertified apex loops,
 explicit seam fins, other non-planar surfaces, other tolerant fin-specific
 curves/pcurves, isolated face loops, compounds/assemblies, general

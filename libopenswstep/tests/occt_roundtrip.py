@@ -31,6 +31,17 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "meridian-torus-solid": (2,3,3,1,"volume",1.5*math.pi**2),
+    "meridian-torus-major": (2,3,3,1,"volume",4.5*math.pi**2),
+    "meridian-torus-sheet": (2,3,1,0,"area",3*math.pi**2),
+    "meridian-torus-seams": (2,3,3,1,"volume",1.5*math.pi**2),
+    "meridian-torus-oblique": (2,3,3,1,"volume",1.5*math.pi**2),
+    "meridian-native-minor": (2,3,3,1,"volume",160*math.pi**2),
+    "meridian-native-major": (2,3,3,1,"volume",480*math.pi**2),
+    "sphere-oblique-solid": (2,3,2,1,"volume",52*math.pi/3),
+    "sphere-oblique-sheet-native": (2,3,1,0,"area",20*math.pi),
+    "sphere-oblique-band": (2,3,3,1,"volume",66*math.pi),
+    "sphere-oblique-band-sheet": (2,3,1,0,"area",30*math.pi),
     "complete-torus": (1,2,1,1,"volume",6*math.pi**2),
     "complete-torus-oblique": (1,2,1,1,"volume",6*math.pi**2),
     "complete-torus-sheet": (1,2,1,0,"area",12*math.pi**2),

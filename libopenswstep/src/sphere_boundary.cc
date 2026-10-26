@@ -6,6 +6,8 @@
 #include <cmath>
 #include <numbers>
 
+#include "openparasolid/evaluate.h"
+
 namespace openswstep::internal {
 namespace {
 using namespace openparasolid;
@@ -26,6 +28,71 @@ Vector3 Cross(Vector3 a, Vector3 b) {
   return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 }  // namespace
+Result<SphereCutFrame> ReframeSphereCuts(std::span<const ConicBoundary> loops,
+                                         const SphereGeometry& sphere,
+                                         double tolerance) {
+  using Return = Result<SphereCutFrame>;
+  if (!std::isfinite(tolerance) || tolerance <= 0)
+    return Return::Err({ErrorCode::kInvalidOptions, 0,
+                        "Sphere frame tolerance must be positive and finite"});
+  if (loops.empty() || loops.size() > 2)
+    return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                        "Sphere requires one or two full circular cuts"});
+  const auto valid = EvaluateSurface(GeometryPayload{sphere}, 0, 0);
+  if (!valid.ok()) return Return::Err(valid.error());
+  const auto frame_error = [](Vector3 axis, Vector3 x) {
+    return std::abs(
+               std::hypot(static_cast<long double>(axis.x), axis.y, axis.z) -
+               1) +
+           std::abs(std::hypot(static_cast<long double>(x.x), x.y, x.z) - 1) +
+           std::abs(Dot(axis, x));
+  };
+  long double error =
+      sphere.radius * (4 * frame_error(sphere.axis, sphere.x_axis));
+  for (const auto& loop : loops) {
+    if (!loop.circle)
+      return Return::Err({ErrorCode::kUnsupportedFormat, 0,
+                          "Sphere cuts require CIRCLE bases"});
+    const CircleGeometry cut{loop.center, loop.normal, loop.x_axis,
+                             loop.major_radius};
+    const auto checked = EvaluateCurve(GeometryPayload{cut}, 0);
+    if (!checked.ok()) return Return::Err(checked.error());
+    error += loop.major_radius * (4 * frame_error(loop.normal, loop.x_axis));
+  }
+  const auto& cut = loops.front();
+  const auto length = std::hypot(static_cast<long double>(cut.normal.x),
+                                 cut.normal.y, cut.normal.z);
+  const std::array<long double, 3> a{
+      cut.normal.x / length, cut.normal.y / length, cut.normal.z / length};
+  const auto projection = static_cast<long double>(cut.x_axis.x) * a[0] +
+                          static_cast<long double>(cut.x_axis.y) * a[1] +
+                          static_cast<long double>(cut.x_axis.z) * a[2];
+  std::array<long double, 3> x{cut.x_axis.x - projection * a[0],
+                               cut.x_axis.y - projection * a[1],
+                               cut.x_axis.z - projection * a[2]};
+  const auto x_length = std::hypot(x[0], x[1], x[2]);
+  if (!std::isfinite(x_length) || x_length == 0)
+    return Return::Err(Invalid("Sphere cut frame is singular"));
+  for (auto& v : x) v /= x_length;
+  auto geometry = sphere;
+  geometry.axis = {static_cast<double>(a[0]), static_cast<double>(a[1]),
+                   static_cast<double>(a[2])};
+  geometry.x_axis = {static_cast<double>(x[0]), static_cast<double>(x[1]),
+                     static_cast<double>(x[2])};
+  error += sphere.radius * (4 * frame_error(geometry.axis, geometry.x_axis));
+  const auto remaining = static_cast<long double>(tolerance) - error;
+  if (!std::isfinite(error) || !(remaining > 0))
+    return Return::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Sphere cut frame cannot preserve the source tolerance"});
+  double budget = tolerance;
+  if (error > 0) budget = std::nextafter(static_cast<double>(remaining), 0.0);
+  if (!(budget > 0))
+    return Return::Err(
+        {ErrorCode::kUnsupportedFormat, 0,
+         "Sphere cut frame has no representable tolerance budget"});
+  return Return::Ok({geometry, budget});
+}
 Result<SphereBand> ValidateSphereLoops(std::span<const ConicBoundary> loops,
                                        const SphereGeometry& sphere,
                                        bool natural_sense, double tolerance,
