@@ -403,6 +403,40 @@ TEST(ParasolidChartFinIntervals, BindsCompleteHelpClosedChartInSourceUnits) {
     }
   }
 }
+TEST(ParasolidChartFinIntervals, BindsPartialEdgesEndingAtProvenHelpSeams) {
+  for (const bool negative : {false, true})
+    for (const bool reverse : {false, true})
+      for (const bool seam_at_start : {false, true}) {
+        auto f = HelpClosedIntersectionFace(false, negative, reverse);
+        Set(f, 10, "forward", 11);
+        Set(f, 10, "backward", 11);
+        Set(f, 11, "loop", 20);
+        Set(f, 11, "forward", 10);
+        Set(f, 11, "backward", 10);
+        Set(f, 10, "vertex", seam_at_start ? 101 : 100);
+        Set(f, 11, "vertex", seam_at_start ? 100 : 101);
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto result =
+            BindFaceTrimming(model.value(), NodeId{30}, 1e-12, {},
+                             IntersectionEvaluationOptions{1e-12, 1e-12});
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        const auto& fins = result.value().loops.front().fins;
+        ASSERT_EQ(fins.size(), 2u);
+        for (const auto& fin : fins) {
+          EXPECT_EQ(fin.end > fin.start,
+                    negative == (fin.use.sense == TopologySense::kReverse));
+          for (const double fraction : {0., .5, 1.}) {
+            const auto sample =
+                EvaluateBoundFin(model.value(), fin, fraction, 1e-12);
+            ASSERT_TRUE(sample.ok()) << sample.error().message;
+            EXPECT_NEAR(std::hypot(sample.value().curve.position.x,
+                                   sample.value().curve.position.y),
+                        1, 1e-12);
+          }
+        }
+      }
+}
 TEST(ParasolidChartFinIntervals, RejectsUnprovenClosedChartPeriods) {
   for (int mode = 0; mode < 7; ++mode) {
     auto fixture = HelpClosedIntersectionFace(true, false, false);
@@ -676,6 +710,26 @@ TEST(ParasolidFaceBinding, BindsIsolatedConeApexWithinExplicitTolerance) {
   EXPECT_NEAR(uv.v, -4, 1e-14);
   EXPECT_GT(uv.residual, 0);
   EXPECT_LE(uv.residual, 1e-12);
+}
+TEST(ParasolidFaceBinding,
+     RejectsUnresolvedDistinctConicEndpointsBeforeWrapping) {
+  for (const bool ellipse : {false, true})
+    for (const char sense : {'+', '-'})
+      for (const double gap : {0., 1e-13}) {
+        auto f = ConicFace(ellipse, sense);
+        auto point = std::vector<ScalarValue>{};
+        for (const auto& node : f.report.nodes)
+          if (node.index == 200) point = node.fields[0].values;
+        ASSERT_EQ(point.size(), 3u);
+        point[0] = std::get<double>(point[0]) + gap;
+        for (auto& node : f.report.nodes)
+          if (node.index == 201) node.fields[0].values = point;
+        const auto model = ModelBuilder::Build(f.report);
+        ASSERT_TRUE(model.ok());
+        const auto result = BindFaceTrimming(model.value(), NodeId{30}, 1e-12);
+        ASSERT_FALSE(result.ok());
+        EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+      }
 }
 TEST(ParasolidFaceBinding, RejectsAmbiguousOrInvalidAutomaticConics) {
   for (int bad = 0; bad < 6; ++bad) {

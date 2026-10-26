@@ -179,11 +179,17 @@ struct FinGeometryEvaluation {
 /// solved 3D curve membership. A shared H limit and complete chart returning
 /// once to that help seam establish a closed accurate intersection's period;
 /// known curve/fin senses determine direction. A single endpoint vertex must
-/// coincide with that seam. Other closed/missing endpoints and ambiguous or
-/// unrecoverable parameters require explicit intervals.
+/// coincide with that seam. For a partial edge ending at the proven help seam,
+/// traversal sense selects the first or last parameter occurrence. Interior
+/// duplicate chart matches and unproven periods remain ambiguous. Other
+/// closed/missing endpoints and unrecoverable parameters require explicit
+/// intervals.
 /// Accurate edge orientation must agree with curve sense. Fin trims require
 /// unambiguous vertex correspondence. Conics select one directed arc, or a full
-/// turn for closed/vertex-free edges. Coincident distinct conic vertices, fin
+/// turn for closed/vertex-free edges. Distinct conic vertices separated by no
+/// more than the caller tolerance are rejected before periodic angle wrapping;
+/// rounding cannot turn an unresolved short edge into a nearly full circle.
+/// Coincident distinct conic vertices, fin
 /// conics, ambiguous fin trims and partial or ambiguous spline domains require
 /// the explicit overload.
 ///

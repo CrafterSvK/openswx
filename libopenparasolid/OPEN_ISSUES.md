@@ -1,11 +1,39 @@
 # Parasolid reader and STEP exporter: open issues
 
 This document records the remaining boundaries of `libopenparasolid` and
-`libopenswstep`. The implementation baseline is commit `91889db` (conical
-frustum export). Update this list and its coverage figures when a boundary is
-extended. It is a work list, not a promise of universal Parasolid compatibility.
+`libopenswstep`. The original coverage measurements below were recorded at
+commit `91889db` (conical frustum export); dated reviews track later changes.
+Update the relevant work item when a boundary is extended. This is a work list,
+not a promise of universal Parasolid compatibility.
 
-## Current evidence
+## Systematic trimming work, 2026-10-26
+
+The older counts below are historical corpus measurements, not current
+completion percentages. The current issue review distinguishes decoding,
+automatic interval binding, exact STEP representation, and saved-state/body
+membership. Advancing one stage does not establish success at the next.
+
+| Priority | Limitation | This iteration / next verification |
+| --- | --- | --- |
+| P0 | Compiler-dependent coincident conic endpoints | Fixed: compare distinct vertex positions against caller tolerance before wrapping angles. The reported CI failure is reproduced with Clang 19 `-O3 -DNDEBUG`; tiny rounding gaps remain unsupported instead of becoming nearly full turns. |
+| P1 | Partial intersection edges ending at a closed help seam | Fixed when the existing shared-H/full-period certificate succeeds: recorded direction selects the first/last chart occurrence. Interior duplicates, unproven periods and unknown senses remain unsupported. |
+| P1 | General non-circular intersection curves | Open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
+| P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
+| P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
+| P2 | Partially trimmed spline edge domains | Open. Domain endpoints need not coincide with edge vertices; bounded inverse queries must recover an unambiguous directed trim without choosing a nearby parameter heuristically. |
+| P2 | Oblique spherical cuts | Open for native SPHERE supports in this path. Reorienting a polar frame needs a whole-support equivalence bound and unchanged normal/branch selection, as well as native reference comparison. |
+| P2 | Tolerant support pairs outside PLANE/SPUN_SURF | Open. Preserve per-edge error budgets and certify the exact support pair instead of extending approximate chart circles by sampling. |
+| P3 | Final-body membership when configuration partitions contain no bodies | Open. Multiple internal payloads can correspond to multiple native bodies; neither taking the last candidate nor unioning all candidates certifies the saved target state. |
+
+For each extension: reduce the failure to an original MIT construction, freeze
+native SLDPRT/Parasolid/STEP receipts plus native topology, add positive and
+rejection tests, and compare the entire supported result with independent OCCT
+checks. A native STEP reference may itself approximate intersection edges;
+record that discrepancy against an independent geometric oracle rather than
+silently relaxing a geometric proof. Private issue CAD and derived artifacts
+stay outside both repositories. Authentication headers are never captured.
+
+## Historical corpus evidence
 
 | Layer | Observed coverage | What success establishes |
 | --- | --- | --- |

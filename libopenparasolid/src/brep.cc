@@ -106,7 +106,8 @@ double Distance(Vector3 a, Vector3 b) {
 // edge.
 Result<FinParameterInterval> ConicInterval(const Model& model,
                                            const GeometryObject& curve,
-                                           const FinUse& use) {
+                                           const FinUse& use,
+                                           double tolerance) {
   if (use.fin_curve.value || !curve.sense ||
       (*curve.sense != '+' && *curve.sense != '-'))
     return Result<FinParameterInterval>::Err(
@@ -166,7 +167,15 @@ Result<FinParameterInterval> ConicInterval(const Model& model,
   if (use.start_vertex == use.end_vertex) {
     span = increasing ? turn : -turn;
   } else {
-    if (span == 0 || std::abs(span) == turn)
+    const auto first = Point(model, use.start_vertex);
+    const auto last = Point(model, use.end_vertex);
+    if (!first.ok()) return Result<FinParameterInterval>::Err(first.error());
+    if (!last.ok()) return Result<FinParameterInterval>::Err(last.error());
+    // Different topological vertices do not certify a full periodic turn.
+    // Reject unresolved geometric separation before angle wrapping: tiny
+    // rounding differences must not turn a collapsed arc into a full circle.
+    if (Distance(first.value(), last.value()) <= tolerance || span == 0 ||
+        std::abs(span) == turn)
       return Result<FinParameterInterval>::Err(
           Error("Distinct conic vertices have ambiguous coincident parameters",
                 0, ErrorCode::kUnsupportedFormat));
@@ -314,20 +323,44 @@ Result<FinParameterInterval> ChartInterval(
   const auto& positions =
       std::get<IntersectionCurveGeometry>(curve.payload).chart.positions;
   std::optional<std::size_t> first, last;
+  // A partial edge may end at either parameter occurrence of a proven closed
+  // help seam. Reuse the full-period certificate and choose the occurrence
+  // from the recorded traversal direction; interior duplicate matches remain
+  // ambiguous and no nearest-point or payload-order heuristic is used.
   for (std::size_t i = 0; i < positions.size(); ++i) {
     if (Distance(positions[i], start.value()) <= tolerance) {
-      if (first)
-        return Result<FinParameterInterval>::Err(
-            Error("Ambiguous intersection start chart point", 0,
-                  ErrorCode::kUnsupportedFormat));
-      first = i;
+      if (first) {
+        if (*first != 0 || i + 1 != positions.size())
+          return Result<FinParameterInterval>::Err(
+              Error("Ambiguous intersection start chart point", 0,
+                    ErrorCode::kUnsupportedFormat));
+        auto seam_use = use;
+        seam_use.end_vertex = seam_use.start_vertex;
+        const auto period = ClosedChartInterval(model, curve, seam_use,
+                                                tolerance, *intersection);
+        if (!period.ok())
+          return Result<FinParameterInterval>::Err(period.error());
+        first = period.value().end > period.value().start ? 0 : i;
+      } else {
+        first = i;
+      }
     }
     if (Distance(positions[i], end.value()) <= tolerance) {
-      if (last)
-        return Result<FinParameterInterval>::Err(
-            Error("Ambiguous intersection end chart point", 0,
-                  ErrorCode::kUnsupportedFormat));
-      last = i;
+      if (last) {
+        if (*last != 0 || i + 1 != positions.size())
+          return Result<FinParameterInterval>::Err(
+              Error("Ambiguous intersection end chart point", 0,
+                    ErrorCode::kUnsupportedFormat));
+        auto seam_use = use;
+        seam_use.start_vertex = seam_use.end_vertex;
+        const auto period = ClosedChartInterval(model, curve, seam_use,
+                                                tolerance, *intersection);
+        if (!period.ok())
+          return Result<FinParameterInterval>::Err(period.error());
+        last = period.value().end > period.value().start ? i : 0;
+      } else {
+        last = i;
+      }
     }
   }
   const auto& parameters = chart.value().parameterization.parameters;
@@ -484,7 +517,7 @@ Result<FinParameterInterval> InferFinInterval(
     return ChartInterval(model, *curve, use, tolerance, intersection);
   if (std::holds_alternative<CircleGeometry>(curve->payload) ||
       std::holds_alternative<EllipseGeometry>(curve->payload))
-    return ConicInterval(model, *curve, use);
+    return ConicInterval(model, *curve, use, tolerance);
   if (const auto* trim = std::get_if<TrimmedCurveGeometry>(&curve->payload))
     return TrimInterval(model, curve_id, *trim, use, tolerance, intersection);
   if (!use.start_vertex.value || !use.end_vertex.value)
