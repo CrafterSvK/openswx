@@ -143,6 +143,22 @@ TEST(ParasolidSweptSurface, SplineRejectsUncertifiedOrSingularProjections) {
     EXPECT_EQ(inverse.error().code, ErrorCode::kUnsupportedFormat);
   }
 }
+TEST(ParasolidSweptSurface,
+     CertifiesPositiveBezierDerivativeDespiteControlReversal) {
+  ModelFixture f;
+  Swept(f, 1, {1, 0, 0});
+  Spline(f, {0., 0., 0., 0., 1., 0., 0., .9, 0., 0., 2., 0.});
+  const auto model = ModelBuilder::Build(f.report);
+  ASSERT_TRUE(model.ok());
+  for (const double t : {.125, .25, .5, .75, .875}) {
+    const double y = 3 * t - 3.3 * t * t + 2.3 * t * t * t;
+    const auto result =
+        InvertSurface(model.value(), NodeId{20}, {.3, y, 0}, 1e-12);
+    ASSERT_TRUE(result.ok()) << result.error().message;
+    EXPECT_NEAR(result.value().u, 2 + 3 * t, 1e-12);
+    EXPECT_NEAR(result.value().v, .3, 1e-12);
+  }
+}
 TEST(ParasolidSweptSurface, SplineInversionPreservesSmallAndLargeSourceUnits) {
   for (double scale : {1e-150, 1e150}) {
     ModelFixture f;

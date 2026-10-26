@@ -146,6 +146,7 @@ struct FinGeometryEvaluation {
 /// including through trims. Settings are validated even for empty boundaries
 /// and copied into each fin; omission preserves unsupported intersections.
 ///
+/// @see @ref xt_bcurve "XT 5.2.1.4: B_CURVE (B-spline curve) (p. 38)"
 /// @see @ref xt_face "XT 4.3.6: Face (p. 28)", @ref xt_halfedge "XT 4.3.8:
 /// Halfedge (p. 29)", @ref xt_attachment "XT 5.3.4.1: Attaching geometry to
 /// topology (p. 92)", @ref xt_trim "XT 5.2.1.6: Trimmed_curve (p. 49)"
@@ -190,8 +191,16 @@ struct FinGeometryEvaluation {
 /// more than the caller tolerance are rejected before periodic angle wrapping;
 /// rounding cannot turn an unresolved short edge into a nearly full circle.
 /// Coincident distinct conic vertices, fin
-/// conics, ambiguous fin trims and partial or ambiguous spline domains require
-/// the explicit overload.
+/// conics and ambiguous fin trims require the explicit overload. A direct
+/// open nonrational clamped 3D B_CURVE can recover a partial domain when a
+/// strictly positive projected derivative certifies global injectivity.
+/// Positive derivative controls are the fast certificate; a single Bezier
+/// span up to degree seven can additionally use bounded Bernstein subdivision
+/// (depth 16, one million averaging steps). Bisection uses at most 130 curve
+/// evaluations per endpoint and a 32-million-unit work estimate; the original
+/// knot units and caller 3D membership tolerance are preserved. No closest-point
+/// claim or parameter wrapping is made. Rational, periodic, unclamped, SP and
+/// uncertified partial curves still require explicit directed intervals.
 ///
 /// @see @ref xt_face "XT 4.3.6: Face (p. 28)", @ref xt_halfedge "XT 4.3.8:
 /// Halfedge (p. 29)", @ref xt_attachment "XT 5.3.4.1: Attaching geometry to

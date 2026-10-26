@@ -20,10 +20,34 @@ membership. Advancing one stage does not establish success at the next.
 | P1 | General non-circular intersection curves | Open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
 | P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
-| P2 | Partially trimmed spline edge domains | Open. Domain endpoints need not coincide with edge vertices; bounded inverse queries must recover an unambiguous directed trim without choosing a nearby parameter heuristically. |
+| P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Rational, periodic, unclamped, SP and uncertified projections remain explicit. Two original native trimmed-prism regressions cover the new subset. |
 | P2 | Oblique spherical cuts | Open for native SPHERE supports in this path. Reorienting a polar frame needs a whole-support equivalence bound and unchanged normal/branch selection, as well as native reference comparison. |
 | P2 | Tolerant support pairs outside PLANE/SPUN_SURF | Open. Preserve per-edge error budgets and certify the exact support pair instead of extending approximate chart circles by sampling. |
 | P3 | Final-body membership when configuration partitions contain no bodies | Open. Multiple internal payloads can correspond to multiple native bodies; neither taking the last candidate nor unioning all candidates certifies the saved target state. |
+
+### Partial polynomial spline intervals
+
+`openswx-testdata/verification/spline-trim-001` freezes two original native
+SolidWorks 2025 SP5 prisms with Boolean cuts through cubic profiles. Source
+B_CURVE domains remain `[0,1]`, while actual edge intervals begin at `5/12` and
+`1/2`. Both bodies now bind and export completely with five faces, nine edges
+and six vertices. The second profile has a negative projected derivative
+control, but its derivative is strictly positive everywhere. Bounded Bernstein
+subdivision proves that fact rather than rejecting the curve from one control
+sign. The same certificate is reused for transverse spline-sweep inversion.
+Neither proof changes the source controls, knots, parameter domains or STEP
+geometry. Independent polynomial volume integrals and native STEP comparisons
+verify both original constructions, including two-way Boolean differences.
+
+Recovery is deliberately narrower than a general spline inverse. It certifies
+one global monotone projection of an open, clamped, nonrational 3D curve, then
+bisects in original knot units and checks the candidate's full 3D residual.
+Each endpoint has at most 130 evaluations and a 32-million-unit work estimate.
+Single-span derivative refinement is limited to degree seven, depth 16 and one
+million averaging steps. Uncertified folds, off-curve vertices, exhausted
+budgets and ambiguous source branches remain explicit errors. Complete-domain
+rational/unclamped binding and caller-supplied intervals retain their previous
+behavior; partial SP/rational/periodic/unclamped recovery is not implied.
 
 For each extension: reduce the failure to an original MIT construction, freeze
 native SLDPRT/Parasolid/STEP receipts plus native topology, add positive and
@@ -117,8 +141,9 @@ sections in the [reader README](README.md).
 Some closed/tolerant fin trims still need explicit directed intervals. In the
 57-body selection, eight overrides resolve the one remaining automatic binding
 failure. This does not establish unique automatic intervals for arbitrary
-inputs. Partial spline domains, ambiguous endpoints and periodic branch/turn
-choices cannot generally be recovered from endpoint positions alone.
+inputs. The certified partial polynomial subset above now extends automatic
+recovery; ambiguous endpoints and periodic branch/turn choices still cannot
+generally be recovered from endpoint positions alone.
 
 Existing NURBS inversion and intersection solving are bounded local searches.
 They do not prove a global closest point, unique solution or absence of other
@@ -146,26 +171,26 @@ and source correspondence must also be checked.
 
 ## STEP exporter: narrower than the reader
 
-The exporter currently preserves exact analytic geometry for supported wire
-bodies, planar polygon faces and holes, full conic disks, circular planar holes,
-complete cylindrical bands and conical frustums. Closed supported shells include
-cylinders and cylindrical/conical tubes. It returns an error for an unsupported
-selected body instead of discarding unsupported faces.
+The exporter supports reviewed analytic and polynomial subsets, including
+mixed curved planar regions, selected elliptic/spline holes, partial cylinder
+and cone patches, sphere caps/bands, trimmed tori and complete ring-torus faces.
+Supported polynomial sweeps use exact tensor B-spline surfaces. The following
+are current limitations rather than the original frustum-era work list:
 
-Remaining export work includes:
-
-- Mixed line/arc contours and multi-edge conic loops, including rounded planar
-  profiles and their holes.
-- Elliptical holes and more general curved trim-region validation.
-- Partial cylindrical/conical faces, explicit seam fins and apex boundary loops.
-- Spherical and toroidal faces, NURBS curves/surfaces and other geometry already
-  available from the reader but not yet mapped to STEP.
-- Tolerant fin-specific curves and their STEP pcurve/surface-curve mapping.
-- Isolated face loops, general mixed-dimensional bodies, compound/assembly
-  grouping, multiple material regions and separate solid void shells.
+- General non-circular intersection curves and remaining curved trim regions
+  without a whole-domain simplicity/containment certificate.
+- Multiply trimmed or disconnected analytic faces, general explicit seam fins,
+  and spherical pole/complete-sphere topology outside supported cap/band paths.
+- Arbitrary NURBS source surfaces, closed-profile and non-rectangular sweeps
+  outside the certified exact tensor-surface subset.
+- Tolerant fin-specific curves without an established STEP pcurve/surface-curve
+  mapping and whole-edge source error certificate.
+- Isolated face loops outside the supported cone-apex subset, general
+  mixed-dimensional bodies, compound/assembly grouping, multiple material
+  regions and separate solid void shells.
 - Explicit assembly placement and configuration/history selection integration.
-  Current APIs require payload/body selection and source length units; they do
-  not infer these choices or apply component placement automatically.
+  Current export APIs require payload/body selection and source length units;
+  they do not infer final-body membership or component placement.
 
 A parser improvement is not automatically an exporter improvement. Each new
 STEP subset needs preserved source topology and senses, bounded geometric
@@ -180,8 +205,9 @@ The full current subset and its exclusions are maintained in the
 
 1. Extend exact STEP boundary/face mapping for geometry already present in the
    reader, using the failing private cases and synthetic examples to choose
-   focused subsets. Mixed line/arc planar profiles and spherical/toroidal faces
-   are useful next candidates.
+   focused subsets. Non-circular intersections and multiply trimmed analytic
+   supports are current candidates; earlier mixed planar and analytic face
+   subsets already have dedicated support.
 2. Extend source interval and geometry adapters where concrete failures have
    sufficient metadata and independent reference results.
 3. Develop broader B-rep certification alongside these subsets, keeping reader

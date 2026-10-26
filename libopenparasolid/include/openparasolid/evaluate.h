@@ -242,9 +242,12 @@ struct SurfaceParameterSeed {
 /// principal branch, and v is signed source sweep displacement. At most two
 /// model surface evaluations validate (0,0) and the recovered point, with no
 /// implicit tolerance. Open nonrational clamped 3D B_CURVE sections are also
-/// supported when their control polygon has a strictly increasing projection
-/// perpendicular to the sweep. This certifies a unique u on the source knot
-/// domain, including nonplanar sections and repeated interior knots. At most
+/// supported when their projected derivative is certified strictly positive
+/// perpendicular to the sweep. Positive control differences provide the fast
+/// proof; a single Bezier span up to degree seven can additionally use bounded
+/// Bernstein subdivision (depth 16, one million averaging steps). This proves
+/// a unique u on the source knot domain, including nonplanar sections and
+/// repeated interior knots. At most
 /// 130 curve samples and two surface samples are used, with a 32,000,000
 /// estimated work-unit limit; exhausted budgets return kResourceLimit.
 /// Rational, closed, periodic and uncertified sections remain unsupported.

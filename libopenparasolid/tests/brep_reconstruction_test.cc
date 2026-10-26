@@ -1939,10 +1939,14 @@ ModelFixture SplineFace(bool on_surface, bool rational = false,
   }
   return f;
 }
-TEST(ParasolidPartialWireBinding, OverridesPartialSplineAndInfersOtherWires) {
-  auto f = TwoWireBody(WireFromFace(SplineFace(false)));
-  for (auto& node : f.report.nodes)
+TEST(ParasolidPartialWireBinding,
+     OverridesPartialRationalSplineAndInfersOtherWires) {
+  auto f = TwoWireBody(WireFromFace(SplineFace(false, true)));
+  for (auto& node : f.report.nodes) {
     if (node.index == 201) node.fields[0].values = {.5, 0., 0.};
+    if (node.index == 412)
+      node.fields[0].values = {0., 0., 0., 1., 1., 0., 0., 1.};
+  }
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
   const WireParameterInterval overrides[]{{NodeId{2}, -2, .5}};
@@ -2080,16 +2084,16 @@ TEST(ParasolidAutomaticWireBinding,
   }
 }
 TEST(ParasolidAutomaticWireBinding,
-     PartialSplineDomainsStillRequireExplicitIntervals) {
+     RecoversCertifiedPartialSplineDomains) {
   auto f = WireFromFace(SplineFace(false));
   for (auto& node : f.report.nodes)
     if (node.index == 201) node.fields[0].values = {.5, 0., 0.};
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
   const auto result = BindBodyWires(model.value(), NodeId{1}, 1e-12);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
-  EXPECT_NE(result.error().message.find("wire edge 2"), std::string::npos);
+  ASSERT_TRUE(result.ok()) << result.error().message;
+  EXPECT_NEAR(result.value().wires.front().start, -2, 1e-12);
+  EXPECT_NEAR(result.value().wires.front().end, .5, 1e-12);
   const WireParameterInterval intervals[]{{NodeId{2}, -2, .5}};
   EXPECT_TRUE(BindBodyWires(model.value(), NodeId{1}, intervals, 1e-12).ok());
 }
@@ -2118,7 +2122,7 @@ TEST(ParasolidSplineFinIntervals,
                     1e-12);
       }
 }
-TEST(ParasolidSplineFinIntervals, InteriorEndpointsRemainExplicit) {
+TEST(ParasolidSplineFinIntervals, RecoversCertifiedDirectCurveInteriorEndpoints) {
   for (bool on_surface : {false, true}) {
     auto f = SplineFace(on_surface);
     for (auto& n : f.report.nodes)
@@ -2126,8 +2130,17 @@ TEST(ParasolidSplineFinIntervals, InteriorEndpointsRemainExplicit) {
     const auto model = ModelBuilder::Build(f.report);
     ASSERT_TRUE(model.ok());
     const auto automatic = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
-    ASSERT_FALSE(automatic.ok());
-    EXPECT_EQ(automatic.error().code, ErrorCode::kUnsupportedFormat);
+    if (on_surface) {
+      ASSERT_FALSE(automatic.ok());
+      EXPECT_EQ(automatic.error().code, ErrorCode::kUnsupportedFormat);
+    } else {
+      ASSERT_TRUE(automatic.ok()) << automatic.error().message;
+      const auto& fins = automatic.value().faces.front().loops.front().fins;
+      EXPECT_NEAR(fins[0].start, -.75, 1e-12);
+      EXPECT_EQ(fins[0].end, 3);
+      EXPECT_EQ(fins[1].start, 3);
+      EXPECT_NEAR(fins[1].end, -.75, 1e-12);
+    }
     const FinParameterInterval p[]{{NodeId{10}, -.75, 3},
                                    {NodeId{11}, 3, -.75}};
     const auto explicit_result =
@@ -2156,29 +2169,33 @@ TEST(ParasolidSplineFinIntervals,
 }
 TEST(ParasolidSplineFinIntervals,
      PreservesAccurateEdgeDirectionAndSourceGeometry) {
-  for (bool reverse_vertices : {false, true}) {
-    auto f = SplineFace(false);
-    Set(f, 410, "sense", '-');
-    if (reverse_vertices) {
-      Set(f, 10, "vertex", 100);
-      Set(f, 11, "vertex", 101);
-      Set(f, 100, "halfedge", 10);
-      Set(f, 101, "halfedge", 11);
+  for (const bool partial : {false, true})
+    for (bool reverse_vertices : {false, true}) {
+      auto f = SplineFace(false);
+      if (partial)
+        for (auto& node : f.report.nodes)
+          if (node.index == 200) node.fields[0].values = {.25, 0., 0.};
+      Set(f, 410, "sense", '-');
+      if (reverse_vertices) {
+        Set(f, 10, "vertex", 100);
+        Set(f, 11, "vertex", 101);
+        Set(f, 100, "halfedge", 10);
+        Set(f, 101, "halfedge", 11);
+      }
+      const auto model = ModelBuilder::Build(f.report);
+      ASSERT_TRUE(model.ok());
+      const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
+      if (reverse_vertices) {
+        ASSERT_TRUE(result.ok()) << result.error().message;
+        const auto& fin = result.value().faces[0].loops[0].fins[0];
+        EXPECT_EQ(fin.curve.value, 410);
+        EXPECT_EQ(fin.start, 3);
+        EXPECT_NEAR(fin.end, partial ? -.75 : -2, 1e-12);
+      } else {
+        ASSERT_FALSE(result.ok());
+        EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
+      }
     }
-    const auto model = ModelBuilder::Build(f.report);
-    ASSERT_TRUE(model.ok());
-    const auto result = BindBodyFaces(model.value(), NodeId{1}, 1e-12);
-    if (reverse_vertices) {
-      ASSERT_TRUE(result.ok()) << result.error().message;
-      const auto& fin = result.value().faces[0].loops[0].fins[0];
-      EXPECT_EQ(fin.curve.value, 410);
-      EXPECT_EQ(fin.start, 3);
-      EXPECT_EQ(fin.end, -2);
-    } else {
-      ASSERT_FALSE(result.ok());
-      EXPECT_EQ(result.error().code, ErrorCode::kInvalidRecord);
-    }
-  }
 }
 TEST(ParasolidSplineFinIntervals, InvalidKnotsAndWeightsDoNotProduceBindings) {
   for (bool invalid_weight : {false, true}) {

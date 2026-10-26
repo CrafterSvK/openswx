@@ -441,6 +441,22 @@ Result<FinParameterInterval> SplineInterval(const Model& model,
   const bool backward =
       Distance(second.value().position, start.value()) <= tolerance &&
       Distance(first.value().position, end.value()) <= tolerance;
+  if (!forward && !backward &&
+      std::holds_alternative<NurbsCurveGeometry>(curve.payload) &&
+      use.start_vertex != use.end_vertex &&
+      Distance(start.value(), end.value()) > tolerance) {
+    const auto a = internal::InvertMonotoneNurbsCurve(*spline, start.value(),
+                                                     tolerance);
+    if (!a.ok()) return Result<FinParameterInterval>::Err(a.error());
+    const auto b = internal::InvertMonotoneNurbsCurve(*spline, end.value(),
+                                                     tolerance);
+    if (!b.ok()) return Result<FinParameterInterval>::Err(b.error());
+    if (a.value() == b.value())
+      return Result<FinParameterInterval>::Err(
+          Error("Recovered spline trim has a collapsed interval", 0,
+                ErrorCode::kUnsupportedFormat));
+    return Result<FinParameterInterval>::Ok({use.fin, a.value(), b.value()});
+  }
   if (forward == backward)
     return Result<FinParameterInterval>::Err(
         Error("Spline domain endpoints need unambiguous vertex correspondence",

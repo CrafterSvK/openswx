@@ -116,18 +116,12 @@ Result<Parameters> InvertSpline(const NurbsCurveGeometry& curve, Vector3 sweep,
         Error("Swept spline requires a transverse monotone projection",
               ErrorCode::kUnsupportedFormat));
   for (auto& coordinate : projection) coordinate /= length;
-  for (std::size_t i = 1; i < axis.control_count; ++i) {
-    const auto step = Difference(control(i), control(i - 1));
-    // Require a numerical margin as well as a positive projected derivative.
-    // Nearly parallel/flat control steps cannot certify injectivity.
-    const long double margin = 64 *
-                               std::numeric_limits<long double>::epsilon() *
-                               std::hypot(step[0], step[1], step[2]);
-    if (!(Dot(step, projection) > margin))
-      return Result<Parameters>::Err(
-          Error("Swept spline requires a transverse monotone projection",
-                ErrorCode::kUnsupportedFormat));
-  }
+  const auto certified = CertifyMonotoneNurbsProjection(curve, projection);
+  if (!certified.ok()) return Result<Parameters>::Err(certified.error());
+  if (!certified.value())
+    return Result<Parameters>::Err(
+        Error("Swept spline requires a transverse monotone projection",
+              ErrorCode::kUnsupportedFormat));
   const long double target = Dot(Difference(point, origin), projection);
   double low = domain.value()[0], high = domain.value()[1];
   double best_u = low;

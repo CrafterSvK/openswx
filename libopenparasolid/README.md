@@ -130,16 +130,16 @@ natural spline domain's endpoints match the oriented vertices unambiguously
 within the caller's tolerance. For SP-curves the domain comes from the 2D
 NURBS parameter curve, while endpoint matching uses the evaluated 3D curve.
 Both fin directions are supported; known accurate-edge sense must agree with
-the interval. Unknown accurate-edge sense, missing vertices, partial intervals
-and ambiguous/coincident endpoints still require explicit intervals or
-partial overrides.
+the interval. Unknown accurate-edge sense, missing vertices and ambiguous
+endpoint correspondence still require explicit intervals or partial overrides.
+Certified partial polynomial intervals are described below.
 
 Axis and control validation inherit the NURBS evaluator's validity/resource
 checks. Domain bounds are expanded knots at `degree` and `control_count`,
 including unclamped axes, rather than the first/last distinct knot. Original
-knot units, homogeneous weights and source geometry are preserved. No curve
-point inversion, periodic wrapping or extra-turn inference is performed.
-All existing sampled membership and topology checks still apply.
+knot units, homogeneous weights and source geometry are preserved. Complete
+domain matching performs no curve inversion, periodic wrapping or extra-turn
+inference. All existing sampled membership and topology checks still apply.
 
 SP-curves on another surface keep their original surface reference. Their 3D
 points must invert onto the selected face within the binding tolerance, and
@@ -152,6 +152,26 @@ Synthetic tests cover rational and polynomial curves, clamped/unclamped
 domains, both fin/curve directions, interior and ambiguous endpoints, invalid
 knots/weights and SP mapping between different UV frames. Current real-file
 coverage of the combined pipeline is listed under intersection binding below.
+
+### Certified partial polynomial domains
+
+Direct open, clamped, nonrational 3D B_CURVEs can additionally recover interior
+vertex parameters when an endpoint-chord projection proves global injectivity.
+Positive derivative controls provide the fast certificate. For a single Bezier
+span up to degree seven, bounded Bernstein subdivision can prove positivity
+even when one derivative control is negative. Its depth is limited to 16 and
+its averaging work to one million steps. The same certificate is reused for
+transverse spline-sweep inversion.
+
+Each endpoint is recovered by at most 130 source-curve evaluations in original
+knot units, with a 32-million-unit work estimate and a final 3D residual check
+at the unchanged caller tolerance. This is a unique projected candidate, not
+a general closest-point query. Folded/uncertified curves, exhausted budgets
+and off-curve vertices remain explicit errors. Partial rational, periodic,
+unclamped and SP curves still need explicit intervals. Full-domain matching
+and caller overrides retain their established behavior. Original native trim
+coupons, analytic oracles and remaining boundaries are recorded in
+[open issues](OPEN_ISSUES.md#partial-polynomial-spline-intervals).
 
 ## Binding all faces of a body
 
@@ -210,11 +230,12 @@ inferred. Face-owned edges cannot be supplied as wire intervals.
 The overload `BindBodyWires(model, body, tolerance, options)` determines
 intervals automatically using the same bounded inference as face fins. It
 resolves lines from vertex points, directed circle/ellipse arcs and one turn
-for rings, transmitted trim intervals, and complete NURBS/SP domains with
-unambiguous endpoint correspondence. With explicit intersection settings it
+for rings, transmitted trim intervals, complete NURBS/SP domains with
+unambiguous endpoint correspondence, and the certified partial polynomial
+subset above. With explicit intersection settings it
 also recovers intersection endpoint parameters from chart points or verified
-chord-plane solutions, retaining chart units and work limits. No partial
-spline inversion or additional turns are guessed. Ambiguous intervals still
+chord-plane solutions, retaining chart units and work limits. No uncertified
+spline parameters or additional turns are guessed. Ambiguous intervals still
 require caller input; an explicit empty interval span retains the complete
 coverage requirement.
 
@@ -1389,8 +1410,11 @@ the final 3D residual must meet the unchanged caller tolerance, including zero.
 Finite seeds are validated and retain the direct principal-branch formulas.
 
 Open nonrational clamped 3D B-spline sections now support inversion when the
-control polygon has a strictly monotone projection perpendicular to the sweep.
-This proves a unique profile parameter without requiring a planar section.
+projected derivative is certified strictly positive perpendicular to the
+sweep. Positive control differences are sufficient; bounded Bernstein
+subdivision additionally handles single Bezier spans up to degree seven with
+mixed derivative-control signs. This proves a unique profile parameter without
+requiring a planar section.
 The solver preserves the source knot domain, bisects using the original
 B-spline evaluator (at most 130 curve samples), then recovers signed sweep
 displacement and checks the full 3D residual with the caller's tolerance.
