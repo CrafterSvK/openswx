@@ -27,7 +27,12 @@ long double Dot(const Vector& a, const Vector& b) {
 long double Length(const Vector& a) { return std::hypot(a[0], a[1], a[2]); }
 Vector3 Control(const NurbsCurveGeometry& curve, std::size_t i) {
   const auto& values = curve.controls.values;
-  return {values[3 * i], values[3 * i + 1], values[3 * i + 2]};
+  if (!curve.controls.rational)
+    return {values[3 * i], values[3 * i + 1], values[3 * i + 2]};
+  const auto weight = static_cast<long double>(values[4 * i + 3]);
+  return {static_cast<double>(values[4 * i] / weight),
+          static_cast<double>(values[4 * i + 1] / weight),
+          static_cast<double>(values[4 * i + 2] / weight)};
 }
 Result<bool> CertifyBezierProjection(const NurbsCurveGeometry& curve,
                                      const Vector& direction) {
@@ -81,6 +86,77 @@ Result<bool> CertifyBezierProjection(const NurbsCurveGeometry& curve,
   }
   return Result<bool>::Ok(true);
 }
+uint32_t Binomial(unsigned n, unsigned k) {
+  uint32_t result = 1;
+  for (unsigned i = 1; i <= k; ++i) result = result * (n + 1 - i) / i;
+  return result;
+}
+Result<bool> CertifyRationalProjection(const NurbsCurveGeometry& curve,
+                                       const Vector& direction) {
+  using Return = Result<bool>;
+  const auto degree = curve.axis.degree;
+  if (degree > 7) return Return::Ok(false);
+  // A clamped spline with every interior multiplicity equal to its degree is
+  // already a chain of Bezier pieces. No knot insertion or fitting is needed.
+  const auto spans = curve.axis.knots.size() - 1;
+  for (std::size_t i = 1; i < spans; ++i)
+    if (curve.axis.multiplicities[i] != degree) return Return::Ok(false);
+  constexpr uint64_t kMaxCertificateWork = 1000000;
+  const uint64_t work_per_span = (degree + 1) * (degree + 1);
+  if (spans > kMaxCertificateWork / work_per_span)
+    return Return::Err({ErrorCode::kResourceLimit, 0,
+                        "Rational spline projection exceeds its work limit"});
+  const auto& values = curve.controls.values;
+  for (std::size_t span = 0; span < spans; ++span) {
+    std::array<long double, 8> projected{}, weights{};
+    long double max_weight = 0;
+    for (unsigned i = 0; i <= degree; ++i)
+      max_weight = std::max(
+          max_weight,
+          static_cast<long double>(values[4 * (span * degree + i) + 3]));
+    const auto first = 4 * span * degree;
+    const long double first_weight = values[first + 3];
+    const Vector origin{values[first] / first_weight,
+                        values[first + 1] / first_weight,
+                        values[first + 2] / first_weight};
+    long double scale = Length(origin);
+    for (unsigned i = 0; i <= degree; ++i) {
+      const auto at = 4 * (span * degree + i);
+      const long double weight = values[at + 3];
+      Vector point{values[at] / weight, values[at + 1] / weight,
+                   values[at + 2] / weight};
+      scale = std::max(scale, Length(point));
+      for (unsigned k = 0; k < 3; ++k) point[k] -= origin[k];
+      weights[i] = weight / max_weight;
+      projected[i] = Dot(point, direction) * weights[i];
+      if (!std::isfinite(projected[i]) || !(weights[i] > 0))
+        return Return::Ok(false);
+    }
+    // For C=A/W, the sign of projected C' is the sign of A'W-AW'.
+    // Its Bernstein product coefficients cover the entire original knot span;
+    // positive weights make W^2 positive. Degree and operation counts are
+    // bounded. The absolute-coordinate margin also covers cancellation in
+    // dehomogenization and the local translation used to form A.
+    std::array<long double, 14> numerator{};
+    const unsigned product_degree = 2 * degree - 1;
+    for (unsigned i = 0; i < degree; ++i)
+      for (unsigned j = 0; j <= degree; ++j) {
+        const auto factor = static_cast<long double>(degree) *
+                            Binomial(degree - 1, i) * Binomial(degree, j) /
+                            Binomial(product_degree, i + j);
+        numerator[i + j] +=
+            factor * ((projected[i + 1] - projected[i]) * weights[j] -
+                      (weights[i + 1] - weights[i]) * projected[j]);
+      }
+    const auto margin = 1024 * (product_degree + 1) *
+                        std::numeric_limits<long double>::epsilon() * scale;
+    if (!std::isfinite(margin)) return Return::Ok(false);
+    for (unsigned k = 0; k <= product_degree; ++k)
+      if (!std::isfinite(numerator[k]) || !(numerator[k] > margin))
+        return Return::Ok(false);
+  }
+  return Return::Ok(true);
+}
 Result<Vector> MonotoneProjection(const NurbsCurveGeometry& curve) {
   auto direction = Difference(Control(curve, curve.axis.control_count - 1),
                               Control(curve, 0));
@@ -102,8 +178,9 @@ Result<bool> CertifyMonotoneNurbsProjection(
   const auto domain = NurbsCurveDomain(curve);
   if (!domain.ok()) return Result<bool>::Err(domain.error());
   const auto& axis = curve.axis;
-  if (curve.controls.rational || curve.controls.dimension != 3 || axis.closed ||
-      axis.periodic || axis.multiplicities.front() != axis.degree + 1 ||
+  if (curve.controls.dimension != (curve.controls.rational ? 4 : 3) ||
+      axis.closed || axis.periodic ||
+      axis.multiplicities.front() != axis.degree + 1 ||
       axis.multiplicities.back() != axis.degree + 1)
     return Result<bool>::Ok(false);
   const auto length = Length(direction);
@@ -111,6 +188,8 @@ Result<bool> CertifyMonotoneNurbsProjection(
     return Result<bool>::Err({ErrorCode::kInvalidOptions, 0,
                               "Invalid monotone spline projection direction"});
   for (auto& coordinate : direction) coordinate /= length;
+  if (curve.controls.rational)
+    return CertifyRationalProjection(curve, direction);
   for (std::size_t i = 1; i < curve.axis.control_count; ++i) {
     const auto step = Difference(Control(curve, i), Control(curve, i - 1));
     // Nonrational B-spline derivative controls are positive multiples of
@@ -138,12 +217,12 @@ Result<double> InvertMonotoneNurbsCurve(const NurbsCurveGeometry& curve,
   const auto domain = NurbsCurveDomain(curve);
   if (!domain.ok()) return Return::Err(domain.error());
   const auto& axis = curve.axis;
-  if (curve.controls.rational || curve.controls.dimension != 3 || axis.closed ||
-      axis.periodic || axis.multiplicities.front() != axis.degree + 1 ||
+  if (curve.controls.dimension != (curve.controls.rational ? 4 : 3) ||
+      axis.closed || axis.periodic ||
+      axis.multiplicities.front() != axis.degree + 1 ||
       axis.multiplicities.back() != axis.degree + 1)
-    return Return::Err(
-        Unsupported("Partial spline inversion requires open nonrational "
-                    "clamped 3D controls"));
+    return Return::Err(Unsupported(
+        "Partial spline inversion requires open clamped 3D controls"));
   constexpr uint64_t kMaxWork = 32000000;
   constexpr unsigned kMaxSteps = 128;
   const uint64_t work = curve.controls.values.size() + axis.knots.size() +

@@ -199,8 +199,13 @@ struct FinGeometryEvaluation {
 /// (depth 16, one million averaging steps). Bisection uses at most 130 curve
 /// evaluations per endpoint and a 32-million-unit work estimate; the original
 /// knot units and caller 3D membership tolerance are preserved. No closest-point
-/// claim or parameter wrapping is made. Rational, periodic, unclamped, SP and
-/// uncertified partial curves still require explicit directed intervals.
+/// claim or parameter wrapping is made. Open clamped rational 3D curves up to
+/// degree seven additionally support piecewise-Bezier knots: each interior
+/// multiplicity equals the degree. Strictly positive Bernstein coefficients
+/// of A'W-AW' certify the weighted projection, with a one-million-unit proof
+/// budget (XT 5.2.1.4: B_CURVE, p. 38). Controls and weights remain unchanged.
+/// Other rational layouts, periodic, unclamped, SP and uncertified partial
+/// curves still require explicit directed intervals.
 ///
 /// @see @ref xt_face "XT 4.3.6: Face (p. 28)", @ref xt_halfedge "XT 4.3.8:
 /// Halfedge (p. 29)", @ref xt_attachment "XT 5.3.4.1: Attaching geometry to

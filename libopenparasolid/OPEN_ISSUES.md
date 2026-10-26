@@ -20,7 +20,7 @@ membership. Advancing one stage does not establish success at the next.
 | P1 | General non-circular intersection curves | Open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
 | P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
-| P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Rational, periodic, unclamped, SP and uncertified projections remain explicit. Two original native trimmed-prism regressions cover the new subset. |
+| P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Rational piecewise-Bezier curves up to degree seven now use an additional positive Bernstein numerator certificate; an original native rational trim coupon binds completely. Other rational layouts, periodic, unclamped, SP and uncertified projections remain explicit. |
 | P2 | Oblique spherical cuts | Extended for native SPHERE caps and coaxial bands: whole-support and circle-frame error bounds consume the unchanged tolerance before existing profile/winding checks. An equivalent-pole synthetic fixture is compared with an original native sphere cap; the native saved file itself was already supported. Noncoaxial cuts remain open. |
 | P2 | Torus sectors bounded by complete meridians | Extended for regular ring supports: two whole-circle/profile certificates and opposite winding select minor or major azimuth sectors. Original native 90°/270° revolutions now export completely and have zero two-way solid differences against native STEP. Partial meridians and general contours remain open. |
 | P2 | Negative-major-radius torus branches | Open. Valid XT lemon branches require an exact STEP support/normal/trim equivalence proof; changing the radius sign or applying the ring certificate is insufficient. |
@@ -58,6 +58,36 @@ checks. A native STEP reference may itself approximate intersection edges;
 record that discrepancy against an independent geometric oracle rather than
 silently relaxing a geometric proof. Private issue CAD and derived artifacts
 stay outside both repositories. Authentication headers are never captured.
+
+### Spring-shaped parts and rational intervals
+
+A local confidential tension-spring investigation separates three boundaries:
+its selected configuration partition contains a complete decoded solid with
+four rational B-spline surfaces and rational spatial edges, rather than only
+an analytic HELIX form. HELIX_SU_FORM/HELIX_CU_FORM auxiliary records are decoded,
+but missing analytic helix reconstruction alone does not explain this case.
+The old first failure was partial rational curve inversion. The bounded
+piecewise-Bezier certificate now advances beyond that edge without changing
+geometry or tolerance. A subsequent stored trim endpoint still differs from
+its evaluated intersection by slightly more than the caller tolerance; it
+remains rejected. General rational B_SURF trimming/serialization is another
+independent STEP limitation. No whole-spring export success is claimed.
+
+Private investigation files and native references stay outside the repository.
+The independent MIT native rational coupon in
+`openswx-testdata/verification/rational-trim-001` reproduces the reader boundary:
+it now binds all five faces, but STEP export still rejects the rational sweep.
+Original synthetic spatial rational tests also make two turns in XY while
+rising in Z; these are rational arcs with monotone height, not fitted or exact
+constant-pitch helices. They exercise the missing branch certificate without
+copying any private spring geometry.
+
+Next work: establish source-tolerance/pcurve correspondence for the rejected
+trim endpoint, certify rational/periodic surface trim regions, then serialize
+original weighted B-spline surfaces and curves with independent native whole-
+body references. Supporting an auxiliary helix record does not substitute for
+these steps. Internal wire/sheet payloads must not be promoted to a complete
+spring merely because they can be exported or displayed.
 
 ## Historical corpus evidence
 

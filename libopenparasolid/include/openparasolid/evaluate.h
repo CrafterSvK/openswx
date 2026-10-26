@@ -250,7 +250,12 @@ struct SurfaceParameterSeed {
 /// repeated interior knots. At most
 /// 130 curve samples and two surface samples are used, with a 32,000,000
 /// estimated work-unit limit; exhausted budgets return kResourceLimit.
-/// Rational, closed, periodic and uncertified sections remain unsupported.
+/// Rational piecewise-Bezier sections up to degree seven use a positive
+/// Bernstein certificate for A'W-AW' on every span, with at most one million
+/// estimated proof operations. All interior multiplicities must equal the
+/// degree; original homogeneous controls/weights remain unchanged (XT 5.2.1.4:
+/// B_CURVE, p. 38; 5.2.2.10: Swept_surf, p. 67). Other rational layouts, closed,
+/// periodic and uncertified sections remain unsupported.
 /// Finite seeds do not change this unique branch. The final 3D membership
 /// residual uses the caller's unchanged tolerance; no closest-point claim is
 /// made. Other swept profiles remain unsupported.

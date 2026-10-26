@@ -297,7 +297,17 @@ TEST(ParasolidSweptSurface,
     Swept(f, bad == 3 ? 99 : 1, bad == 4 ? Vector3{0, 0, 2} : Vector3{1, 0, 0});
     if (bad == 0 || bad == 3 || bad == 4) Line(f);
     if (bad == 1) Conic(f, false);
-    if (bad == 2) f.Spline(true);
+    if (bad == 2) {
+      f.Spline(true);
+      for (auto& node : f.report.nodes) {
+        if (node.index != 2) continue;
+        const auto& fields =
+            f.report.schemas[node.schema_index].definition.fields;
+        for (auto& field : node.fields)
+          if (fields[field.definition_index].name == "closed")
+            field.values = {true};
+      }
+    }
     const auto model = ModelBuilder::Build(f.report);
     ASSERT_TRUE(model.ok());
     const auto inverse =
@@ -306,6 +316,28 @@ TEST(ParasolidSweptSurface,
     EXPECT_EQ(inverse.error().code, bad == 1 || bad == 2
                                         ? ErrorCode::kUnsupportedFormat
                                         : ErrorCode::kInvalidRecord);
+  }
+}
+TEST(ParasolidSweptSurface,
+     InvertsCertifiedRationalSectionsWithoutChangingWeights) {
+  for (const auto direction : {Vector3{0, 0, 1}, Vector3{0, .6, .8}}) {
+    ModelFixture f;
+    Swept(f, 1, direction);
+    f.Spline(true);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    for (double u : {0., .125, .5, .875, 1.})
+      for (double v : {-2., 0., .75}) {
+        const Vector3 point{2 * u / (1 + 2 * u), 1 + direction.y * v,
+                            (2 + 2 * u) / (1 + 2 * u) + direction.z * v};
+        const auto inverse =
+            InvertSurface(model.value(), NodeId{20}, point, 1e-12);
+        ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+        EXPECT_NEAR(inverse.value().u, u, 1e-12);
+        EXPECT_NEAR(inverse.value().v, v, 1e-12);
+      }
+    EXPECT_FALSE(
+        InvertSurface(model.value(), NodeId{20}, {.5, 1.01, 1.5}, 1e-12).ok());
   }
 }
 TEST(ParasolidSweptSurface, InversionRejectsNonfiniteRequestsAndParameters) {

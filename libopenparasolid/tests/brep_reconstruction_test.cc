@@ -1940,7 +1940,7 @@ ModelFixture SplineFace(bool on_surface, bool rational = false,
   return f;
 }
 TEST(ParasolidPartialWireBinding,
-     OverridesPartialRationalSplineAndInfersOtherWires) {
+     InfersPartialRationalSplineAndRetainsExplicitOverrides) {
   auto f = TwoWireBody(WireFromFace(SplineFace(false, true)));
   for (auto& node : f.report.nodes) {
     if (node.index == 201) node.fields[0].values = {.5, 0., 0.};
@@ -1950,9 +1950,14 @@ TEST(ParasolidPartialWireBinding,
   const auto model = ModelBuilder::Build(f.report);
   ASSERT_TRUE(model.ok());
   const WireParameterInterval overrides[]{{NodeId{2}, -2, .5}};
-  EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, 1e-12).ok());
+  const auto automatic = BindBodyWires(model.value(), NodeId{1}, 1e-12);
+  ASSERT_TRUE(automatic.ok()) << automatic.error().message;
+  ASSERT_EQ(automatic.value().wires.size(), 2);
+  EXPECT_EQ(automatic.value().wires[0].start, -2);
+  EXPECT_EQ(automatic.value().wires[0].end, .5);
   EXPECT_FALSE(BindBodyWires(model.value(), NodeId{1}, overrides, 1e-12).ok());
-  EXPECT_FALSE(BindBodyWiresWithOverrides(model.value(), NodeId{1}, {}, 1e-12).ok());
+  EXPECT_TRUE(
+      BindBodyWiresWithOverrides(model.value(), NodeId{1}, {}, 1e-12).ok());
   const auto result = BindBodyWiresWithOverrides(model.value(), NodeId{1}, overrides, 1e-12);
   ASSERT_TRUE(result.ok()) << result.error().message;
   ASSERT_EQ(result.value().wires.size(), 2);

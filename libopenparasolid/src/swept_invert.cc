@@ -74,8 +74,8 @@ Result<Parameters> InvertConic(Vector3 center, Vector3 normal, Vector3 x_axis,
   return Result<Parameters>::Ok(
       {std::atan2(sine, cosine), Dot(q, Cross(x, y)) / determinant});
 }
-// A strictly increasing projection of the control polygon proves that the
-// nonrational spline has exactly one projected preimage on its knot domain.
+// A certified strictly positive projection derivative proves that the spline
+// has exactly one projected preimage on its original knot domain.
 // No profile-plane assumption is needed; the final 3D residual tests
 // membership.
 Result<Parameters> InvertSpline(const NurbsCurveGeometry& curve, Vector3 sweep,
@@ -83,11 +83,12 @@ Result<Parameters> InvertSpline(const NurbsCurveGeometry& curve, Vector3 sweep,
   const auto domain = NurbsCurveDomain(curve);
   if (!domain.ok()) return Result<Parameters>::Err(domain.error());
   const auto& axis = curve.axis;
-  if (curve.controls.rational || curve.controls.dimension != 3 || axis.closed ||
-      axis.periodic || axis.multiplicities.front() != axis.degree + 1 ||
+  if (curve.controls.dimension != (curve.controls.rational ? 4 : 3) ||
+      axis.closed || axis.periodic ||
+      axis.multiplicities.front() != axis.degree + 1 ||
       axis.multiplicities.back() != axis.degree + 1)
     return Result<Parameters>::Err(
-        Error("Swept spline inversion requires an open nonrational clamped 3D "
+        Error("Swept spline inversion requires an open clamped 3D "
               "section",
               ErrorCode::kUnsupportedFormat));
   constexpr uint64_t kMaxWork = 32000000;
@@ -100,7 +101,12 @@ Result<Parameters> InvertSpline(const NurbsCurveGeometry& curve, Vector3 sweep,
               ErrorCode::kResourceLimit));
   const auto control = [&](std::size_t i) -> Vector3 {
     const auto& values = curve.controls.values;
-    return {values[3 * i], values[3 * i + 1], values[3 * i + 2]};
+    if (!curve.controls.rational)
+      return {values[3 * i], values[3 * i + 1], values[3 * i + 2]};
+    const auto weight = static_cast<long double>(values[4 * i + 3]);
+    return {static_cast<double>(values[4 * i] / weight),
+            static_cast<double>(values[4 * i + 1] / weight),
+            static_cast<double>(values[4 * i + 2] / weight)};
   };
   const auto origin = control(0);
   const auto direction = Components(sweep);

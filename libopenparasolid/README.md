@@ -167,11 +167,36 @@ Each endpoint is recovered by at most 130 source-curve evaluations in original
 knot units, with a 32-million-unit work estimate and a final 3D residual check
 at the unchanged caller tolerance. This is a unique projected candidate, not
 a general closest-point query. Folded/uncertified curves, exhausted budgets
-and off-curve vertices remain explicit errors. Partial rational, periodic,
-unclamped and SP curves still need explicit intervals. Full-domain matching
+and off-curve vertices remain explicit errors. Rational recovery uses the
+additional subset below; periodic, unclamped and SP curves still need explicit
+intervals. Full-domain matching
 and caller overrides retain their established behavior. Original native trim
 coupons, analytic oracles and remaining boundaries are recorded in
 [open issues](OPEN_ISSUES.md#partial-polynomial-spline-intervals).
+
+### Certified rational piecewise-Bezier domains
+
+Open clamped rational 3D B_CURVEs can recover partial intervals when every
+interior knot has multiplicity equal to the degree (a chain of Bezier pieces)
+and the degree is at most seven. For the normalized endpoint-chord projection,
+each span certifies that all Bernstein coefficients of `A'W-AW'` are strictly
+positive beyond an arithmetic margin, where `A` is the projected homogeneous
+numerator and `W` the positive weight polynomial. This establishes a unique
+branch over the whole domain, including spatial curves with repeated XY turns
+and increasing height. Source homogeneous coordinates, weights and knot units
+remain unchanged. The certificate rescales weights only in local proof storage;
+it does not fit a curve or assert an exact constant-pitch helix.
+
+The certificate is bounded by one million estimated product/control operations.
+The existing 130-sample bisection, 32-million-unit search estimate and unchanged
+3D membership tolerance still apply. The same rational certificate supports
+transverse inversion of SWEPT_SURF sections. A nonpositive coefficient may
+leave a valid curve uncertified; there is no sampled or Newton-only fallback.
+Other knot multiplicities, periodic/closed curves and SP parameter curves
+remain separate tasks. The original native rational trimmed-prism fixture in
+`openswx-testdata/verification/rational-trim-001` now binds its entire body,
+but deliberately still fails whole-body STEP export at the polynomial-sweep
+restriction. Reader binding does not imply general rational surface export.
 
 ## Binding all faces of a body
 
@@ -1419,8 +1444,9 @@ The solver preserves the source knot domain, bisects using the original
 B-spline evaluator (at most 130 curve samples), then recovers signed sweep
 displacement and checks the full 3D residual with the caller's tolerance.
 Work is capped at 32,000,000 estimated units; exhaustion returns
-`kResourceLimit`. Rational, closed, periodic, unclamped and uncertified
-projections remain unsupported. Finite seeds do not alter the unique branch.
+`kResourceLimit`. Rational piecewise-Bezier sections up to degree seven use
+the positive weighted-derivative certificate described above. Other rational
+layouts, closed, periodic, unclamped and uncertified projections remain unsupported. Finite seeds do not alter the unique branch.
 General closest-point projection remains unsupported. The sibling
 `libopenswstep` can serialize certified polynomial rectangular sweep patches;
 its supported trim subset is separate from reader inversion.
