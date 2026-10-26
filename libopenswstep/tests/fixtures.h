@@ -2125,6 +2125,16 @@ inline ModelFixture EllipticDiskHole() {
       true, 10000);
   return f;
 }
+// The exact inner conic fits, while its axis-aligned rectangle escapes.
+inline ModelFixture TightConicHole(bool elliptic = false,
+                                   double outer_radius = 0) {
+  ConicLoopSpec outer;
+  outer.major = outer_radius > 0 ? outer_radius : elliptic ? 2.125 : 1.25;
+  auto f = ConicSheet({outer});
+  auto hole = elliptic ? EllipticProfile(SplitCircle()) : SplitCircle();
+  AppendFaceLoops(f, ClockwiseHole(std::move(hole)), 300, false, 10000);
+  return f;
+}
 inline ModelFixture ObliqueCylinder(double lower_slope = .2,
                                     double upper_slope = 0,
                                     bool named_seams = false,

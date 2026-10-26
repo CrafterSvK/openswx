@@ -31,6 +31,11 @@ def quarter_circle_angle(u):
     return math.atan2(2*w*u*(1-u)+u*u, (1-u)**2+2*w*u*(1-u))
 TRIMMED_CIRCLE_LENGTH = quarter_circle_angle(.8)-quarter_circle_angle(.1)
 CASES = {
+    "tight-circle-hole": (5,5,1,0,"area",.5625*math.pi),
+    "tight-circle-hole-oblique": (5,5,1,0,"area",.5625*math.pi),
+    "tight-ellipse-hole": (5,5,1,0,"area",2.515625*math.pi),
+    "tight-ellipse-hole-oblique": (5,5,1,0,"area",2.515625*math.pi),
+    "tight-spline-hole": (6,6,1,0,"area",42-4/3),
     "spindle-solid": (2,3,3,1,"volume",math.pi*(.25+math.pi/4+2/3)),
     "spindle-solid-seams": (2,3,3,1,"volume",math.pi*(.25+math.pi/4+2/3)),
     "spindle-small-major": (2,3,3,1,"volume",math.pi*(.0625**2+.03125*math.pi+2/3)),

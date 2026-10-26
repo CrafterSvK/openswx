@@ -309,6 +309,17 @@ int main(int argc, char** argv) {
           {"oblique-convex-curved-holes",
            test::RotateAndTranslate(test::ConvexCurvedHoles(true, true))},
           {"circle-outer-curved-hole", test::CircularOuterCurvedHole()},
+          {"tight-circle-hole", test::TightConicHole()},
+          {"tight-circle-hole-oblique",
+           test::RotateAndTranslate(test::TightConicHole())},
+          {"tight-ellipse-hole", test::TightConicHole(true)},
+          {"tight-ellipse-hole-oblique",
+           test::RotateAndTranslate(test::TightConicHole(true))},
+          {"tight-spline-hole", [] {
+             test::SplineHoleOptions hole;
+             hole.top = 1.5;
+             return test::WithSplineHole(test::QuadraticSplineFace(), hole);
+           }()},
           {"segment-hole", test::CircularSegmentHole()},
           {"segment-hole-seam", test::CircularSegmentHole(false, true)},
           {"major-segment-hole", test::CircularSegmentHole(true)},

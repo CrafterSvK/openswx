@@ -215,8 +215,10 @@ struct StepDocument {
 /// quadratic/cubic B_CURVE edges. Restricted spline control hulls and analytic
 /// conic extrema provide inflated enclosing rectangles that conservatively
 /// certify containment and separation; only original curves and
-/// analytic areas are exported. Uncertified envelopes return unsupported-format
-/// errors, even for some valid close contours. Each curved edge consumes one
+/// analytic areas are exported. If rectangles cannot certify separation or
+/// containment, the independent simple-region path retries all original loops
+/// using bounded Bezier hull subdivision under the same work budget. Only
+/// uncertified actual contours remain unsupported. Each curved edge consumes one
 /// envelope check plus its corner check; spline holes additionally charge one
 /// check per retained control and all restriction/curve-certificate work.
 /// Original and envelope-augmented mixed-boundary checks both share the budget.

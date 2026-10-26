@@ -319,11 +319,17 @@ curve certificate, control envelope and final source-edge serialization.
 The envelope test is conservative: geometrically disjoint holes may have
 overlapping rectangles, or a valid curved hole's rectangle may leave its outer
 boundary. Spline controls may leave that boundary even when the actual curve
-fits. Such cases return an explicit unsupported-format error rather than
-claiming a validity certificate. Curved outer contours with multi-edge curved
-holes, nonconvex curved holes, single-edge elliptical holes and elliptic outer arcs
-with holes remain unsupported. Existing hole-free elliptic contours and
-separate polygon/full-circle boundary subsets retain their established checks.
+fits. When this fast certificate returns unsupported-format, the exporter
+tries the independent simple planar region certificate on all original loops.
+Bounded Bezier hull subdivision can prove containment and separation for tight
+circular/elliptic holes and polynomial spline holes whose original control
+hulls cross the outer boundary. Full-circle loops participate in that proof;
+original loop order, curves and analytic area are preserved. Both attempts
+consume the same caller work budget. Exhausted budgets and other source errors
+are propagated; unresolved containment remains explicitly unsupported. No
+length tolerance is increased and no validation chords replace STEP curves.
+See the Parasolid XT documentation, Chapter 5, geometric definitions of Circle,
+Ellipse and B-curve, for the source curve terminology.
 
 The separate single-edge conic-loop subset requires a complete circle or
 ellipse per loop. The exporter checks the maximum plane residual over the entire analytic curve, not

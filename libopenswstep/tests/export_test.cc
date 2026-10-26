@@ -466,8 +466,8 @@ TEST(OpenSwStep, BoundsSplineHoleEnvelopeAndRestrictionWork) {
       EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
     }
 }
-TEST(OpenSwStep, RejectsSplineHoleCrossingsNestingAndUncertifiedEnvelopes) {
-  for (double top : {.5, 1.5}) {
+TEST(OpenSwStep, RejectsSplineHoleCrossingsAndNesting) {
+  for (double top : {.5, 1.}) {
     test::SplineHoleOptions options;
     options.top = top;
     const auto fixture =
@@ -2618,11 +2618,9 @@ TEST(OpenSwStep, ChecksCompleteEllipseHoleExtremaAndConservativeSeparation) {
   test::AppendFaceLoops(
       close, test::ClockwiseHole(test::EllipticProfile(test::SplitCircle())),
       300, false, 10000);
-  const auto uncertified = Export(close);
-  ASSERT_FALSE(uncertified.ok());
-  EXPECT_EQ(uncertified.error().code, ErrorCode::kUnsupportedFormat);
-  EXPECT_NE(uncertified.error().message.find("envelopes cannot certify"),
-            std::string::npos);
+  const auto certified = Export(close);
+  ASSERT_TRUE(certified.ok()) << certified.error().message;
+  EXPECT_EQ(certified.value().statistics.edges, 5);
 }
 TEST(OpenSwStep, RetainsEllipseHoleProfileValidationAndWorkLimits) {
   auto options = Options();
@@ -2720,18 +2718,15 @@ TEST(OpenSwStep, RejectsUncertifiedCurvedHoleEnvelopeSeparation) {
     EXPECT_NE(result.error().message.find("envelopes cannot certify"),
               std::string::npos);
   }
-  // The circles are disjoint, but the inner circle's enclosing rectangle
-  // cannot fit inside the outer disk. This conservative case stays unsupported.
-  test::ConicLoopSpec outer;
-  outer.major = 1.2;
-  auto close = test::ConicSheet({outer});
-  test::AppendFaceLoops(close, test::ClockwiseHole(test::SplitCircle()), 300,
-                        false, 10000);
-  const auto result = Export(close);
-  ASSERT_FALSE(result.ok());
-  EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
-  EXPECT_NE(result.error().message.find("envelopes cannot certify"),
-            std::string::npos);
+  // Actual touching, crossing and exterior conics must still be rejected.
+  for (const bool elliptic : {false, true}) {
+    const double radius = elliptic ? 2 : 1;
+    for (const double outer : {radius, radius - .1, radius + 1e-8}) {
+      const auto result = Export(test::TightConicHole(elliptic, outer));
+      ASSERT_FALSE(result.ok());
+      EXPECT_EQ(result.error().code, ErrorCode::kUnsupportedFormat);
+    }
+  }
   auto mixed = test::ConvexCurvedHoles();
   test::ConicLoopSpec disk;
   disk.center = {2, 1.5, 0};
@@ -2741,6 +2736,32 @@ TEST(OpenSwStep, RejectsUncertifiedCurvedHoleEnvelopeSeparation) {
   const auto nested = Export(mixed);
   ASSERT_FALSE(nested.ok());
   EXPECT_EQ(nested.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(OpenSwStep, CertifiesCurvedHolesBeyondRectangularEnvelopes) {
+  for (const bool elliptic : {false, true}) {
+    const auto f = test::TightConicHole(elliptic);
+    for (const auto& source : {f, test::RotateAndTranslate(f)}) {
+      const auto result = Export(source);
+      ASSERT_TRUE(result.ok()) << result.error().message;
+      EXPECT_EQ(result.value().statistics.faces, 1);
+      EXPECT_EQ(result.value().statistics.edges, 5);
+      CheckReferences(result.value());
+    }
+    const auto bytes = test::Serialize(f);
+    ASSERT_TRUE(
+        ExportParasolid(bytes.bytes, NodeId{1}, Options(), &bytes.catalog)
+            .ok());
+    auto options = Options();
+    options.max_polygon_checks = 100;
+    const auto limited = Export(f, options);
+    ASSERT_FALSE(limited.ok());
+    EXPECT_EQ(limited.error().code, ErrorCode::kResourceLimit);
+  }
+  test::SplineHoleOptions hole;
+  hole.top = 1.5;  // Curve maximum is 1, but its original control reaches 2.
+  const auto result =
+      Export(test::WithSplineHole(test::QuadraticSplineFace(), hole));
+  ASSERT_TRUE(result.ok()) << result.error().message;
 }
 TEST(OpenSwStep, BoundsCurvedHoleEnvelopeWorkAndPreservesSourceErrors) {
   auto options = Options();

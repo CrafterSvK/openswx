@@ -657,9 +657,18 @@ Result<bool> BodyWriter::PrepareCurvedPlanarFace(FaceData& face) {
     const auto region = ValidateConvexCurvedHoles(
         curved_loops, polygons, holes, *face.plane, face.natural_sense,
         options_.tolerance, polygon_checks_remaining_);
-    if (!region.ok())
+    if (!region.ok()) {
+      if (region.error().code == ErrorCode::kUnsupportedFormat) {
+        // A rectangular envelope can escape an outer circle even when the
+        // original curves are strictly contained. Certify the actual loops
+        // with bounded Bezier hull subdivision before rejecting the face.
+        const auto simple = PrepareSimplePlanarFace(face);
+        if (simple.ok() || simple.error().code != ErrorCode::kUnsupportedFormat)
+          return simple;
+      }
       return Result<bool>::Err(Error(face.source->face, region.error().code,
                                      region.error().message.c_str()));
+    }
     face.outer_loop = region.value().circular_outer
                           ? circle_indices[region.value().outer_loop]
                           : polygon_indices[region.value().outer_loop];
