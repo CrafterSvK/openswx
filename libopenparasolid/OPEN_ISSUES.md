@@ -21,7 +21,7 @@ membership. Advancing one stage does not establish success at the next.
 | P1 | General non-circular intersection curves | Open. Crossed cylinders, off-axis cone/cylinder pairs and off-axis sphere/torus pairs are not certified circles. The current sphere/plane circle recovery cannot represent them. The original native cross-bore coupon in `openswx-testdata/verification/cross-bore-001` is the first frozen benchmark; it binds but deliberately still fails whole-body STEP export. |
 | P2 | Multiple trim regions on one analytic support | Open. Separate cone sectors and cylinder trims with additional spline loops require an explicit UV-region certificate and per-region flux. Loop count alone does not establish outer/hole or disconnected-region roles. |
 | P2 | Non-rectangular or closed-profile spline sweeps | Open. The existing four-edge, translated polynomial-profile certificate does not cover full closed elliptic profiles or multiply trimmed sweeps. Exact support conversion and global trim certification are required together. |
-| P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Rational piecewise-Bezier curves up to degree seven now use an additional positive Bernstein numerator certificate; an original native rational trim coupon binds completely. Other rational layouts, periodic, unclamped, SP and uncertified projections remain explicit. |
+| P2 | Partially trimmed spline edge domains | Extended: open nonrational clamped 3D B_CURVEs with a certified positive endpoint-chord projection now recover partial intervals. Open clamped rational and polynomial curves up to degree seven now use local outward blossom extraction and positive Bernstein numerator subdivision for all valid interior multiplicities. An original native simple-knot rational cut prism binds and exports completely. Higher-degree rational, periodic, unclamped, SP and uncertified projections remain explicit. |
 | P2 | Oblique spherical cuts | Extended for native SPHERE caps and coaxial bands: whole-support and circle-frame error bounds consume the unchanged tolerance before existing profile/winding checks. An equivalent-pole synthetic fixture is compared with an original native sphere cap; the native saved file itself was already supported. Noncoaxial cuts remain open. |
 | P2 | Torus sectors bounded by complete meridians | Extended for regular ring supports: two whole-circle/profile certificates and opposite winding select minor or major azimuth sectors. Original native 90°/270° revolutions now export completely and have zero two-way solid differences against native STEP. Partial meridians and general contours remain open. |
 | P2 | Negative-major-radius torus branches | Open. Valid XT lemon branches require an exact STEP support/normal/trim equivalence proof; changing the radius sign or applying the ring certificate is insufficient. |
@@ -46,11 +46,27 @@ Recovery is deliberately narrower than a general spline inverse. It certifies
 one global monotone projection of an open, clamped, nonrational 3D curve, then
 bisects in original knot units and checks the candidate's full 3D residual.
 Each endpoint has at most 130 evaluations and a 32-million-unit work estimate.
-Single-span derivative refinement is limited to degree seven, depth 16 and one
-million averaging steps. Uncertified folds, off-curve vertices, exhausted
-budgets and ambiguous source branches remain explicit errors. Complete-domain
+Local span extraction and derivative refinement are limited to degree seven,
+depth 16 and one million estimated proof units. Uncertified folds, off-curve
+vertices, exhausted budgets and ambiguous source branches remain explicit errors. Complete-domain
 rational/unclamped binding and caller-supplied intervals retain their previous
-behavior; partial SP/rational/periodic/unclamped recovery is not implied.
+behavior; partial SP, higher-degree rational, periodic or unclamped recovery
+is not implied.
+
+The original native `verification/rational-spans-001` regression extends this
+proof to all valid interior multiplicities for open clamped curves up to degree
+seven, including rational curves. Source homogeneous controls and knots are
+never replaced: local blossom evaluations produce proof enclosures only.
+Outward interval products and bounded subdivision certify the entire rational
+derivative numerator. This also extends the polynomial fallback beyond a
+single Bezier span. Tests reject a narrow interior fold between ordinary sample
+points and verify all supported degrees against independent rational moments.
+The same certificate is reused for swept-surface inversion. A native five-face
+rational prism with one simple interior knot previously failed binding; it now
+exports completely with zero two-way solid differences against native STEP and
+matches independent piecewise rational volume and area integrals. Periodic,
+closed, unclamped, higher-degree rational and uncertified projections remain
+open. General non-circular intersection and B_SURF face export are separate.
 
 For each extension: reduce the failure to an original MIT construction, freeze
 native SLDPRT/Parasolid/STEP receipts plus native topology, add positive and

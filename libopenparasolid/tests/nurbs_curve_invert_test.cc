@@ -2,6 +2,7 @@
 // Copyright (c) 2026 openswx contributors
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <vector>
@@ -160,8 +161,7 @@ TEST(ParasolidSplineCurveInverse,
   EXPECT_FALSE(
       internal::InvertMonotoneNurbsCurve(source, {0, 1.001, 1}, 1e-7).ok());
 }
-TEST(ParasolidSplineCurveInverse,
-     RejectsRationalFoldsAndUncertifiedKnotLayouts) {
+TEST(ParasolidSplineCurveInverse, RejectsRationalFoldsAndUncertifiedDomains) {
   // The advertised maximum degree must certify a regular rational branch;
   // the next degree stays unsupported even though this particular curve is
   // monotone. For weights 1+i and Cartesian X=i, binomial moments give
@@ -171,7 +171,8 @@ TEST(ParasolidSplineCurveInverse,
     boundary.axis.degree = degree;
     boundary.axis.control_count = degree + 1;
     const auto endpoint_multiplicity = static_cast<uint16_t>(degree + 1);
-    boundary.axis.multiplicities = {endpoint_multiplicity, endpoint_multiplicity};
+    boundary.axis.multiplicities = {endpoint_multiplicity,
+                                    endpoint_multiplicity};
     boundary.controls.rational = true;
     boundary.controls.dimension = 4;
     boundary.controls.values.clear();
@@ -217,6 +218,148 @@ TEST(ParasolidSplineCurveInverse,
         internal::InvertMonotoneNurbsCurve(changed, {0, 1, 1}, 1e-12).ok())
         << bad;
   }
+}
+// This original cubic has a reversing control-polygon step, but its two
+// polynomial pieces have strictly positive derivatives. Rational weights keep
+// the source simple knot; the certificate must not change its representation.
+NurbsCurveGeometry SimpleKnotCurve(bool rational) {
+  NurbsCurveGeometry curve;
+  curve.axis.degree = 3;
+  curve.axis.control_count = 5;
+  curve.axis.knots = {-2, 0, 3};
+  curve.axis.multiplicities = {4, 1, 4};
+  curve.controls.dimension = rational ? 4 : 3;
+  curve.controls.rational = rational;
+  const std::array<double, 5> x{0, 1, .9, 2, 3};
+  const std::array<double, 5> weights{1, .8, 1.3, .9, 1.1};
+  for (unsigned i = 0; i < 5; ++i) {
+    const auto w = rational ? weights[i] : 1;
+    curve.controls.values.insert(curve.controls.values.end(), {x[i] * w, 0, 0});
+    if (rational) curve.controls.values.push_back(w);
+  }
+  return curve;
+}
+TEST(ParasolidSplineCurveInverse,
+     CertifiesSimpleKnotSpansAndPreservesOriginalData) {
+  for (const bool rational : {false, true}) {
+    const auto original = SimpleKnotCurve(rational);
+    for (const double scale : {1e-150, 1., 1e150}) {
+      auto curve = original;
+      if (rational)
+        for (auto& value : curve.controls.values) value *= scale;
+      const auto before = curve.controls.values;
+      const auto certificate =
+          internal::CertifyMonotoneNurbsProjection(curve, {1, 0, 0});
+      ASSERT_TRUE(certificate.ok()) << certificate.error().message;
+      ASSERT_TRUE(certificate.value()) << rational;
+      for (const double u : {-2., -1.75, -.1, 0., .001, 1., 2.9, 3.}) {
+        const auto sample = internal::EvaluateNurbsCurve(curve, u);
+        ASSERT_TRUE(sample.ok());
+        const auto inverse = internal::InvertMonotoneNurbsCurve(
+            curve, sample.value().position, 1e-12);
+        ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+        EXPECT_NEAR(inverse.value(), u, 1e-12);
+      }
+      EXPECT_EQ(curve.controls.values, before);
+      EXPECT_EQ(curve.axis.knots, original.axis.knots);
+      EXPECT_EQ(curve.axis.multiplicities, original.axis.multiplicities);
+      EXPECT_FALSE(
+          internal::InvertMonotoneNurbsCurve(curve, {1, 1e-4, 0}, 1e-7).ok());
+    }
+  }
+}
+TEST(ParasolidSplineCurveInverse,
+     RecoversEverySupportedDegreeAgainstIndependentRationalMoments) {
+  for (unsigned degree = 1; degree <= 7; ++degree) {
+    NurbsCurveGeometry curve;
+    curve.axis.degree = degree;
+    curve.axis.control_count = degree + 2;
+    curve.axis.knots = {2, 3.5, 7};
+    const auto end = static_cast<uint16_t>(degree + 1);
+    curve.axis.multiplicities = {end, 1, end};
+    curve.controls.rational = true;
+    curve.controls.dimension = 4;
+    // Start with homogeneous poles (i*(i+1), 0, 0, i+1). Insert t=.3 once;
+    // binomial moments still give the original rational function independently
+    // of the B-spline evaluator or certificate's blossom arithmetic.
+    for (unsigned i = 0; i <= degree + 1; ++i) {
+      const double x = i == 0 ? 0
+                       : i == degree + 1
+                           ? degree * (degree + 1.)
+                           : .7 * (i - 1.) * i + .3 * i * (i + 1.);
+      const double w = i == 0            ? 1
+                       : i == degree + 1 ? degree + 1.
+                                         : .7 * i + .3 * (i + 1.);
+      curve.controls.values.insert(curve.controls.values.end(), {x, 0, 0, w});
+    }
+    const auto before = curve.controls.values;
+    for (const double t : {.05, .3, .75, .95}) {
+      const double x =
+          (2 * degree * t + degree * (degree - 1) * t * t) / (1 + degree * t);
+      const auto inverse =
+          internal::InvertMonotoneNurbsCurve(curve, {x, 0, 0}, 1e-12);
+      ASSERT_TRUE(inverse.ok()) << degree << ": " << inverse.error().message;
+      EXPECT_NEAR(inverse.value(), 2 + 5 * t, 1e-12);
+    }
+    EXPECT_EQ(curve.controls.values, before);
+  }
+}
+TEST(ParasolidSplineCurveInverse,
+     RejectsNarrowInteriorFoldsBetweenOrdinarySamples) {
+  auto curve = SimpleKnotCurve(true);
+  curve.axis.knots = {0, .4, 1};
+  // X'(t)=(t-a)^2-d^2 is negative only within a 20-microparameter interval.
+  // The cubic is represented after one exact simple-knot insertion. Positive
+  // weights and a nonzero endpoint chord do not prove injectivity.
+  constexpr double a = .5003, d = .00001;
+  const std::array<double, 4> bezier{0, (a * a - d * d) / 3,
+                                     (2 * (a * a - d * d) - a) / 3,
+                                     1. / 3 - a + a * a - d * d};
+  const std::array<double, 5> poles{bezier[0], .6 * bezier[0] + .4 * bezier[1],
+                                    .6 * bezier[1] + .4 * bezier[2],
+                                    .6 * bezier[2] + .4 * bezier[3], bezier[3]};
+  curve.controls.values.clear();
+  for (auto x : poles)
+    curve.controls.values.insert(curve.controls.values.end(), {x, 0, 0, 1});
+  const auto certificate =
+      internal::CertifyMonotoneNurbsProjection(curve, {1, 0, 0});
+  ASSERT_TRUE(certificate.ok()) << certificate.error().message;
+  EXPECT_FALSE(certificate.value());
+  const auto inverse =
+      internal::InvertMonotoneNurbsCurve(curve, {.04, 0, 0}, 1e-12);
+  ASSERT_FALSE(inverse.ok());
+  EXPECT_EQ(inverse.error().code, ErrorCode::kUnsupportedFormat);
+}
+TEST(ParasolidSplineCurveInverse,
+     HandlesMixedMultiplicitiesAndRejectsAmbiguousDirections) {
+  auto curve = SimpleKnotCurve(true);
+  curve.axis.control_count = 7;
+  curve.axis.knots = {-7, -2, .125, 11};
+  curve.axis.multiplicities = {4, 1, 2, 4};
+  curve.controls.values.clear();
+  for (unsigned i = 0; i < 7; ++i) {
+    const auto w = 1. + .1 * i;
+    curve.controls.values.insert(curve.controls.values.end(),
+                                 {i * w, 0, 2 * i * w, w});
+  }
+  for (const auto direction :
+       {std::array<long double, 3>{1, 0, 2}, {0, 0, 1}}) {
+    const auto certificate =
+        internal::CertifyMonotoneNurbsProjection(curve, direction);
+    ASSERT_TRUE(certificate.ok()) << certificate.error().message;
+    EXPECT_TRUE(certificate.value());
+  }
+  for (const auto direction :
+       {std::array<long double, 3>{-1, 0, -2}, {0, 1, 0}}) {
+    const auto certificate =
+        internal::CertifyMonotoneNurbsProjection(curve, direction);
+    ASSERT_TRUE(certificate.ok());
+    EXPECT_FALSE(certificate.value());
+  }
+  const auto invalid =
+      internal::CertifyMonotoneNurbsProjection(curve, {0, 0, 0});
+  ASSERT_FALSE(invalid.ok());
+  EXPECT_EQ(invalid.error().code, ErrorCode::kInvalidOptions);
 }
 TEST(ParasolidSplineCurveInverse,
      BoundsRationalCertificateWorkBeforeSpanProcessing) {

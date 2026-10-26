@@ -157,10 +157,10 @@ coverage of the combined pipeline is listed under intersection binding below.
 
 Direct open, clamped, nonrational 3D B_CURVEs can additionally recover interior
 vertex parameters when an endpoint-chord projection proves global injectivity.
-Positive derivative controls provide the fast certificate. For a single Bezier
-span up to degree seven, bounded Bernstein subdivision can prove positivity
-even when one derivative control is negative. Its depth is limited to 16 and
-its averaging work to one million steps. The same certificate is reused for
+Positive derivative controls provide the fast certificate. For original knot
+spans up to degree seven, outward-rounded local blossom extraction and
+Bernstein subdivision can prove positivity even when a derivative control is
+negative. Depth is limited to 16 and estimated proof work to one million units. The same certificate is reused for
 transverse spline-sweep inversion.
 
 Each endpoint is recovered by at most 130 source-curve evaluations in original
@@ -174,31 +174,37 @@ and caller overrides retain their established behavior. Original native trim
 coupons, analytic oracles and remaining boundaries are recorded in
 [open issues](OPEN_ISSUES.md#partial-polynomial-spline-intervals).
 
-### Certified rational piecewise-Bezier domains
+### Certified rational spline domains
 
-Open clamped rational 3D B_CURVEs can recover partial intervals when every
-interior knot has multiplicity equal to the degree (a chain of Bezier pieces)
-and the degree is at most seven. For the normalized endpoint-chord projection,
-each span certifies that all Bernstein coefficients of `A'W-AW'` are strictly
-positive beyond an arithmetic margin, where `A` is the projected homogeneous
-numerator and `W` the positive weight polynomial. This establishes a unique
-branch over the whole domain, including spatial curves with repeated XY turns
-and increasing height. Source homogeneous coordinates, weights and knot units
-remain unchanged. The certificate rescales weights only in local proof storage;
-it does not fit a curve or assert an exact constant-pitch helix.
+Open clamped rational 3D B_CURVEs up to degree seven can recover partial
+intervals for all valid interior multiplicities, including simple knots. Each
+span's homogeneous Bernstein controls are enclosed by bounded local blossom
+evaluation using only its original active poles. The normalized projected
+numerator `A` and positive weight polynomial `W` give derivative numerator
+`A'W-AW'`. Outward-rounded interval Bernstein products and subdivision certify
+strict positivity over the entire original domain. Negative coefficient bounds
+alone are inconclusive; a whole-span proof is required. No geometric sampling
+or Newton-only fallback substitutes for that certificate.
 
-The certificate is bounded by one million estimated product/control operations.
-The existing 130-sample bisection, 32-million-unit search estimate and unchanged
-3D membership tolerance still apply. The same rational certificate supports
-transverse inversion of SWEPT_SURF sections. A nonpositive coefficient may
-leave a valid curve uncertified; there is no sampled or Newton-only fallback.
-Other knot multiplicities, periodic/closed curves and SP parameter curves
-remain separate tasks. The original native rational trimmed-prism fixture in
-`openswx-testdata/verification/rational-trim-001` now binds its entire body,
-and now exports the bounded rational sweep subset. Its earlier frozen
-unsupported STEP result remains historical evidence; current export checks
-are recorded in `verification/rational-sweep-001`. Reader binding still does
-not imply general rational surface export.
+Scratch weight normalization, translation, span extraction and subdivision
+never change the source homogeneous coordinates, weights, knots or parameters.
+Local extraction avoids repeated global insertion/copying. A one-million-unit
+budget charges source scratch, span arithmetic and subdivisions before work;
+exhaustion returns `kResourceLimit`. The existing 130-sample bisection,
+32-million-unit search estimate and unchanged final 3D membership tolerance
+still apply. The same certificate supports transverse SWEPT_SURF inversion.
+Uncertified folds, unresolved arithmetic, higher-degree rational, periodic,
+closed/unclamped and SP partial curves remain unsupported.
+
+The original native simple-knot prism in
+`openswx-testdata/verification/rational-spans-001` now binds and exports its
+complete five-face body. It retains five homogeneous controls, a simple cubic
+interior knot and a partial interval crossing that knot. The previous code
+rejected it; independent recipe integrals and native whole-body STEP solid
+differences verify the extension. The earlier piecewise-Bezier fixture in
+`verification/rational-trim-001` and its complete export verification in
+`verification/rational-sweep-001` remain unchanged. Binding does not imply
+support for arbitrary rational B_SURF trims or complete spring exports.
 
 ## Binding all faces of a body
 
@@ -1439,16 +1445,17 @@ Finite seeds are validated and retain the direct principal-branch formulas.
 Open nonrational clamped 3D B-spline sections now support inversion when the
 projected derivative is certified strictly positive perpendicular to the
 sweep. Positive control differences are sufficient; bounded Bernstein
-subdivision additionally handles single Bezier spans up to degree seven with
-mixed derivative-control signs. This proves a unique profile parameter without
+subdivision with outward local span extraction additionally handles open
+clamped splines up to degree seven with mixed derivative-control signs. This proves a unique profile parameter without
 requiring a planar section.
 The solver preserves the source knot domain, bisects using the original
 B-spline evaluator (at most 130 curve samples), then recovers signed sweep
 displacement and checks the full 3D residual with the caller's tolerance.
 Work is capped at 32,000,000 estimated units; exhaustion returns
-`kResourceLimit`. Rational piecewise-Bezier sections up to degree seven use
-the positive weighted-derivative certificate described above. Other rational
-layouts, closed, periodic, unclamped and uncertified projections remain unsupported. Finite seeds do not alter the unique branch.
+`kResourceLimit`. Rational sections up to degree seven with all valid interior
+multiplicities use the positive weighted-derivative certificate described
+above. Higher-degree rational, closed, periodic, unclamped and uncertified
+projections remain unsupported. Finite seeds do not alter the unique branch.
 General closest-point projection remains unsupported. The sibling
 `libopenswstep` can serialize certified polynomial rectangular sweep patches;
 its supported trim subset is separate from reader inversion.

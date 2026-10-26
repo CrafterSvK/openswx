@@ -2,6 +2,7 @@
 // Copyright (c) 2026 openswx contributors
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -50,17 +51,17 @@ void Conic(ModelFixture& f, bool ellipse, double radius = 2) {
 }
 void Spline(ModelFixture& f, std::vector<ScalarValue> controls,
             std::vector<ScalarValue> knots = {2., 5.},
-            std::vector<ScalarValue> multiplicities = {int64_t{4},
-                                                       int64_t{4}}) {
-  const auto count = static_cast<int64_t>(controls.size() / 3);
+            std::vector<ScalarValue> multiplicities = {int64_t{4}, int64_t{4}},
+            bool rational = false) {
+  const auto count = static_cast<int64_t>(controls.size() / (rational ? 4 : 3));
   const auto knot_count = static_cast<int64_t>(knots.size());
   f.Curve();
   f.Add(136, 2,
         {Integer("degree", 3, FieldType::kShort), Integer("n_vertices", count),
-         Integer("vertex_dim", 3, FieldType::kShort),
+         Integer("vertex_dim", rational ? 4 : 3, FieldType::kShort),
          Integer("n_knots", knot_count), ByteValue("knot_type", 2),
          Logical("periodic", false), Logical("closed", false),
-         Logical("rational", false), ByteValue("curve_form", 1),
+         Logical("rational", rational), ByteValue("curve_form", 1),
          Pointer("bspline_vertices", 3, 45), Pointer("knots", 4, 128),
          Pointer("knot_mult", 5, 127)});
   f.Add(45, 3, {Array("vertices", FieldType::kDouble, std::move(controls))});
@@ -157,6 +158,38 @@ TEST(ParasolidSweptSurface,
     ASSERT_TRUE(result.ok()) << result.error().message;
     EXPECT_NEAR(result.value().u, 2 + 3 * t, 1e-12);
     EXPECT_NEAR(result.value().v, .3, 1e-12);
+  }
+}
+TEST(ParasolidSweptSurface,
+     InvertsSimpleKnotProfilesWithoutChangingSourceUnits) {
+  for (const bool rational : {false, true}) {
+    ModelFixture f;
+    Swept(f, 1, {1, 0, 0});
+    const std::array<double, 5> y{0, 1, .9, 2, 3};
+    const std::array<double, 5> weights{1, .8, 1.3, .9, 1.1};
+    std::vector<ScalarValue> controls;
+    for (unsigned i = 0; i < 5; ++i) {
+      const auto w = rational ? weights[i] : 1;
+      controls.insert(controls.end(), {0., y[i] * w, 0.});
+      if (rational) controls.emplace_back(w);
+    }
+    Spline(f, std::move(controls), {2., 3.2, 5.},
+           {int64_t{4}, int64_t{1}, int64_t{4}}, rational);
+    const auto model = ModelBuilder::Build(f.report);
+    ASSERT_TRUE(model.ok());
+    for (const double u : {2., 2.1, 3.2, 3.21, 4.99, 5.}) {
+      const auto sample = EvaluateSurface(model.value(), NodeId{20}, u, -.7);
+      ASSERT_TRUE(sample.ok());
+      const auto inverse = InvertSurface(model.value(), NodeId{20},
+                                         sample.value().position, 1e-12);
+      ASSERT_TRUE(inverse.ok()) << inverse.error().message;
+      EXPECT_NEAR(inverse.value().u, u, 1e-12);
+      EXPECT_NEAR(inverse.value().v, -.7, 1e-12);
+      auto displaced = sample.value().position;
+      displaced.z += .0001;
+      EXPECT_FALSE(
+          InvertSurface(model.value(), NodeId{20}, displaced, 1e-7).ok());
+    }
   }
 }
 TEST(ParasolidSweptSurface, SplineInversionPreservesSmallAndLargeSourceUnits) {

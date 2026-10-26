@@ -244,17 +244,17 @@ struct SurfaceParameterSeed {
 /// implicit tolerance. Open nonrational clamped 3D B_CURVE sections are also
 /// supported when their projected derivative is certified strictly positive
 /// perpendicular to the sweep. Positive control differences provide the fast
-/// proof; a single Bezier span up to degree seven can additionally use bounded
-/// Bernstein subdivision (depth 16, one million averaging steps). This proves
+/// proof; original knot spans up to degree seven additionally use outward
+/// blossom extraction and bounded Bernstein subdivision (depth 16). This proves
 /// a unique u on the source knot domain, including nonplanar sections and
 /// repeated interior knots. At most
 /// 130 curve samples and two surface samples are used, with a 32,000,000
 /// estimated work-unit limit; exhausted budgets return kResourceLimit.
-/// Rational piecewise-Bezier sections up to degree seven use a positive
-/// Bernstein certificate for A'W-AW' on every span, with at most one million
-/// estimated proof operations. All interior multiplicities must equal the
-/// degree; original homogeneous controls/weights remain unchanged (XT 5.2.1.4:
-/// B_CURVE, p. 38; 5.2.2.10: Swept_surf, p. 67). Other rational layouts, closed,
+/// Rational sections up to degree seven use a positive interval Bernstein
+/// certificate for A'W-AW' on every span, with at most one million estimated
+/// proof operations. All valid interior multiplicities are supported; original
+/// homogeneous controls/weights and knots remain unchanged (XT 5.2.1.4:
+/// B_CURVE, p. 38; 5.2.2.10: Swept_surf, p. 67). Higher-degree rational, closed,
 /// periodic and uncertified sections remain unsupported.
 /// Finite seeds do not change this unique branch. The final 3D membership
 /// residual uses the caller's unchanged tolerance; no closest-point claim is

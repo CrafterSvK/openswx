@@ -15,12 +15,13 @@ namespace openparasolid::internal {
 [[nodiscard]] Result<std::array<double, 2>> NurbsCurveDomain(
     const NurbsCurveGeometry& curve);
 // Certifies a positive projected derivative, using derivative control signs or
-// bounded Bernstein subdivision for a single Bezier span (up to degree seven).
-// Rational piecewise-Bezier curves use a positive A'W-AW' numerator certificate.
+// outward-rounded local blossom extraction and bounded Bernstein subdivision
+// on every original knot span (up to degree seven). Rational curves certify
+// the positive A'W-AW' numerator, with arbitrary valid interior multiplicities.
 [[nodiscard]] Result<bool> CertifyMonotoneNurbsProjection(
     const NurbsCurveGeometry& curve, std::array<long double, 3> direction);
-// Rational curves require piecewise-Bezier knots (degree <= 7) and a positive
-// Bernstein numerator A'W-AW' on every span, within a fixed work budget.
+// Rational curves require degree <= 7 and a positive Bernstein numerator
+// A'W-AW' on every span, within a fixed work budget.
 // Recovers one parameter of an open, clamped 3D curve only when
 // its endpoint-chord projection has a certified strictly positive derivative.
 // Bounded bisection preserves original knot units and verifies 3D membership.
