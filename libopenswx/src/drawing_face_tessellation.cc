@@ -17,6 +17,7 @@ namespace openswx {
 namespace {
 
 constexpr std::string_view kFaceTessellationClass = "uoTempFaceTessData_c";
+constexpr std::string_view kBodyPropertyClass = "uoBodyPropInfo_c";
 constexpr std::size_t kDescriptorCount = 6u;
 constexpr uint32_t kMaximumItems = 20'000'000u;
 
@@ -55,6 +56,13 @@ struct ParsedTable {
 struct ModelReference {
   std::size_t offset = 0;
   std::string stem;
+  std::string owning_view_name;
+  std::string owning_component_name;
+};
+
+struct TaggedString {
+  std::size_t offset = 0;
+  std::string value;
 };
 
 uint16_t ReadU16Le(std::span<const uint8_t> data, std::size_t offset) {
@@ -93,6 +101,8 @@ bool EndsWithAsciiCaseInsensitive(std::string_view value,
 
 std::vector<ModelReference> FindModelReferences(
     std::span<const uint8_t> data) {
+  constexpr std::size_t kMaximumOwnerDistance = 512u;
+  std::vector<TaggedString> strings;
   std::vector<ModelReference> references;
   for (std::size_t offset = 0; offset + 4u <= data.size(); ++offset) {
     if (data[offset] != 0xFFu || data[offset + 1u] != 0xFEu ||
@@ -117,17 +127,46 @@ std::vector<ModelReference> FindModelReferences(
       }
       AppendUtf8(value, codepoint);
     }
-    if (!valid ||
-        (!EndsWithAsciiCaseInsensitive(value, ".sldprt") &&
-         !EndsWithAsciiCaseInsensitive(value, ".sldasm"))) {
+    if (!valid) continue;
+    strings.push_back({offset, value});
+    if (!EndsWithAsciiCaseInsensitive(value, ".sldprt") &&
+        !EndsWithAsciiCaseInsensitive(value, ".sldasm"))
       continue;
-    }
     const std::size_t separator = value.find_last_of("/\\");
     std::string filename = value.substr(
         separator == std::string::npos ? 0u : separator + 1u);
     const std::size_t extension = filename.find_last_of('.');
     if (extension != std::string::npos) filename.resize(extension);
-    if (!filename.empty()) references.push_back({offset, std::move(filename)});
+    if (filename.empty()) continue;
+
+    std::string owning_view_name;
+    std::string owning_component_name;
+    for (auto previous = strings.rbegin(); previous != strings.rend();
+         ++previous) {
+      if (previous->offset >= offset) continue;
+      if (!references.empty() &&
+          previous->offset <= references.back().offset) {
+        break;
+      }
+      if (offset - previous->offset > kMaximumOwnerDistance) break;
+      const std::size_t owner_separator = previous->value.find_last_of('@');
+      if (owner_separator == std::string::npos ||
+          owner_separator + 1u == previous->value.size()) {
+        continue;
+      }
+      std::string_view candidate(previous->value);
+      candidate.remove_prefix(owner_separator + 1u);
+      if (candidate.find_first_of("/\\\\") != std::string_view::npos)
+        continue;
+      std::string_view component(previous->value.data(), owner_separator);
+      if (component.empty()) continue;
+      owning_view_name.assign(candidate);
+      owning_component_name.assign(component);
+      break;
+    }
+    references.push_back({offset, std::move(filename),
+                          std::move(owning_view_name),
+                          std::move(owning_component_name)});
   }
   return references;
 }
@@ -260,6 +299,59 @@ std::optional<ParsedTable> ParseTable(std::span<const uint8_t> data,
   return parsed;
 }
 
+std::vector<std::size_t> FindBodyGroupOffsets(
+    std::span<const uint8_t> data) {
+  std::vector<std::size_t> offsets;
+  for (std::size_t offset = 0;
+       offset + 6u + kBodyPropertyClass.size() <= data.size(); ++offset) {
+    if (data[offset] == 0xFFu && data[offset + 1u] == 0xFFu &&
+        data[offset + 2u] == 0x01u && data[offset + 3u] == 0x00u &&
+        ReadU16Le(data, offset + 4u) == kBodyPropertyClass.size() &&
+        std::equal(kBodyPropertyClass.begin(), kBodyPropertyClass.end(),
+                   data.begin() + static_cast<std::ptrdiff_t>(offset + 6u))) {
+      offsets.push_back(offset);
+    }
+  }
+
+  // Repeated MFC body-property instances use a document-local class token, so
+  // its numeric value cannot be hard-coded. The stable framing is
+  // [body token][0a 00][face token][face header]. Validate the following face
+  // descriptor table to reject matching bytes inside tessellation payloads.
+  for (std::size_t offset = 0; offset + 46u <= data.size(); ++offset) {
+    if ((data[offset + 1u] & 0x80u) == 0u || data[offset + 2u] != 0x0Au ||
+        data[offset + 3u] != 0x00u ||
+        (data[offset + 5u] & 0x80u) == 0u) {
+      continue;
+    }
+    const std::size_t header = offset + 6u;
+    const uint32_t triangle_count = ReadU32Le(data, header);
+    const uint32_t strip_count = ReadU32Le(data, header + 4u);
+    const std::array<std::size_t, 2> table_offsets = {header + 8u,
+                                                      header + 40u};
+    const bool valid = std::any_of(
+        table_offsets.begin(), table_offsets.end(), [&](std::size_t table_offset) {
+          auto table = ParseTable(data, table_offset, data.size());
+          return table && table->mesh.strip_lengths.size() == strip_count &&
+                 table->mesh.triangles.size() == triangle_count;
+        });
+    if (valid) offsets.push_back(offset);
+  }
+  std::sort(offsets.begin(), offsets.end());
+  offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+  return offsets;
+}
+
+uint64_t BodyGroupAt(std::span<const std::size_t> body_groups,
+                     std::size_t table_offset, uint64_t model_group_offset) {
+  const auto group = std::upper_bound(body_groups.begin(), body_groups.end(),
+                                      table_offset);
+  if (group == body_groups.begin() ||
+      *std::prev(group) <= model_group_offset) {
+    return model_group_offset;
+  }
+  return *std::prev(group);
+}
+
 std::vector<std::size_t> FindClassOffsets(std::span<const uint8_t> data) {
   std::vector<std::size_t> offsets;
   const auto begin = data.begin();
@@ -282,6 +374,7 @@ DrawingGeometryReader::ReadFaceTessellations(
   const std::vector<std::size_t> class_offsets = FindClassOffsets(data);
   const std::vector<ModelReference> model_references =
       FindModelReferences(data);
+  const std::vector<std::size_t> body_groups = FindBodyGroupOffsets(data);
   if (class_offsets.empty()) {
     return Result<std::vector<FaceTessellation>>::Ok({});
   }
@@ -320,6 +413,10 @@ DrawingGeometryReader::ReadFaceTessellations(
             ModelReferenceAt(model_references, table_offset)) {
       first->mesh.referenced_document = reference->stem;
       first->mesh.source_group_offset = reference->offset;
+      first->mesh.source_body_group_offset =
+          BodyGroupAt(body_groups, table_offset, reference->offset);
+      first->mesh.owning_view_name = reference->owning_view_name;
+      first->mesh.owning_component_name = reference->owning_component_name;
     }
     std::size_t cursor = first->end;
     meshes.push_back(std::move(first->mesh));
@@ -339,6 +436,10 @@ DrawingGeometryReader::ReadFaceTessellations(
               ModelReferenceAt(model_references, cursor)) {
         table->mesh.referenced_document = reference->stem;
         table->mesh.source_group_offset = reference->offset;
+        table->mesh.source_body_group_offset =
+            BodyGroupAt(body_groups, cursor, reference->offset);
+        table->mesh.owning_view_name = reference->owning_view_name;
+        table->mesh.owning_component_name = reference->owning_component_name;
       }
       cursor = table->end;
       meshes.push_back(std::move(table->mesh));

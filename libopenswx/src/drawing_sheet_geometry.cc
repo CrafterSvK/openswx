@@ -625,6 +625,14 @@ FacesForView(std::span<const FaceTessellation> faces,
             }));
   };
 
+  std::vector<FaceTessellation> native_owned;
+  native_owned.reserve(faces.size());
+  for (const FaceTessellation &face : faces) {
+    if (face.owning_view_name == view.name)
+      native_owned.push_back(face);
+  }
+  if (!native_owned.empty()) return native_owned;
+
   const bool has_document_ownership =
       std::any_of(faces.begin(), faces.end(), [](const FaceTessellation &face) {
         return !face.referenced_document.empty();
@@ -1299,11 +1307,61 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
       continue;
     const std::vector<FaceTessellation> view_faces =
         FacesForView(face_tessellations, *bucket, buckets);
+    uint64_t native_face_group_offset = 0;
+    std::string native_face_component;
+    for (const FaceTessellation &face : face_tessellations) {
+      if (face.owning_view_name != placement.name) continue;
+      if (native_face_group_offset == 0) {
+        native_face_group_offset = face.source_group_offset;
+        native_face_component = face.owning_component_name;
+      } else if (face.source_group_offset != native_face_group_offset ||
+                 face.owning_component_name != native_face_component) {
+        native_face_group_offset = 0;
+        native_face_component.clear();
+        break;
+      }
+    }
+    uint64_t face_group_offset = 0;
+    if (!view_faces.empty()) {
+      face_group_offset = view_faces.front().source_group_offset;
+      if (std::any_of(view_faces.begin(), view_faces.end(),
+                      [&](const FaceTessellation &face) {
+                        return face.source_group_offset != face_group_offset;
+                      })) {
+        face_group_offset = 0;
+      }
+    }
+    const bool face_group_native =
+        face_group_offset != 0 &&
+        face_group_offset == native_face_group_offset;
+    const bool is_section_view =
+        placement.name.find("-SectionAssembly-") != std::string::npos;
+    const bool shaded_hlr_edges = bucket->has_suppressed_edge_cache &&
+                                  !view_faces.empty() && !is_section_view;
+    std::set<uint64_t> face_body_groups;
+    for (const FaceTessellation &face : view_faces) {
+      if (face.source_body_group_offset != 0)
+        face_body_groups.insert(face.source_body_group_offset);
+    }
+    const uint32_t view_ownership_index =
+        static_cast<uint32_t>(sheet.view_ownership.size());
+    sheet.view_ownership.push_back(
+        DrawingViewOwnership{placement.name,
+                             bucket->referenced_document,
+                             bucket->source_offset,
+                             placement.source_offset,
+                             native_face_group_offset,
+                             face_group_offset,
+                             face_group_native,
+                             face_group_offset != 0 && !face_group_native,
+                             is_section_view ? DrawingViewKind::kSection
+                                             : DrawingViewKind::kStandard,
+                             std::move(native_face_component),
+                             shaded_hlr_edges,
+                             {face_body_groups.begin(), face_body_groups.end()}});
     // A bucket containing both the suppressed edge cache and owned face
     // tessellation is a shaded drawing view. Its active edges use HLR: hidden
     // spans are removed instead of being drawn with the hidden-line font.
-    const bool shaded_hlr_edges =
-        bucket->has_suppressed_edge_cache && !view_faces.empty();
     const std::size_t view_entity_begin = sheet.entities.size();
 
     // Definition stores the sheet-space translation of the projected model
@@ -1317,7 +1375,7 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
           placement.scale * ColumnDot(placement.model_to_view, 1u, point) +
               placement.translation.y};
     };
-    if (bucket->has_suppressed_edge_cache && !view_faces.empty()) {
+    if (shaded_hlr_edges) {
       Rect2 shaded_bounds = placement.clip_bounds;
       struct ShadedTriangle {
         std::array<Vec2, 3> points;
@@ -1642,8 +1700,9 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
       duplicate_tangent_edges.insert(indices.back());
     }
 
-    // Face tables in assembly drawings do not yet expose their owning body.
-    // Recover a conservative approximation from the cached edge topology:
+    // Face tables expose native uoBodyPropInfo_c groups, while cached edges do
+    // not carry a direct body token. Recover a conservative edge-to-body link
+    // from the cached edge topology and matching 3D body envelopes:
     // edges whose 3D endpoints join belong to one closed member. A projected
     // convex-boundary edge of such a member is its local silhouette. Preserve
     // it when the unowned face pool incorrectly hides the complete edge.
@@ -1686,6 +1745,50 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
     std::map<std::size_t, std::vector<std::size_t>> connected_edges;
     for (std::size_t index = 0u; index < bucket->source_lines.size(); ++index)
       connected_edges[find_parent(index)].push_back(index);
+    std::map<uint64_t, Bounds3> face_body_bounds;
+    for (const FaceTessellation &face : view_faces) {
+      for (const Vec3 vertex : face.vertices)
+        ExtendBounds(face_body_bounds[face.source_body_group_offset], vertex);
+    }
+    std::map<std::size_t, uint64_t> topology_body_groups;
+    for (const auto &[root, indices] : connected_edges) {
+      Bounds3 edge_bounds;
+      for (const std::size_t index : indices) {
+        ExtendBounds(edge_bounds, bucket->source_lines[index].start);
+        ExtendBounds(edge_bounds, bucket->source_lines[index].end);
+      }
+      const auto mismatch = [&](const Bounds3 &body_bounds) {
+        return std::abs(edge_bounds.min.x - body_bounds.min.x) +
+               std::abs(edge_bounds.min.y - body_bounds.min.y) +
+               std::abs(edge_bounds.min.z - body_bounds.min.z) +
+               std::abs(edge_bounds.max.x - body_bounds.max.x) +
+               std::abs(edge_bounds.max.y - body_bounds.max.y) +
+               std::abs(edge_bounds.max.z - body_bounds.max.z);
+      };
+      uint64_t best_body = 0;
+      double best_mismatch = std::numeric_limits<double>::infinity();
+      double second_mismatch = std::numeric_limits<double>::infinity();
+      double best_extent = 0.0;
+      for (const auto &[body_group, body_bounds] : face_body_bounds) {
+        const double candidate = mismatch(body_bounds);
+        if (candidate < best_mismatch) {
+          second_mismatch = best_mismatch;
+          best_mismatch = candidate;
+          best_body = body_group;
+          best_extent = std::max(
+              {body_bounds.max.x - body_bounds.min.x,
+               body_bounds.max.y - body_bounds.min.y,
+               body_bounds.max.z - body_bounds.min.z});
+        } else if (candidate < second_mismatch) {
+          second_mismatch = candidate;
+        }
+      }
+      const double tolerance = std::max(1e-5, best_extent * 0.01);
+      if (best_body != 0 && best_mismatch <= tolerance &&
+          second_mismatch > best_mismatch + tolerance) {
+        topology_body_groups.emplace(root, best_body);
+      }
+    }
     const auto projected_turn = [](Vec2 origin, Vec2 first, Vec2 second) {
       return (first.x - origin.x) * (second.y - origin.y) -
              (first.y - origin.y) * (second.x - origin.x);
@@ -1927,7 +2030,18 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
                    "Contents/VBLists/uiViewBucket_c/" + placement.name +
                        "/offset=" + std::to_string(source.source_offset) +
                        "/record=" + std::to_string(source.source_record_type) +
-                       "/span=" + std::to_string(span_index)});
+                       "/span=" + std::to_string(span_index),
+                   DrawingEntitySource{
+                       view_ownership_index,
+                       source.source_offset,
+                       bucket->source_lines[find_parent(source_index)]
+                           .source_offset,
+                       source.source_record_type,
+                       topology_body_groups.contains(find_parent(source_index))
+                           ? topology_body_groups.at(find_parent(source_index))
+                           : 0,
+                       topology_body_groups.contains(
+                           find_parent(source_index))}});
       }
     }
 
@@ -1946,8 +2060,8 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
     };
     const auto computed_hidden = [](const Line2D &line) {
       return line.style.pattern == LinePattern::kHidden &&
-             (line.source_table.find("/record=33/") != std::string::npos ||
-              line.source_table.find("/record=35/") != std::string::npos);
+             (line.source.record_type == 0x21u ||
+              line.source.record_type == 0x23u);
     };
 
     // A line on the convex boundary of the complete projected cache is a
@@ -2008,7 +2122,7 @@ Result<DrawingSheetGeometry> DrawingGeometryReader::ReadCachedSheet(
         const Line2D boundary{projected_hull[index],
                               projected_hull[(index + 1u) %
                                              projected_hull.size()],
-                              {}, {}};
+                              {}, {}, {}};
         if (point_segment_distance(line.start, boundary) <=
                 kCoincidentEdgeToleranceM &&
             point_segment_distance(line.end, boundary) <=

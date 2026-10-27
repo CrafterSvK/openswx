@@ -252,18 +252,18 @@ DrawingGeometryReader::ReadLegacyWeldmentTableLines(
   std::vector<Line2D> lines;
   double x = left;
   lines.push_back(Line2D{{x, anchor->y}, {x, top}, LineStyle{},
-                         std::string(kSource)});
+                         std::string(kSource), {}});
   for (double width : widths) {
     x += width;
     lines.push_back(Line2D{{x, anchor->y}, {x, top}, LineStyle{},
-                           std::string(kSource)});
+                           std::string(kSource), {}});
   }
   lines.push_back(Line2D{{left, anchor->y}, {anchor->x, anchor->y},
-                         LineStyle{}, std::string(kSource)});
+                         LineStyle{}, std::string(kSource), {}});
   for (int boundary = 0; boundary <= row_count; ++boundary) {
     const double y = top - boundary * row_height;
     lines.push_back(Line2D{{left, y}, {anchor->x, y}, LineStyle{},
-                           std::string(kSource)});
+                           std::string(kSource), {}});
   }
   return Result<std::vector<Line2D>>::Ok(std::move(lines));
 }

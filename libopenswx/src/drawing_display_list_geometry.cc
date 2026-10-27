@@ -585,7 +585,7 @@ Result<std::vector<Line2D>> DrawingGeometryReader::ReadDisplayListLines(
     seen.insert(key);
     const LineStyle style = ReadLineStyle(display_lists, offset);
     lines.push_back(Line2D{start, end, style,
-                           "Contents/DisplayLists/line/" + *owner_label});
+                           "Contents/DisplayLists/line/" + *owner_label, {}});
     offset += kLinePayloadBytes - 1u;
   }
   return Result<std::vector<Line2D>>::Ok(std::move(lines));

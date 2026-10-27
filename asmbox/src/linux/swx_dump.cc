@@ -1049,8 +1049,17 @@ int main(int argc, char* argv[]) {
     std::size_t balloons = 0;
     std::size_t filled_triangles = 0;
     std::size_t raster_images = 0;
+    std::size_t owned_lines = 0;
+    std::size_t body_owned_lines = 0;
     for (const auto& entity : sheet.value().entities) {
-      if (std::holds_alternative<openswx::Line2D>(entity)) ++lines;
+      if (const auto* line = std::get_if<openswx::Line2D>(&entity)) {
+        ++lines;
+        if (line->source.view_index !=
+            openswx::DrawingEntitySource::kNoView) {
+          ++owned_lines;
+        }
+        if (line->source.body_group_offset != 0) ++body_owned_lines;
+      }
       if (std::holds_alternative<openswx::Arc2D>(entity)) ++arcs;
       if (std::holds_alternative<openswx::FilledTriangle2D>(entity)) {
         ++filled_triangles;
@@ -1062,11 +1071,49 @@ int main(int argc, char* argv[]) {
       if (std::holds_alternative<openswx::Dimension>(entity)) ++dimensions;
       if (std::holds_alternative<openswx::BomBalloon>(entity)) ++balloons;
     }
+    json ownership = json::array();
+    for (const openswx::DrawingViewOwnership& owner :
+         sheet.value().view_ownership) {
+      ownership.push_back(
+          {{"name", owner.name},
+           {"referenced_document", owner.referenced_document},
+           {"bucket_source_offset", owner.bucket_source_offset},
+           {"placement_source_offset", owner.placement_source_offset},
+           {"native_face_group_offset", owner.native_face_group_offset},
+           {"native_face_component", owner.native_face_component},
+           {"rendered_face_group_offset", owner.face_group_offset},
+           {"rendered_face_group_native", owner.face_group_native},
+           {"rendered_face_group_inferred", owner.face_group_inferred},
+           {"view_kind",
+            owner.kind == openswx::DrawingViewKind::kSection ? "section"
+                                                             : "standard"},
+           {"shaded", owner.shaded},
+           {"face_body_group_offsets", owner.face_body_group_offsets}});
+    }
     std::cout << json{{"output", options->export_sheet_svg->string()},
                       {"sheet", sheet.value().name},
                       {"width_m", sheet.value().width_m},
                       {"height_m", sheet.value().height_m},
                        {"line_count", lines},
+                       {"owned_line_count", owned_lines},
+                       {"body_owned_line_count", body_owned_lines},
+                       {"view_ownership_count",
+                        sheet.value().view_ownership.size()},
+                       {"view_ownership", std::move(ownership)},
+                       {"native_face_group_count",
+                        std::count_if(
+                            sheet.value().view_ownership.begin(),
+                            sheet.value().view_ownership.end(),
+                            [](const openswx::DrawingViewOwnership& owner) {
+                              return owner.native_face_group_offset != 0;
+                            })},
+                       {"inferred_face_group_count",
+                        std::count_if(
+                            sheet.value().view_ownership.begin(),
+                            sheet.value().view_ownership.end(),
+                            [](const openswx::DrawingViewOwnership& owner) {
+                              return owner.face_group_inferred;
+                            })},
                        {"arc_count", arcs},
                       {"filled_triangle_count", filled_triangles},
                       {"raster_image_count", raster_images},
