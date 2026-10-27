@@ -69,7 +69,9 @@ DrawingSheetGeometry& FindSheet(DrawingGeometry& drawing,
   for (auto& sheet : drawing.sheets) {
     if (sheet.name == name) return sheet;
   }
-  drawing.sheets.push_back({std::string(name), {}});
+  DrawingSheetGeometry sheet;
+  sheet.name = std::string(name);
+  drawing.sheets.push_back(std::move(sheet));
   return drawing.sheets.back();
 }
 
@@ -134,7 +136,7 @@ Result<DrawingGeometry> DrawingGeometryReader::ReadTablesXml(
         const auto y2 = ReadDouble(end.attribute("Y"));
         if (x1 && y1 && x2 && y2) {
           sheet.entities.emplace_back(Line2D{{*x1, *y1}, {*x2, *y2},
-                                             table_style, table_name});
+                                             table_style, table_name, {}});
         }
         return;
       }

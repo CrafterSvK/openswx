@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string>
 #include <string_view>
@@ -43,10 +44,18 @@ struct FaceTessellation {
   /// offset. One face class can contain several view/configuration groups.
   uint64_t source_table_offset = 0;
   uint64_t source_group_offset = 0;
+  /// Nearest native uoBodyPropInfo_c group boundary. When no explicit body
+  /// boundary precedes this face, this equals source_group_offset.
+  uint64_t source_body_group_offset = 0;
   /// Source model stem recovered from the nearest preceding serialized
   /// SLDPRT/SLDASM path. Drawing-view bucket references may append an
   /// internal numeric instance suffix to this value.
   std::string referenced_document;
+  /// Native drawing-view owner recovered from the nearby serialized
+  /// `component@view` reference when SolidWorks stores one.
+  std::string owning_view_name;
+  /// Component instance prefix from the same native reference.
+  std::string owning_component_name;
   std::vector<Vec3> vertices;
   std::vector<Vec3> normals;
   std::vector<uint32_t> strip_lengths;
@@ -121,11 +130,25 @@ struct LineStyle {
   int source_line_weight = 0;
 };
 
+/// Typed provenance retained by the drawing intermediate representation.
+/// Values left at zero (or kNoView) were not recovered from the source.
+struct DrawingEntitySource {
+  static constexpr uint32_t kNoView = std::numeric_limits<uint32_t>::max();
+
+  uint32_t view_index = kNoView;
+  uint64_t record_offset = 0;
+  uint64_t topology_component_offset = 0;
+  uint8_t record_type = 0;
+  uint64_t body_group_offset = 0;
+  bool body_group_inferred = false;
+};
+
 struct Line2D {
   Vec2 start;
   Vec2 end;
   LineStyle style;
   std::string source_table;
+  DrawingEntitySource source;
 };
 
 /// A circular display-list arc in sheet coordinates. Positive normal_z means
@@ -215,8 +238,32 @@ struct BomBalloon {
 };
 
 using DrawingEntity = std::variant<Line2D, Arc2D, FilledTriangle2D,
-                                    RasterImage2D, TextAnnotation, Dimension,
-                                    BomBalloon>;
+                                     RasterImage2D, TextAnnotation, Dimension,
+                                     BomBalloon>;
+
+enum class DrawingViewKind {
+  kStandard,
+  kSection,
+};
+
+/// One view layer in the drawing IL. Face-group provenance distinguishes a
+/// native `component@view` link from the document/bounds fallback.
+struct DrawingViewOwnership {
+  std::string name;
+  std::string referenced_document;
+  uint64_t bucket_source_offset = 0;
+  uint64_t placement_source_offset = 0;
+  /// Face group named by a native `component@view` reference, when present.
+  uint64_t native_face_group_offset = 0;
+  /// Face group currently selected for rendering.
+  uint64_t face_group_offset = 0;
+  bool face_group_native = false;
+  bool face_group_inferred = false;
+  DrawingViewKind kind = DrawingViewKind::kStandard;
+  std::string native_face_component;
+  bool shaded = false;
+  std::vector<uint64_t> face_body_group_offsets;
+};
 
 struct DrawingSheetGeometry {
   std::string name;
@@ -225,6 +272,7 @@ struct DrawingSheetGeometry {
   double height_m = 0.0;
   /// Document print widths indexed by swLineWeights_e values 0..7.
   std::array<double, 8> line_weights_m{};
+  std::vector<DrawingViewOwnership> view_ownership;
 };
 
 struct DrawingGeometry {

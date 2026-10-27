@@ -323,7 +323,8 @@ Result<std::vector<Line2D>> DrawingGeometryReader::ReadSheetFormatLines(
     current_run.push_back(Line2D{
         start, finish, LineStyle{},
         "Contents/Definition/sgSketch/sheet-format/" +
-            std::string(sheet_name)});
+            std::string(sheet_name),
+        {}});
   }
   finish_run();
 

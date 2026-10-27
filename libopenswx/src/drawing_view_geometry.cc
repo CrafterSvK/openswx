@@ -289,7 +289,7 @@ DrawingGeometryReader::ReadViewBuckets(std::span<const uint8_t> data) {
           view.geometry.entities.emplace_back(Line2D{
               Project(first, horizontal, vertical, view.scale_denominator),
               Project(second, horizontal, vertical, view.scale_denominator),
-              style, "Contents/VBLists/uiViewBucket_c"});
+              style, "Contents/VBLists/uiViewBucket_c", {}});
           view.source_lines.push_back({first, second,
                                        static_cast<uint64_t>(offset),
                                        record_type});

@@ -1117,6 +1117,18 @@ TEST(DrawingViewGeometryTest, ComposesSectionAssemblyBucketOnOwningSheet) {
   auto result = DrawingGeometryReader::ReadCachedSheet(
       bytes(keywords), definition, vb_lists, {}, "List3");
   ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().view_ownership.size(), 1u);
+  const DrawingViewOwnership &ownership =
+      result.value().view_ownership.front();
+  EXPECT_EQ(ownership.name, "model-SectionAssembly-3");
+  EXPECT_EQ(ownership.referenced_document, "part");
+  EXPECT_NE(ownership.bucket_source_offset, 0u);
+  EXPECT_NE(ownership.placement_source_offset, 0u);
+  EXPECT_EQ(ownership.native_face_group_offset, 0u);
+  EXPECT_EQ(ownership.face_group_offset, 0u);
+  EXPECT_FALSE(ownership.face_group_inferred);
+  EXPECT_EQ(ownership.kind, DrawingViewKind::kSection);
+  EXPECT_FALSE(ownership.shaded);
   ASSERT_EQ(result.value().entities.size(), 2u);
   const auto *line = std::get_if<Line2D>(&result.value().entities.front());
   ASSERT_NE(line, nullptr);
@@ -1707,11 +1719,18 @@ TEST(DrawingViewGeometryTest,
     AppendU32(vb_lists, 4u);
     AppendTessellationDescriptor(vb_lists, 1u, 8u, 0u);
   };
-  append_face(-1.0F);
+  append_face(1.0F);
   // A later cache group for the same document can belong to another drawing
   // view or configuration. Equal document stems must not merge the groups.
   AppendUtf16(vb_lists, "C:\\models\\part.SLDPRT");
-  append_face(1.0F);
+  const std::size_t body_group_offset = vb_lists.size();
+  constexpr std::string_view body_property_class = "uoBodyPropInfo_c";
+  vb_lists.insert(vb_lists.end(), {0xFF, 0xFF, 0x01, 0x00});
+  vb_lists.push_back(static_cast<uint8_t>(body_property_class.size()));
+  vb_lists.push_back(0u);
+  vb_lists.insert(vb_lists.end(), body_property_class.begin(),
+                  body_property_class.end());
+  append_face(-1.0F);
   AppendUtf16(vb_lists, "C:\\models\\other.SLDPRT");
   append_face(1.0F);
 
@@ -1721,13 +1740,41 @@ TEST(DrawingViewGeometryTest,
   EXPECT_EQ(parsed_faces.value()[0].referenced_document, "part");
   EXPECT_EQ(parsed_faces.value()[1].referenced_document, "part");
   EXPECT_EQ(parsed_faces.value()[2].referenced_document, "other");
+  EXPECT_EQ(parsed_faces.value()[0].owning_view_name, "View1");
+  EXPECT_EQ(parsed_faces.value()[0].owning_component_name, "part");
+  EXPECT_TRUE(parsed_faces.value()[1].owning_view_name.empty());
+  EXPECT_TRUE(parsed_faces.value()[2].owning_view_name.empty());
+  EXPECT_TRUE(parsed_faces.value()[1].owning_component_name.empty());
+  EXPECT_TRUE(parsed_faces.value()[2].owning_component_name.empty());
   EXPECT_NE(parsed_faces.value()[0].source_group_offset,
             parsed_faces.value()[1].source_group_offset);
+  EXPECT_EQ(parsed_faces.value()[0].source_body_group_offset,
+            parsed_faces.value()[0].source_group_offset);
+  EXPECT_EQ(parsed_faces.value()[1].source_body_group_offset,
+            body_group_offset);
 
   auto result = DrawingGeometryReader::ReadCachedSheet(
       bytes(keywords), definition, vb_lists, {}, "List1");
 
   ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_EQ(result.value().view_ownership.size(), 1u);
+  const DrawingViewOwnership &ownership =
+      result.value().view_ownership.front();
+  EXPECT_EQ(ownership.name, "View1");
+  EXPECT_EQ(ownership.referenced_document, "part");
+  EXPECT_NE(ownership.bucket_source_offset, 0u);
+  EXPECT_NE(ownership.placement_source_offset, 0u);
+  EXPECT_NE(ownership.native_face_group_offset, 0u);
+  EXPECT_NE(ownership.face_group_offset, 0u);
+  EXPECT_EQ(ownership.native_face_group_offset, ownership.face_group_offset);
+  EXPECT_TRUE(ownership.face_group_native);
+  EXPECT_FALSE(ownership.face_group_inferred);
+  EXPECT_EQ(ownership.kind, DrawingViewKind::kStandard);
+  EXPECT_EQ(ownership.native_face_component, "part");
+  EXPECT_TRUE(ownership.shaded);
+  ASSERT_EQ(ownership.face_body_group_offsets.size(), 1u);
+  EXPECT_EQ(ownership.face_body_group_offsets.front(),
+            parsed_faces.value()[0].source_body_group_offset);
   ASSERT_EQ(result.value().entities.size(), 2u);
   EXPECT_TRUE(std::holds_alternative<RasterImage2D>(
       result.value().entities.front()));
@@ -1735,6 +1782,10 @@ TEST(DrawingViewGeometryTest,
   ASSERT_NE(line, nullptr);
   EXPECT_EQ(line->style.pattern, LinePattern::kSolid);
   EXPECT_EQ(line->style.source_line_weight, 3);
+  EXPECT_EQ(line->source.view_index, 0u);
+  EXPECT_EQ(line->source.record_type, 0x21u);
+  EXPECT_NE(line->source.record_offset, 0u);
+  EXPECT_NE(line->source.topology_component_offset, 0u);
   EXPECT_EQ(line->source_table.find("/record=49/"), std::string::npos);
 
   // In a hidden-lines-visible bucket, a rear full-edge record may project
@@ -1754,11 +1805,11 @@ TEST(DrawingViewGeometryTest,
     if (edge->style.pattern == LinePattern::kSolid)
       ++solid_count;
     if (edge->style.pattern == LinePattern::kHidden &&
-        edge->source_table.find("/record=49/") != std::string::npos) {
+        edge->source.record_type == 0x31u) {
       ++cached_hidden_count;
     }
     if (edge->style.pattern == LinePattern::kHidden &&
-        edge->source_table.find("/record=33/") != std::string::npos) {
+        edge->source.record_type == 0x21u) {
       ++computed_hidden_count;
     }
   }
