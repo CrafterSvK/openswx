@@ -65,5 +65,42 @@ TEST(DrawingGeometryTest, RejectsMalformedXml) {
   EXPECT_FALSE(result.ok());
 }
 
+TEST(DrawingGeometryTest, ReadsTableTextPointSizeAsCapHeight) {
+  const std::string xml =
+      "<Tables><Table Display_Name=\"BOM\" SheetName=\"Sheet1\">"
+      "<Row><Cell><Charformat TypeFace=\"Century Gothic\" PtSize=\"7\"/>"
+      "<Text_Element Text=\"part\"><Point X=\"0.1\" Y=\"0.2\"/></Text_Element>"
+      "</Cell></Row></Table></Tables>";
+  const auto bytes = std::span<const uint8_t>(
+      reinterpret_cast<const uint8_t*>(xml.data()), xml.size());
+  auto result = DrawingGeometryReader::ReadTablesXml(bytes);
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_FALSE(result.value().sheets.empty());
+  ASSERT_FALSE(result.value().sheets.front().entities.empty());
+  const auto* text =
+      std::get_if<TextAnnotation>(&result.value().sheets.front().entities.front());
+  ASSERT_NE(text, nullptr);
+  EXPECT_NEAR(text->height, 7.0 * 0.0254 / 72.0 * 0.75, 1e-12);
+}
+
+TEST(DrawingGeometryTest, PrefersTableTextSizeOverPointSize) {
+  const std::string xml =
+      "<Tables><Table Display_Name=\"BOM\" SheetName=\"Sheet1\">"
+      "<Row><Cell><Charformat TypeFace=\"Century Gothic\" Size=\"0.001\" "
+      "PtSize=\"7\"/>"
+      "<Text_Element Text=\"part\"><Point X=\"0.1\" Y=\"0.2\"/></Text_Element>"
+      "</Cell></Row></Table></Tables>";
+  const auto bytes = std::span<const uint8_t>(
+      reinterpret_cast<const uint8_t*>(xml.data()), xml.size());
+  auto result = DrawingGeometryReader::ReadTablesXml(bytes);
+  ASSERT_TRUE(result.ok()) << result.error();
+  ASSERT_FALSE(result.value().sheets.empty());
+  ASSERT_FALSE(result.value().sheets.front().entities.empty());
+  const auto* text =
+      std::get_if<TextAnnotation>(&result.value().sheets.front().entities.front());
+  ASSERT_NE(text, nullptr);
+  EXPECT_DOUBLE_EQ(text->height, 0.001);
+}
+
 }  // namespace
 }  // namespace openswx

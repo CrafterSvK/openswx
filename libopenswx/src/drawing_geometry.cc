@@ -149,7 +149,13 @@ Result<DrawingGeometry> DrawingGeometryReader::ReadTablesXml(
       const double angle = ReadDouble(node.attribute("Angle")).value_or(0.0);
       const std::string value = node.attribute("Text").as_string();
       const pugi::xml_node format = FindCharFormat(node, table);
-      const double height = ReadDouble(format.attribute("Size")).value_or(0.0);
+      double height = ReadDouble(format.attribute("Size")).value_or(0.0);
+      if (height <= 0.0) {
+        const double points =
+            ReadDouble(format.attribute("PtSize")).value_or(0.0);
+        if (points > 0.0 && points <= 72.0)
+          height = points * 0.0254 / 72.0 * 0.75;
+      }
       const std::string font = format.attribute("TypeFace").as_string();
       const auto key =
           std::make_tuple(value, *x, *y, angle, sheet_name, table_name);
